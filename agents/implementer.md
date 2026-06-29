@@ -35,6 +35,9 @@ You implement **exactly one task** from the task block the orchestrator passes y
 - **`advances_criterion:`** — the `**Advances:** criterion #N` line from the task block. Every task
   in INTENT mode cites the acceptance criterion it advances. Include this citation in your
   `LEDGER_DECISIONS:` entry.
+- **`intent_flags_path:`** (optional) — path to `/z-plan`'s LLM concern/decision flags and folded audit notes. If present, read it after INTENT and LEDGER. Treat it as attention guidance for risks the user saw before approval; it may narrow how you implement but must not expand scope beyond INTENT.
+- **`execution_strategy_path:`** (optional) — path to `execution-strategy.md`. If present, read the parts relevant to your task: safe parallelism notes, serial blockers, checkpoint cadence, and review expectations.
+- **`workstreams_path:`** (optional) — path to `workstreams.json`. If present, read only the entry/track relevant to your task so you do not collide with sibling tasks.
 
 ### Inputs present in both modes
 
@@ -81,6 +84,7 @@ This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can co
      `invariants_path:`, `style_path:`) if provided. Do NOT read SPEC.md or PLAN.md — they are
      absent or irrelevant in INTENT mode. If the frozen INTENT snapshot is ambiguous about your
      task's scope, **STOP and return `status: "needs_clarification"`** with the specific question.
+    If `intent_flags_path:`, `execution_strategy_path:`, or `workstreams_path:` are present, read the relevant sections after INTENT/LEDGER. These artifacts preserve the intent conversation and execution DAG; they are guardrails, not permission to add scope.
 3. **Premise check:**
    - **Legacy mode**: If during reading you realize the task is wrong, infeasible as specified, or
      would break an invariant in SPEC.md, return `status: "spec_problem"` with the issue. Do not
@@ -89,8 +93,8 @@ This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can co
      return `status: "spec_problem"` with the invariant ID and the conflict. Also check the `## Not
      doing` section of the frozen INTENT — if your task would implement something explicitly excluded
      there, return `status: "spec_problem"`.
-4. Implement the task per the acceptance criteria. No scope expansion. Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one.
-5. If during implementation you hit an **unforeseen non-obvious decision** (per the same rules `/z-plan` uses — new dep, new public surface, algorithm with materially different tradeoffs, persistence change), STOP and return `status: "decision_needed"` with the decision and ≥2 options. Do not pick one yourself.
+4. Implement the task per the acceptance criteria and task-to-intent mapping. No scope expansion. Obey DRY/KISS/SOLID. No shortcuts unless the approved intent flags/audit notes or legacy PLAN.md explicitly approved one.
+5. If during implementation you hit an **unforeseen non-obvious decision** (per the same rules `/z-plan` uses — new dep, new public surface, algorithm with materially different tradeoffs, persistence change, or product/intent ambiguity), STOP and return `status: "decision_needed"` with the decision and ≥2 options. Do not pick one yourself.
 6. Run any tests the task explicitly mentions writing (if applicable and runnable locally).
 7. Return.
 

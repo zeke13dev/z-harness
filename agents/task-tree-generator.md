@@ -23,6 +23,12 @@ The dispatch prompt includes:
 - **level_cap** (optional, default `6`) — integer maximum number of levels this run may execute. If `level >= level_cap`, you must emit a **termination batch** (see Termination section).
 - **budget_tokens_remaining** (optional, may be empty) — estimated tokens remaining in the run budget, if the orchestrator tracks this. If provided and < 50000, treat as a soft budget warning and prefer a smaller, higher-confidence batch.
 - **task_id_start** (optional, default `1`) — integer to start numbering tasks from (e.g. if prior levels used T001–T008, pass `9` so this level starts at T009). Default is 1 when not specified.
+- **intent_readthrough_flags_path** (optional) — path to the LLM concern/decision flags and folded audit notes from `/z-plan`. If present, read it and keep tasks aligned with accepted concerns; do not turn dismissed concerns into scope.
+- **brainstorm_choice_path** (optional) — path to the recorded brainstorm ask choice. Use it only to understand whether `BRAINSTORM.md` framing was selected or explicitly skipped.
+- **execution_strategy_path** (optional) — path to `execution-strategy.md`, which records the approved task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and handoff notes produced by `/z-plan`. If present, read it before drafting this level.
+- **workstreams_path** (optional) — path to `workstreams.json`, the machine-readable workstream/conflict DAG. If present, read it to preserve known workstream boundaries, shared-file risks, and safe sibling shapes.
+- **execution_strategy_required** (optional boolean) — when true, append execution strategy metadata to the generated task batch notes.
+- **task_to_intent_mapping_required** (optional boolean) — when true, every task must make the `**Advances:** criterion #N` mapping precise enough for `/z-execute` prompts to cite.
 
 If any required input is missing (`intent_snapshot_path`, `ledger_path`, `level`, `unmet_criteria`, `tasks_output_path`), return:
 
@@ -41,6 +47,10 @@ REASON: missing required input: <field name>
 2. Read `ledger_path` if it exists. Note all decisions made and deviations logged at prior levels. If LEDGER.md does not yet exist (level 0), skip.
 3. Internalize `unmet_criteria`. These are the only criteria you are generating tasks toward. Do NOT generate tasks for already-met criteria.
 4. Internalize `prior_level_outcomes`. At level > 0, this tells you what the prior level produced and what gaps remain.
+5. If `intent_readthrough_flags_path` exists, read it. Treat it as attention guidance for execution and review: concern flags, audit notes, assumptions, and decisions the user saw before approval. It may narrow task wording, but it must not expand scope beyond INTENT.
+6. If `brainstorm_choice_path` exists, read it. A skipped brainstorm means do not invent alternate framings; an existing/selected brainstorm means use only the selected framing already reflected in INTENT.
+7. If `execution_strategy_path` exists, read it. Preserve the prior task-to-intent mapping, review gates, checkpoint cadence, serial blockers, and any aggregate-review trigger; later BFS levels refine this strategy, they do not silently discard it.
+8. If `workstreams_path` exists, read it. Use the workstream/conflict DAG to avoid generating sibling tasks that violate known shared-file or serial constraints. If it is absent, fall back to strict `**Files:**` overlap reasoning.
 
 ## Phase 1 — Task decomposition
 
@@ -52,7 +62,7 @@ All tasks in this batch MUST be executable in parallel. **No task in this batch 
 Siblings are independent when: they touch disjoint files, OR they touch overlapping files only for append-only writes (e.g. different sections of a config), OR they produce outputs that will be composed in a later level. If you cannot guarantee independence, split the dependent work into the next level.
 
 ### Coverage rule
-Every emitted task must advance at least one unmet criterion. Each task carries a `**Advances:** criterion #N` line naming which criterion it primarily advances. A single task may advance multiple criteria (list all: `**Advances:** criterion #1, #3`). Every unmet criterion must be addressed by at least one task in this batch OR explicitly deferred (see Deferral section).
+Every emitted task must advance at least one unmet criterion. Each task carries a `**Advances:** criterion #N` line naming which criterion it primarily advances. A single task may advance multiple criteria (list all: `**Advances:** criterion #1, #3`). When `task_to_intent_mapping_required: true`, the criterion numbers MUST be precise 1-indexed references to the frozen INTENT.md checklist and the task's `**Acceptance:**` line must state the observable slice of that criterion it satisfies. Every unmet criterion must be addressed by at least one task in this batch OR explicitly deferred (see Deferral section).
 
 ### Scope rule
 Tasks must stay within the `## Intent` + `## Not doing` scope of the frozen INTENT.md. Do not invent work outside the acceptance checklist.
@@ -119,6 +129,14 @@ After the final task block, append a `## Level <N> notes` section:
 **Criteria deferred to next level:** #<list> (or "none")
 **Rationale:** <1–2 sentences on why this decomposition is the right shape for this level>
 **Termination outlook:** <one sentence: are unmet criteria likely to be satisfied by level N+1, or do you anticipate more levels?>
+```
+
+When `execution_strategy_required: true`, the notes section must also include:
+
+```markdown
+**Execution strategy:** <DAG/workstream summary: safe parallel batch shape, serial blockers, shared-file risks, checkpoint cadence, and any relevant continuation from execution_strategy_path/workstreams_path.>
+**Review gates:** <per-task review expectations plus whether aggregate review is recommended for this plan size/risk.>
+**Workstreams:** <workstream IDs, shared files, or "none supplied"; cite when workstreams_path was absent and inline Files overlap was used instead.>
 ```
 
 ## Phase 2.5 — Self-sanity before return

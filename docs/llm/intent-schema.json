@@ -120,5 +120,16 @@
     "lint heuristic: 'runs and exits 0' passes; bare 'runs' or 'works' with only filler words after it fails",
     "CLI exit codes: 0=valid/done, 1=errors/continue, 2=usage error — evaluate-acceptance exits 1 for VERDICT:continue"
   ],
-  "memories": []
+  "memories": [
+    {
+      "type": "correctness",
+      "date": "2026-06-29",
+      "source": "incident:20260629T182649Z-review",
+      "text": "INTENT-mode final review is only meaningful after LEDGER.md exists and is flushed; absence blocks realized-decision/deviation review, not just reporting polish.",
+      "tags": [
+        "correctness",
+        "observability"
+      ]
+    }
+  ]
 }

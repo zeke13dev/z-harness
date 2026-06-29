@@ -38,6 +38,7 @@ Acceptance-criterion lint heuristic:
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime, timezone
@@ -926,6 +927,268 @@ def evaluate_acceptance(
 
 
 # ---------------------------------------------------------------------------
+# aggregate_review_gate — final /z-execute aggregate-review trigger helper
+# ---------------------------------------------------------------------------
+
+AGGREGATE_REVIEW_TASK_THRESHOLD = 8
+AGGREGATE_REVIEW_WORKSTREAM_THRESHOLD = 1
+AGGREGATE_REVIEW_PARALLEL_BATCH_THRESHOLD = 1
+
+AGGREGATE_REVIEW_REQUIRED = "aggregate-review-required"
+AGGREGATE_REVIEW_NOT_REQUIRED = "aggregate-review-not-required"
+
+_ANY_TASK_HEADING_RE = re.compile(
+    r"^#{2,3}\s+(?:\[[x~ !s]\]\s+)?(?P<task_id>T[-A-Z0-9]+)\b(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+_HIGH_RISK_RE = re.compile(
+    r"\b("
+    r"high[- ]risk|"
+    r"risk\s*[:=]\s*high|"
+    r"severity\s*[:=]\s*high|"
+    r"audit[^\n]*(?:high|critical|blocker)|"
+    r"concern[^\n]*(?:high|critical|blocker)"
+    r")\b",
+    re.IGNORECASE,
+)
+_HIGH_RISK_NEGATION_RE = re.compile(
+    r"\b(?:no|none|without|not)\s+(?:known\s+)?high[- ]risk\b",
+    re.IGNORECASE,
+)
+
+
+class AggregateTaskBlock(NamedTuple):
+    task_id: str
+    heading: str
+    body: str
+
+
+class AggregateReviewDecision(NamedTuple):
+    required: bool
+    decision: str
+    task_count: int
+    workstream_count: int
+    parallel_batch_count: int
+    high_risk_flag: bool
+    criteria_multi_workstream: dict[str, list[str]]
+    triggers: dict[str, bool]
+    high_risk_sources: list[str]
+    metadata_fail_reasons: list[str]
+
+
+def _optional_path(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw or raw == "-":
+        return None
+    return Path(raw)
+
+
+def _read_optional_text(path: Path | None) -> str:
+    if path is None or not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _read_required_workstreams(path: Path | None, *, task_count: int) -> tuple[dict, list[str]]:
+    if path is None:
+        return {}, ["workstreams_missing"]
+    if not path.exists():
+        return {}, ["workstreams_missing"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return {}, ["workstreams_unreadable"]
+    except json.JSONDecodeError:
+        return {}, ["workstreams_invalid_json"]
+    if not isinstance(payload, dict):
+        return {}, ["workstreams_invalid_root"]
+    workstreams = payload.get("workstreams")
+    if not isinstance(workstreams, list):
+        return payload, ["workstreams_missing_list"]
+    if any(not isinstance(item, dict) for item in workstreams):
+        return payload, ["workstreams_invalid_entry"]
+    if any(
+        item.get("tasks") is not None and not isinstance(item.get("tasks"), list)
+        for item in workstreams
+    ):
+        return payload, ["workstreams_invalid_tasks"]
+    if task_count and not workstreams:
+        return payload, ["workstreams_empty_for_completed_tasks"]
+    return payload, []
+
+
+def _read_required_text(path: Path | None, label: str) -> tuple[str, list[str]]:
+    if path is None:
+        return "", [f"{label}_missing"]
+    if not path.exists():
+        return "", [f"{label}_missing"]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "", [f"{label}_unreadable"]
+    if not text.strip():
+        return text, [f"{label}_empty"]
+    return text, []
+
+
+def _extract_aggregate_task_blocks(tasks_content: str) -> list[AggregateTaskBlock]:
+    blocks: list[AggregateTaskBlock] = []
+    current_id: str | None = None
+    current_heading = ""
+    current_lines: list[str] = []
+
+    for line in tasks_content.splitlines():
+        match = _ANY_TASK_HEADING_RE.match(line)
+        if match:
+            if current_id is not None:
+                blocks.append(AggregateTaskBlock(current_id, current_heading, "\n".join(current_lines)))
+            current_id = match.group("task_id").upper()
+            current_heading = line
+            current_lines = [line]
+            continue
+        if current_id is not None:
+            current_lines.append(line)
+
+    if current_id is not None:
+        blocks.append(AggregateTaskBlock(current_id, current_heading, "\n".join(current_lines)))
+
+    return blocks
+
+
+def _aggregate_task_done(block: AggregateTaskBlock) -> bool:
+    return bool(re.search(r"\[x\]", block.heading, re.IGNORECASE))
+
+
+def _aggregate_task_advances(block: AggregateTaskBlock) -> set[int]:
+    for line in block.body.splitlines():
+        if line.strip().lower().startswith("**advances:**"):
+            return _extract_criterion_refs(line)
+    return set()
+
+
+def _workstream_task_map(workstreams_payload: dict) -> dict[str, str]:
+    task_to_workstream: dict[str, str] = {}
+    for workstream in workstreams_payload.get("workstreams", []) or []:
+        if not isinstance(workstream, dict):
+            continue
+        ws_id = str(workstream.get("id", "")).strip()
+        if not ws_id or workstream.get("status") == "failed":
+            continue
+        tasks = workstream.get("tasks", []) or []
+        if not isinstance(tasks, list):
+            continue
+        for task_id in tasks:
+            task_to_workstream[str(task_id).upper()] = ws_id
+    return task_to_workstream
+
+
+def _high_risk_sources(*texts: str) -> list[str]:
+    sources: list[str] = []
+    for text in texts:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or _HIGH_RISK_NEGATION_RE.search(stripped):
+                continue
+            if _HIGH_RISK_RE.search(stripped):
+                sources.append(stripped)
+    return sources
+
+
+def compute_aggregate_review_gate(
+    tasks_path: Path,
+    workstreams_path: Path | None = None,
+    flags_path: Path | None = None,
+    execution_strategy_path: Path | None = None,
+) -> AggregateReviewDecision:
+    """Compute the /z-execute final aggregate-review trigger decision.
+
+    Required when any observable review-gate threshold from the INTENT contract
+    fires: more than 8 realized implementation tasks, more than 1 workstream or
+    parallel batch, any high-risk concern/audit flag, any acceptance criterion
+    mapped to tasks realized in multiple workstreams, or missing/invalid
+    workstreams/execution-strategy metadata.
+    """
+    tasks_content = tasks_path.read_text(encoding="utf-8")
+    task_blocks = _extract_aggregate_task_blocks(tasks_content)
+    done_blocks = [block for block in task_blocks if _aggregate_task_done(block)]
+    task_count = len(done_blocks)
+
+    workstreams_payload, workstreams_fail_reasons = _read_required_workstreams(
+        workstreams_path,
+        task_count=task_count,
+    )
+    execution_strategy_text, strategy_fail_reasons = _read_required_text(
+        execution_strategy_path,
+        "execution_strategy",
+    )
+    metadata_fail_reasons = workstreams_fail_reasons + strategy_fail_reasons
+    active_workstreams = [
+        ws for ws in (workstreams_payload.get("workstreams", []) or [])
+        if isinstance(ws, dict) and ws.get("status") != "failed"
+    ]
+    workstream_count = len(active_workstreams)
+    parallel_groups = {
+        str(ws.get("parallel_group"))
+        for ws in active_workstreams
+        if ws.get("parallel_group") not in (None, "")
+    }
+    parallel_batch_count = len(parallel_groups)
+
+    task_to_workstream = _workstream_task_map(workstreams_payload)
+    unmapped_done_tasks = sorted(
+        block.task_id for block in done_blocks
+        if block.task_id not in task_to_workstream
+    )
+    if unmapped_done_tasks and not workstreams_fail_reasons:
+        metadata_fail_reasons.append("workstreams_missing_task_mapping")
+
+    criterion_to_workstreams: dict[int, set[str]] = {}
+    for block in done_blocks:
+        ws_id = task_to_workstream.get(block.task_id)
+        if not ws_id:
+            continue
+        for criterion in _aggregate_task_advances(block):
+            criterion_to_workstreams.setdefault(criterion, set()).add(ws_id)
+    criteria_multi_workstream = {
+        str(criterion): sorted(workstreams)
+        for criterion, workstreams in sorted(criterion_to_workstreams.items())
+        if len(workstreams) > 1
+    }
+
+    high_risk_sources = _high_risk_sources(
+        _read_optional_text(flags_path),
+        execution_strategy_text,
+    )
+
+    triggers = {
+        "task_count_gt_8": task_count > AGGREGATE_REVIEW_TASK_THRESHOLD,
+        "workstream_count_gt_1": workstream_count > AGGREGATE_REVIEW_WORKSTREAM_THRESHOLD,
+        "parallel_batch_count_gt_1": parallel_batch_count > AGGREGATE_REVIEW_PARALLEL_BATCH_THRESHOLD,
+        "high_risk_flag": bool(high_risk_sources),
+        "criteria_mapped_to_multiple_workstreams": bool(criteria_multi_workstream),
+        "metadata_missing_or_invalid": bool(metadata_fail_reasons),
+    }
+    required = any(triggers.values())
+    return AggregateReviewDecision(
+        required=required,
+        decision=AGGREGATE_REVIEW_REQUIRED if required else AGGREGATE_REVIEW_NOT_REQUIRED,
+        task_count=task_count,
+        workstream_count=workstream_count,
+        parallel_batch_count=parallel_batch_count,
+        high_risk_flag=bool(high_risk_sources),
+        criteria_multi_workstream=criteria_multi_workstream,
+        triggers=triggers,
+        high_risk_sources=high_risk_sources,
+        metadata_fail_reasons=metadata_fail_reasons,
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -941,7 +1204,9 @@ def _main(argv: list[str]) -> int:
             "  reopen-intent   <INTENT.md>                                    — set frozen_at to pending (re-open frozen contract; idempotent)\n"
             "  bootstrap-ledger <LEDGER.md> <frozen_at> <slug>               — create LEDGER.md if absent (idempotent)\n"
             "  evaluate-acceptance <INTENT.md> <LEDGER.md> [<diff-file>]     — per-criterion met|unmet|unknown + done|continue verdict\n"
-            "  validate-tasks <INTENT.md> <TASKS.md> [<#1,#3,...>]            — Phase 8 TASKS.md sanity checks",
+            "  validate-tasks <INTENT.md> <TASKS.md> [<#1,#3,...>]            — Phase 8 TASKS.md sanity checks\n"
+            "  aggregate-review-gate <TASKS.md> [<workstreams.json|->] [<flags.md|->] [<execution-strategy.md|->]\n"
+            "                                                                  — compute /z-review-all required/not-required gate",
             file=sys.stderr,
         )
         return 2
@@ -1061,6 +1326,21 @@ def _main(argv: list[str]) -> int:
 
         print(f"VERDICT: {result.verdict}")
         return 0 if result.verdict == VERDICT_DONE else 1
+
+    if cmd == "aggregate-review-gate":
+        # argv: aggregate-review-gate <TASKS.md> [<workstreams.json|->] [<flags.md|->] [<execution-strategy.md|->]
+        try:
+            decision = compute_aggregate_review_gate(
+                file_path,
+                _optional_path(argv[3]) if len(argv) >= 4 else None,
+                _optional_path(argv[4]) if len(argv) >= 5 else None,
+                _optional_path(argv[5]) if len(argv) >= 6 else None,
+            )
+        except OSError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(decision._asdict(), sort_keys=True))
+        return 0
 
     print(f"Unknown command: {cmd!r}", file=sys.stderr)
     return 2

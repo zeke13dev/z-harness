@@ -772,13 +772,10 @@ def build_from_flat(plan_dir, slug):
 
     tasks_md_text = Path(tasks_path).read_text()
     task_ids, deps = parse_tasks_md(tasks_path)
+    if not task_ids:
+        raise ValidationError("TASKS.md contained no canonical task headings")
 
-    try:
-        ws_objects, merge_order = run_5rule_algorithm(task_ids, deps)
-    except CycleError as e:
-        # Emit minimal workstreams.json with partial_tree
-        print(f"Cycle detected: {e}", file=sys.stderr)
-        return [], [], [], True, False
+    ws_objects, merge_order = run_5rule_algorithm(task_ids, deps)
 
     # Add path and status to each workstream.
     # parallel_group is already set by run_5rule_algorithm via assign_ws_depths.
@@ -900,7 +897,7 @@ def main():
                 capture_output=True, text=True, check=True,
             )
             plan_dir = result.stdout.strip()
-        except Exception:
+        except (subprocess.CalledProcessError, OSError):
             plan_dir = os.path.join("z-harness", args.slug)
     
     if not os.path.isdir(plan_dir):

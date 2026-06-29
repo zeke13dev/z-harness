@@ -239,6 +239,61 @@ if [ -f "$BASE/INTENT.md" ] && [ ! -f "$BASE/SPEC.md" ]; then
 
   LEDGER_FILE="$BASE/LEDGER.md"
 
+  # LEDGER preflight. `/z-review-all` must never enter INTENT review with a
+  # missing LEDGER.md: the consultants need the realized-decision/deviation
+  # record to distinguish implementation drift from accepted deviations. This
+  # mirrors `/z-execute`'s finalize backstop for older plans that completed
+  # before the LEDGER contract was enforced.
+  if [ ! -f "$LEDGER_FILE" ]; then
+    INTENT_FROZEN_AT_FOR_LEDGER="$(python3 -c '
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("")
+    raise SystemExit
+m = re.search(r"^frozen_at:\s*(.+?)\s*$", text, re.M)
+print(m.group(1).strip() if m else "")
+' "$INTENT_FILE" 2>/dev/null || echo "")"
+    [ -z "$INTENT_FROZEN_AT_FOR_LEDGER" ] && INTENT_FROZEN_AT_FOR_LEDGER="unknown"
+    LEDGER_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+      bootstrap-ledger "$LEDGER_FILE" "$INTENT_FROZEN_AT_FOR_LEDGER" "$Z_HARNESS_SLUG" 2>/dev/null || true)"
+    if echo "$LEDGER_OUT" | grep -q "^CREATED:"; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_ledger_bootstrapped \
+        "$(printf '{"ledger_file":"%s","intent_frozen_at":"%s"}' \
+           "$LEDGER_FILE" "$INTENT_FROZEN_AT_FOR_LEDGER")" 2>/dev/null || true
+    fi
+  fi
+
+  if [ ! -f "$LEDGER_FILE" ]; then
+    echo "ERROR: INTENT-mode /z-review-all requires LEDGER.md at $LEDGER_FILE" >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
+      "$(printf '{"reason":"intent_ledger_missing","ledger_file":"%s"}' "$LEDGER_FILE")" 2>/dev/null || true
+    # Execute Run Brief — halt finalize with reason "INTENT LEDGER missing before review", then exit 1.
+    exit 1
+  fi
+
+  REVIEW_LEDGER_NO_DEVIATIONS_APPENDED=0
+  if ! grep -Eq '^\*\*(Decisions|Deviations):\*\*' "$LEDGER_FILE" 2>/dev/null; then
+    cat >> "$LEDGER_FILE" <<'EOF'
+
+## Final review readiness
+
+### Review-all handoff
+
+**Decisions:**
+  - No per-task LEDGER entries were available when `/z-review-all` started; review proceeds with an explicit no-deviations entry so the missing artifact is observable.
+
+**Deviations:**
+  - none recorded
+EOF
+    REVIEW_LEDGER_NO_DEVIATIONS_APPENDED=1
+  fi
+
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_ledger_ready \
+    "$(printf '{"ledger_file":"%s","no_deviations_appended":%d}' \
+       "$LEDGER_FILE" "$REVIEW_LEDGER_NO_DEVIATIONS_APPENDED")" 2>/dev/null || true
+
   # Durable tier
   INVARIANTS_PATH="docs/INVARIANTS.json"  # repo-root-relative; durable tier lives in the repo, not the plan dir $BASE
   if [ -f "STYLE.md" ]; then

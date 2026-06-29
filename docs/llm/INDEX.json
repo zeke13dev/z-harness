@@ -1015,7 +1015,7 @@
         "agents/reviewer.md",
         "docs/human/adaptive-intent.md"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-06-29",
       "confidence": "high",
       "depends_on": [
         "config",
@@ -1031,7 +1031,7 @@
         "z-review-all",
         "z-audit-plan"
       ],
-      "summary": "Default intent-mode planning/execution model: /z-plan writes and audits a thin INTENT contract plus initial TASKS, /z-execute freezes it and advances BFS task levels with LEDGER checkpoints, and /z-review-all reviews INTENT.frozen.md plus LEDGER."
+      "summary": "Default /z-plan intent compiler: sharpen-first, brainstorm ask/no auto-route, iterative INTENT drafting, concern flags plus optional audit ask, execution strategy metadata, watcher checkpoint seams, and /z-execute INTENT freeze/BFS execution with LEDGER checkpoints."
     },
     {
       "slug": "amendment-brief",

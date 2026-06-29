@@ -66,6 +66,9 @@ The caller will give you:
   - **INTENT mode** (SPEC absent): requires **both** of the following inputs — if only one is present, that is a misconfiguration (see mode detection below):
     - `intent_snapshot: <abs path>` — path to the frozen INTENT.md snapshot (`archive/$RUN/INTENT.frozen.md`). Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, `## Acceptance checklist`.
     - `ledger_path: <abs path>` — path to LEDGER.md. Read it to understand decisions already recorded before composing the review prompt.
+    - `intent_flags_path: <abs path>` (optional) — LLM concern/decision flags and folded audit notes shown to the user before approval. Read when present and flag drift from accepted flags or ignored audit risks.
+    - `execution_strategy_path: <abs path>` (optional) — execution DAG/workstream/checkpoint guidance. Read when present and use it to detect task-to-intent or parallelism drift.
+    - `workstreams_path: <abs path>` (optional) — workstream metadata. Read only if needed to assess whether this diff violated a serial/shared-file constraint.
   - **Durable tier** (INTENT mode — three separate paths, all optional but each checked if present):
     - `kernel_path:` — KERNEL doc (axioms). Read and follow before acting.
     - `invariants_path:` — `docs/INVARIANTS.json`. Read invariants relevant to the changed files; flag any violation.
@@ -91,7 +94,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 3. **Detect mode and read the contract:**
    - **Misconfiguration guard:** If exactly one of `intent_snapshot:` or `ledger_path:` is present (but not both), stop immediately and return a BLOCKED verdict with the message: `"MISCONFIGURED: INTENT mode requires both intent_snapshot: and ledger_path: to be present. Exactly one was supplied — cannot determine review mode."` Do not attempt to infer the missing path or fall back to legacy mode.
    - **Legacy mode** (`$BASE` given, neither `intent_snapshot:` nor `ledger_path:` present): Read the relevant SPEC.md section from `$BASE/SPEC.md`.
-   - **INTENT mode** (both `intent_snapshot:` AND `ledger_path:` present): Read the full frozen INTENT.md snapshot at the given path. Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, and `## Acceptance checklist` (numbered `[ ]` criteria). Also read LEDGER.md at `ledger_path:` to understand decisions already recorded. Then read the durable tier if provided: `kernel_path:` (KERNEL axioms), `invariants_path:` (INVARIANTS.json — flag any violation the diff introduces), and `style_path:` (STYLE doc — flag any new code that violates style rules). Do NOT read SPEC.md in INTENT mode.
+   - **INTENT mode** (both `intent_snapshot:` AND `ledger_path:` present): Read the full frozen INTENT.md snapshot at the given path. Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, and `## Acceptance checklist` (numbered `[ ]` criteria). Also read LEDGER.md at `ledger_path:` to understand decisions already recorded. Then read optional intent-conversation artifacts when supplied: `intent_flags_path:` (concerns/audit notes), `execution_strategy_path:` (DAG/checkpoint/review guidance), and `workstreams_path:` (parallelism constraints relevant to the changed files). Then read the durable tier if provided: `kernel_path:` (KERNEL axioms), `invariants_path:` (INVARIANTS.json — flag any violation the diff introduces), and `style_path:` (STYLE doc — flag any new code that violates style rules). Do NOT read SPEC.md in INTENT mode.
 4. Build a review prompt. Use the appropriate template for the detected mode:
 
 **Legacy mode prompt:**
@@ -160,6 +163,12 @@ INTENT narrative (full — authority for this review):
 LEDGER (decisions already recorded — do not re-flag decisions the LEDGER already captures):
 <LEDGER.md contents, or "(empty — first level)" if empty>
 
+
+Concern flags / audit notes shown before approval (if supplied):
+<intent_flags_path content, or "(none supplied)">
+
+Execution strategy / workstreams (if supplied):
+<execution_strategy_path summary and relevant workstreams_path entry, or "(none supplied)">
 <If kernel_path: was given:>
 Durable tier — KERNEL (axioms that override everything):
 <kernel_path content verbatim>
@@ -187,6 +196,7 @@ Surrounding file context (only if relevant to evaluating the diff):
 <excerpt>
 
 Scrutinize this code rigorously against the INTENT contract above. Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope beyond the intent.
+Also verify that the diff respects the concern flags/audit notes and task-to-intent mapping. If the implementation resolves a flagged risk, that is fine; if it ignores a flagged decision, expands beyond INTENT, or chooses a new product/intent direction without an explicit decision_needed halt, report a blocker.
 
 When citing failures, use the exact form: "fails acceptance criterion #N" where N is the 1-based index in the ## Acceptance checklist above.
 

@@ -453,7 +453,7 @@ fi
 
 **`IMPLEMENT_MODE=legacy` (SPEC.md present):** Continue with the existing task-dispatch loop below, unchanged. Subagents read `$BASE/SPEC.md` and `$BASE/PLAN.md` directly. This is the proven default for all in-flight and historical plans.
 
-**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 (BFS generate level → execute → checkpoint) is the body of the `if` block that follows; T010 replaces the inner stub.
+**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 (BFS generate level → execute → checkpoint) is the body of the `if` block that follows; T010 replaces the inner stub. In this mode, the frozen INTENT narrative plus approved concern flags, optional audit notes, task-to-intent mapping, and execution strategy metadata are the source of truth. Implementers must not invent product scope outside INTENT; if execution uncovers a new intent/product decision, halt and ask the user.
 
 ```bash
 if [ "$IMPLEMENT_MODE" = "intent" ]; then
@@ -515,6 +515,88 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
          "$BASE" "$LEDGER_FILE" "$INTENT_FROZEN_AT")" 2>/dev/null || true
   fi
   # EXISTS: is silent — idempotent resume, no event needed.
+
+  # Intent-conversation companion artifacts from /z-plan. These are optional for
+  # backward compatibility, but when present they must be passed through to the
+  # BFS task generator and implementers/reviewers as attention guidance, not as
+  # scope expansion. This preserves accepted concern flags (approved concern flags),
+  # optional audit notes, task-to-intent mapping, and execution strategy metadata, plus the recorded
+  # brainstorm choice, across every adaptive INTENT BFS level.
+  # Compatibility contract: approved concern flags, optional audit notes, task-to-intent mapping, and execution strategy metadata.
+  # BFS generator handoff includes accepted concern flags, brainstorm choice, execution strategy/workstreams metadata, and precise task-to-intent mapping requirements.
+  # Load-bearing planning artifacts MUST come only from stable plan-root files or
+  # exact pointers in handoff.json/execution-strategy.md. Never enumerate archive
+  # directories to choose a matching file: that can attach another planning run's
+  # flags or brainstorm choice. If an exact pointer is absent or unreadable, treat the
+  # optional artifact as absent; required metadata is checked by the aggregate
+  # review gate at finalize.
+  EXECUTION_STRATEGY_FILE="$BASE/execution-strategy.md"
+  WORKSTREAMS_FILE="$BASE/workstreams.json"
+  _resolve_exact_plan_artifact() {
+    local expected_name="$1"
+    local resolved=""
+    if [ -f "$BASE/handoff.json" ]; then
+      resolved="$(python3 - "$BASE/handoff.json" "$BASE" "$expected_name" <<'PYEOF' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+
+handoff = Path(sys.argv[1])
+base = Path(sys.argv[2])
+expected = sys.argv[3]
+try:
+    payload = json.loads(handoff.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+for entry in payload.get("context_files", []) or []:
+    if not isinstance(entry, dict):
+        continue
+    raw = str(entry.get("path") or "").strip()
+    if not raw:
+        continue
+    path = Path(raw)
+    if not path.is_absolute():
+        path = base / path
+    if path.name == expected:
+        print(path)
+        break
+PYEOF
+)"
+    fi
+    if [ -z "$resolved" ] && [ "$expected_name" = "intent-readthrough-flags.md" ] && [ -f "$EXECUTION_STRATEGY_FILE" ]; then
+      resolved="$(python3 - "$EXECUTION_STRATEGY_FILE" "$BASE" <<'PYEOF' 2>/dev/null || true
+import re, sys
+from pathlib import Path
+
+strategy = Path(sys.argv[1])
+base = Path(sys.argv[2])
+try:
+    text = strategy.read_text(encoding="utf-8")
+except OSError:
+    raise SystemExit(0)
+match = re.search(r"(\S*archive/\S+/intent-readthrough-flags\.md)", text)
+if match:
+    path = Path(match.group(1))
+    print(path if path.is_absolute() else base / path)
+PYEOF
+)"
+    fi
+    if [ -z "$resolved" ] && [ -f "$BASE/$expected_name" ]; then
+      resolved="$BASE/$expected_name"
+    fi
+    if [ -n "$resolved" ] && [ -f "$resolved" ]; then
+      printf '%s\n' "$resolved"
+    fi
+  }
+  INTENT_FLAGS_FILE="$(_resolve_exact_plan_artifact intent-readthrough-flags.md)"
+  BRAINSTORM_CHOICE_FILE="$(_resolve_exact_plan_artifact brainstorm-choice.json)"
+  export INTENT_FLAGS_FILE BRAINSTORM_CHOICE_FILE EXECUTION_STRATEGY_FILE WORKSTREAMS_FILE
+
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_execution_context \
+    "$(printf '{"base":"%s","flags_present":%s,"brainstorm_choice_present":%s,"execution_strategy_present":%s,"workstreams_present":%s}' \
+      "$BASE" "$(test -n "$INTENT_FLAGS_FILE" && test -f "$INTENT_FLAGS_FILE" && echo true || echo false)" \
+      "$(test -n "$BRAINSTORM_CHOICE_FILE" && test -f "$BRAINSTORM_CHOICE_FILE" && echo true || echo false)" \
+      "$(test -f "$EXECUTION_STRATEGY_FILE" && echo true || echo false)" \
+      "$(test -f "$WORKSTREAMS_FILE" && echo true || echo false)")" 2>/dev/null || true
 
   # -----------------------------------------------------------------------
   # Step 2 — BFS-level loop (T010)
@@ -678,6 +760,10 @@ print(m.group(1).strip() if m else '')
       description="Generate BFS level ${CURRENT_LEVEL} task batch",
       prompt="intent_snapshot_path: ${ARCHIVE_DIR}/INTENT.frozen.md
 ledger_path: ${LEDGER_FILE}
+intent_readthrough_flags_path: ${INTENT_FLAGS_FILE}
+brainstorm_choice_path: ${BRAINSTORM_CHOICE_FILE}
+execution_strategy_path: ${EXECUTION_STRATEGY_FILE}
+workstreams_path: ${WORKSTREAMS_FILE}
 level: ${CURRENT_LEVEL}
 unmet_criteria: ${UNMET_CRITERIA_JSON}
 prior_level_outcomes: ${PRIOR_LEVEL_OUTCOMES:-none}
@@ -685,7 +771,9 @@ tasks_output_path: ${LEVEL_TASKS_FILE}
 plan_dir: ${BASE}
 level_cap: ${INTENT_BFS_LEVEL_CAP}
 budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
-task_id_start: ${TASK_ID_START}"
+task_id_start: ${TASK_ID_START}
+execution_strategy_required: true
+task_to_intent_mapping_required: true"
     ))"
 
     # Parse generator return.
@@ -792,9 +880,15 @@ print(p if os.path.isfile(p) else '')
     # Build the INTENT-mode extra context lines that every implementer and reviewer
     # in this level will receive (prepended to prompt after the standard fields).
     # T012/T013 contract: presence of BOTH intent_snapshot: and ledger_path: signals
-    # INTENT mode; the durable tier paths are optional but passed when they exist.
+    # INTENT mode; concern flags, execution strategy, workstreams, and durable tier paths are optional but passed when they exist.
     INTENT_CTX_LINES="intent_snapshot: ${ARCHIVE_DIR}/INTENT.frozen.md
 ledger_path: ${LEDGER_FILE}"
+    [ -n "$INTENT_FLAGS_FILE" ] && [ -f "$INTENT_FLAGS_FILE" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
+intent_flags_path: ${INTENT_FLAGS_FILE}"
+    [ -f "$EXECUTION_STRATEGY_FILE" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
+execution_strategy_path: ${EXECUTION_STRATEGY_FILE}"
+    [ -f "$WORKSTREAMS_FILE" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
+workstreams_path: ${WORKSTREAMS_FILE}"
     [ -n "$KERNEL_PATH" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
 kernel_path: ${KERNEL_PATH}"
     [ -n "$INVARIANTS_PATH" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
@@ -1544,8 +1638,9 @@ execute_main_loop_steps_1_to_8() {
 - Steps 5 (implementer dispatch), 6 (reviewer dispatch), and 7a (retry-implementer dispatch)
   MUST include `$INTENT_MODE_CTX` in the `Agent(prompt=...)` via the
   `${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}` expansion already present in each prompt template.
-  `$INTENT_MODE_CTX` carries `intent_snapshot:`, `ledger_path:`, and (when non-empty)
-  `kernel_path:`, `invariants_path:`, `style_path:`.  The T012/T013 contract requires BOTH
+  `$INTENT_MODE_CTX` carries `intent_snapshot:`, `ledger_path:`, optional `intent_flags_path:`,
+  `execution_strategy_path:`, `workstreams_path:`, and (when non-empty) `kernel_path:`,
+  `invariants_path:`, `style_path:`. The T012/T013 contract requires BOTH
   `intent_snapshot:` and `ledger_path:` to be present for the subagent to enter INTENT mode.
 - Steps 5/6/7a MUST NOT pass `spec_path:` or `plan_path:` to subagents in INTENT mode.
   The `$BASE` line in each prompt already carries the annotation "(INTENT mode: SPEC.md is
@@ -2862,6 +2957,127 @@ invocation re-registers (idempotent) and resumes.
    )
    EOF
 
+   # INTENT review-all readiness guard. A completed INTENT-mode run MUST NOT
+   # recommend `/z-review-all` until `$BASE/LEDGER.md` exists and contains at
+   # least one observable decisions/deviations entry. This is the final backstop
+   # for older/resumed runs that predate the Step-1 bootstrap or completed with
+   # an empty ledger.
+   if [ "${IMPLEMENT_MODE:-}" = "intent" ] && \
+      [ "${FINALIZE_STATUS:-}" != "aborted" ] && \
+      [ "${PENDING_COUNT:-0}" -eq 0 ] && \
+      [ "${BLOCKED_COUNT:-0}" -eq 0 ]; then
+     INTENT_FILE="$BASE/INTENT.md"
+     LEDGER_FILE="$BASE/LEDGER.md"
+     SLUG_FOR_LEDGER="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
+     if [ ! -f "$LEDGER_FILE" ]; then
+       INTENT_FROZEN_AT_FOR_LEDGER="$(python3 -c '
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("")
+    raise SystemExit
+m = re.search(r"^frozen_at:\s*(.+?)\s*$", text, re.M)
+print(m.group(1).strip() if m else "")
+' "$INTENT_FILE" 2>/dev/null || echo "")"
+       [ -z "$INTENT_FROZEN_AT_FOR_LEDGER" ] && INTENT_FROZEN_AT_FOR_LEDGER="unknown"
+       LEDGER_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+         bootstrap-ledger "$LEDGER_FILE" "$INTENT_FROZEN_AT_FOR_LEDGER" "$SLUG_FOR_LEDGER" 2>/dev/null || true)"
+       if echo "$LEDGER_OUT" | grep -q "^CREATED:"; then
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" ledger_bootstrapped \
+           "$(printf '{"base":"%s","ledger_file":"%s","intent_frozen_at":"%s","phase":"finalize_review_ready"}' \
+              "$BASE" "$LEDGER_FILE" "$INTENT_FROZEN_AT_FOR_LEDGER")" 2>/dev/null || true
+       fi
+     fi
+
+     if [ ! -f "$LEDGER_FILE" ]; then
+       echo "ERROR: completed INTENT run cannot finalize aggregate-review decision without LEDGER.md at $LEDGER_FILE" >&2
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_aggregate_review_ledger_missing \
+         "$(printf '{"base":"%s","ledger_file":"%s","action":"halt_before_aggregate_review_decision"}' \
+            "$BASE" "$LEDGER_FILE")" 2>/dev/null || true
+       RB_HALT_REASON="INTENT LEDGER missing before aggregate-review finalization"
+       FINALIZE_STATUS=aborted
+       RUN_BRIEF_OUTCOME="Halted: completed INTENT run is missing LEDGER.md required before aggregate-review finalization"
+     else
+       NO_DEVIATIONS_APPENDED=0
+       if ! grep -Eq '^\*\*(Decisions|Deviations):\*\*' "$LEDGER_FILE" 2>/dev/null; then
+         cat >> "$LEDGER_FILE" <<'EOF'
+
+## Aggregate review readiness
+
+### No-deviations ledger baseline
+
+**Decisions:**
+  - No per-task LEDGER entries were produced during this run; append an explicit no-deviations baseline before the aggregate-review gate decides whether `/z-review-all` is required.
+
+**Deviations:**
+  - none recorded
+EOF
+         NO_DEVIATIONS_APPENDED=1
+       fi
+       cp "$LEDGER_FILE" "$CURRENT_ARCHIVE_DIR/LEDGER.md" 2>/dev/null || true
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_aggregate_review_ledger_ready \
+         "$(printf '{"base":"%s","ledger_file":"%s","snapshot":"%s","no_deviations_appended":%d}' \
+            "$BASE" "$LEDGER_FILE" "$CURRENT_ARCHIVE_DIR/LEDGER.md" "$NO_DEVIATIONS_APPENDED")" 2>/dev/null || true
+     fi
+   fi
+
+   # Aggregate review trigger gate (acceptance criterion #9).
+   # INTENT-mode completed runs compute the concrete required/not-required
+   # branch only after the run is otherwise complete. The trigger thresholds are:
+   #   - more than 8 realized implementation tasks,
+   #   - more than 1 workstream OR more than 1 parallel batch,
+   #   - any high-risk concern/audit flag,
+   #   - any acceptance criterion mapped to multiple workstreams,
+   #   - missing or invalid required workstreams/execution metadata.
+   #
+   # The helper emits one JSON object with decision:
+   #   aggregate-review-required | aggregate-review-not-required
+   # and all trigger inputs. The JSON is both logged and archived. A driver that
+   # auto-invokes next commands may invoke `/z-review-all` ONLY on the required
+   # branch for INTENT runs; the not-required branch records the no-trigger path
+   # and stops. Legacy completed runs keep the historical `/z-review-all`
+   # recommendation and do not use this INTENT-only suppression gate.
+   AGGREGATE_REVIEW_REQUIRED=false
+   AGGREGATE_REVIEW_DECISION="aggregate-review-not-required"
+   AGGREGATE_REVIEW_RECORD="$CURRENT_ARCHIVE_DIR/aggregate-review-decision.json"
+   if [ "${IMPLEMENT_MODE:-}" = "intent" ] && \
+      [ "${FINALIZE_STATUS:-}" != "aborted" ] && \
+      [ "${PENDING_COUNT:-0}" -eq 0 ] && \
+      [ "${BLOCKED_COUNT:-0}" -eq 0 ] && \
+      [ "${IN_PROGRESS_COUNT:-0}" -eq 0 ]; then
+     WORKSTREAMS_FOR_AGG="${WORKSTREAMS_FILE:-$BASE/workstreams.json}"
+     FLAGS_FOR_AGG="${INTENT_FLAGS_FILE:-}"
+     STRATEGY_FOR_AGG="${EXECUTION_STRATEGY_FILE:-$BASE/execution-strategy.md}"
+     [ -f "$FLAGS_FOR_AGG" ] || FLAGS_FOR_AGG="-"
+
+     AGG_TMP="$(mktemp -t z-aggregate-review.XXXXXX.json)"
+     if python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+       aggregate-review-gate "$TASKS_FILE" "$WORKSTREAMS_FOR_AGG" "$FLAGS_FOR_AGG" "$STRATEGY_FOR_AGG" \
+       > "$AGG_TMP"; then
+       mkdir -p "$CURRENT_ARCHIVE_DIR"
+       cp "$AGG_TMP" "$AGGREGATE_REVIEW_RECORD"
+       AGGREGATE_REVIEW_DECISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["decision"])' "$AGGREGATE_REVIEW_RECORD" 2>/dev/null || echo aggregate-review-required)"
+       AGGREGATE_REVIEW_REQUIRED="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1]))["required"] else "false")' "$AGGREGATE_REVIEW_RECORD" 2>/dev/null || echo true)"
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" aggregate_review_decision \
+         "$(cat "$AGGREGATE_REVIEW_RECORD")" 2>/dev/null || true
+       if [ "$AGGREGATE_REVIEW_REQUIRED" = "true" ]; then
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" aggregate_review_required \
+           "$(cat "$AGGREGATE_REVIEW_RECORD")" 2>/dev/null || true
+       else
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" aggregate_review_not_required \
+           "$(cat "$AGGREGATE_REVIEW_RECORD")" 2>/dev/null || true
+       fi
+     else
+       # Fail-safe: if the gate cannot compute, require final aggregate review.
+       AGGREGATE_REVIEW_DECISION="aggregate-review-required"
+       AGGREGATE_REVIEW_REQUIRED=true
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" aggregate_review_decision_failed \
+         "$(printf '{"tasks_file":"%s","action":"require_review_all"}' "$TASKS_FILE")" 2>/dev/null || true
+     fi
+     rm -f "$AGG_TMP"
+   fi
+
    if [ "${FINALIZE_STATUS:-}" = "aborted" ]; then
      OUTCOME="${RUN_BRIEF_OUTCOME:-Halted: orchestration stopped with ${BLOCKED_COUNT} blocked, ${PENDING_COUNT} pending}"
    else
@@ -2869,9 +3085,19 @@ invocation re-registers (idempotent) and resumes.
    fi
    bash "$RB_SH" set-section --run "$RUN" --section outcome --value "$OUTCOME"
 
-   if [ "${PENDING_COUNT:-0}" -gt 0 ] || [ "${BLOCKED_COUNT:-0}" -gt 0 ]; then
+
+   if [ "${FINALIZE_STATUS:-}" = "aborted" ]; then
+     NEXT_LABEL="Resolve the /z-execute halt before final review"
+     NEXT_CMD="/z-execute"
+   elif [ "${PENDING_COUNT:-0}" -gt 0 ] || [ "${BLOCKED_COUNT:-0}" -gt 0 ]; then
      NEXT_LABEL="Resume /z-execute to continue the remaining tasks"
      NEXT_CMD="/z-execute"
+   elif [ "${IMPLEMENT_MODE:-}" = "intent" ] && [ "${AGGREGATE_REVIEW_REQUIRED:-false}" = "true" ]; then
+     NEXT_LABEL="Run /z-review-all for final-gate cross-LLM review (${AGGREGATE_REVIEW_DECISION})"
+     NEXT_CMD="/z-review-all"
+   elif [ "${IMPLEMENT_MODE:-}" = "intent" ]; then
+     NEXT_LABEL="No aggregate review required (${AGGREGATE_REVIEW_DECISION}); decision recorded at $AGGREGATE_REVIEW_RECORD"
+     NEXT_CMD="none"
    else
      NEXT_LABEL="Run /z-review-all for final-gate cross-LLM review"
      NEXT_CMD="/z-review-all"
@@ -2882,9 +3108,15 @@ invocation re-registers (idempotent) and resumes.
    bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON"
    rm -f "$NEXT_JSON"
 
-   export RUN_BRIEF_PROFILE=full
-   export RUN_BRIEF_ARTIFACT="$BASE/PLAN.md"
-   export RUN_BRIEF_ARTIFACT_FALLBACKS="SPEC.md"
+   if [ "${IMPLEMENT_MODE:-}" = "intent" ]; then
+     export RUN_BRIEF_PROFILE=full
+     export RUN_BRIEF_ARTIFACT="$BASE/INTENT.md"
+     export RUN_BRIEF_ARTIFACT_FALLBACKS="LEDGER.md:PLAN.md:SPEC.md"
+   else
+     export RUN_BRIEF_PROFILE=full
+     export RUN_BRIEF_ARTIFACT="$BASE/PLAN.md"
+     export RUN_BRIEF_ARTIFACT_FALLBACKS="SPEC.md"
+   fi
    ```
 
 3. **Run Brief finalize** — chat and push are renders only; `--require` runs before deregister:
@@ -2942,6 +3174,9 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `session_resume_skipped` | SESSION.md present but not used, or absent | `reason` |
 | `session_resumed` | Orchestrator inlined SESSION.md at startup | `done_ids_hash`, `last_gate_task_id`, `next_pending` |
 | `task_skip` | Skip rule hit, user picked Skip/Run-myself/Defer | `id`, `marker_matched`, `user_choice` |
+| `aggregate_review_decision` | Finalize computed the aggregate `/z-review-all` trigger gate | `decision`, `required`, `task_count`, `workstream_count`, `parallel_batch_count`, `high_risk_flag`, `criteria_multi_workstream`, `triggers` |
+| `aggregate_review_required` | Finalize computed the required branch; `/z-review-all` is the next recommendation/invocation target | same payload as `aggregate_review_decision` |
+| `aggregate_review_not_required` | Finalize computed the no-trigger branch and archived the no-trigger record | same payload as `aggregate_review_decision` |
 
 **Implementation pattern for any subagent call:**
 

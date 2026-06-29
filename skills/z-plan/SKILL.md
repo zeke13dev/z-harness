@@ -23,27 +23,27 @@ $ARGUMENTS
 
 Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-execute`.
 
-## Revised phase spine and `/z-plan` edit sequence
+## Intent-compiler phase spine
 
-The `/z-plan` spine is ordered so every expensive action is gated, every artifact handoff is explicit, and later redesign tasks have stable insertion points:
+The `/z-plan` default path is now an **intent compiler**: conversation → sharpened problem → optional ideated framing → intent contract → execution DAG. Full SDD remains available only as an explicit compatibility path (`--full`, existing `SPEC.md`, or `workflow.planning_mode=full`); it is no longer the default user-facing model.
 
-1. **Setup** — slug/collision checks, claim/register, docs/precontext freshness, deterministic artifact inventory.
-2. **Plan Route Check (pre-gate)** — route-down/lateral recommendations from cheap signals only; do not auto-dispatch another command.
-3. **Explicit planning mode gate** — visible Intent-vs-Full SDD choice, with config/flags as the recommended default and `SPEC.md` as the legacy full-mode override.
-4. **Pre-subagent cost gate (hard)** — runs after the mode gate has fixed the cost shape and before any expensive Agent dispatch.
-5. **Post-gate classifiers** — artifact-scout classifier, deferred planning-router, intent classifier/depth announcement.
-6. **Phases 0–5** — premise, exploration, decisions, user approval, and consulted design convergence.
-7. **Phase 6** — write the primary planning artifact: `INTENT.md` in intent mode, or `SPEC.md` + `PLAN.md` + initial legacy `TASKS.md` in full SDD mode.
-8. **Phase 7** — bundled final review after the initial task plan exists: intent mode generates missing initial `TASKS.md` with `task-tree-generator`; full mode requires the legacy `TASKS.md` path before review.
-9. **Phase 8** — validate/checkpoint/finalize `TASKS.md`: intent-mode sanity, legacy complexity stamps, scope seed, and workstreams.
-10. **Phase 8.4** — post-artifact route checks after the artifacts exist; may recommend `/z-plan-split`, `/z-sharpen`, or `/z-brainstorm`, but never auto-dispatch.
-11. **Phase 8.5** — handoff context producer. Writes rich `HANDOFF.md`, calls `scripts/write-handoff.sh`, validates/logs `handoff.json`, and stays before Phase 8.6.
-12. **Phase 8.6** — final user handoff gate: fresh-session implementation, audit-first, stop with handoff, or amend.
-13. **Phase 9** — finalize run brief, release claim, deregister.
+Safety mechanics still run where they protect the workflow: slug/collision checks, claim/register, docs/precontext freshness, deterministic artifact inventory, route preflight, the explicit mode gate, and the hard pre-subagent cost gate are preserved. They support the flow below; they do not replace the conversational intent contract.
 
-`/z-plan` skill edits for this redesign MUST land in this sequence: **T001 spine/mode gate first**, then **T005 Phase 8 sanity**, then **T006 Phase 8.5 handoff producer**, then **T007 Phase 7 mode-aware reviewer inputs**, then docs sync. Dependent tasks must not edit earlier sections to smuggle in their own ordering changes.
+Canonical intent-compiler flow:
 
-Amend/resume routing is phase-specific: scope or goal changes resume at **Phase 0**, decision changes resume at **Phase 2**, primary artifact wording changes resume at **Phase 6**, and task decomposition changes resume at **Phase 8**.
+1. **Setup + safety gates** — derive slug, claim/register, scan precontext, run deterministic artifact inventory, run route preflight, choose intent-vs-full compatibility mode, then run the hard pre-subagent cost gate.
+2. **Sharpen always first** — run the shared `/z-sharpen` inline contract or consume a fresh `GRILL.md`; clarify goal, motivation, constraints, non-goals, acceptance criteria, and uncertainty before planning.
+3. **Brainstorm ask gate** — ask whether the user wants `/z-brainstorm`; recommend it when material alternatives remain, but never auto-dispatch it.
+4. **Optional brainstorm** — if the user opts in, consume the selected `BRAINSTORM.md` framing; if the user skips, record the explicit skip and continue.
+5. **Watcher checkpoint seam** — after sharpen/optional-brainstorm artifacts are stable, evaluate the shared `check-compaction.sh` / `write-clear-checkpoint.sh` seam before entering high-context planning.
+6. **Conversational plan + `INTENT.md` iterations** — restate the sharpened problem/framing, ground only the missing source facts, draft `INTENT.md`, and iterate with the user 1–2 times.
+7. **LLM concern flags + optional audit-plan ask** — before final read-through, flag concerns/decisions/assumptions, then ask whether to fold in a `/z-audit-plan` scan.
+8. **Final user approval** — user reads final `INTENT.md` plus flags/audit notes and chooses approve, amend, route back to sharpen/brainstorm, or stop.
+9. **Execution strategy generation** — produce `TASKS.md`, task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and workstream/handoff metadata.
+10. **Watcher checkpoint seam** — after execution strategy and handoff artifacts are stable, evaluate the shared checkpoint seam before `/z-execute`.
+11. **Fast reviewed `/z-execute`** — execute fresh from `INTENT.md`, flags, audit notes, task-to-intent mapping, and execution strategy; keep review gates and stop for new intent decisions.
+
+Amend/resume routing remains phase-specific: scope or goal changes resume at **Sharpen / Phase 0**, framing changes resume at **Brainstorm ask / optional brainstorm**, primary artifact wording changes resume at **`INTENT.md` iteration**, and task decomposition changes resume at **Execution strategy**.
 
 ## Setup
 
@@ -383,12 +383,14 @@ The post-gate classifier consumes the inline JSON printed by this command and ar
 
 Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear, and once more in **Phase 8.4** after `INTENT.md`/`SPEC.md`/`PLAN.md` and `TASKS.md` exist. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `asks_what_should_we_do`, `alternatives_unsettled`, `architecture_decision`, `reversibility_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `question_heavy_artifacts`, `artifact_unsettled_approach`, `post_artifact_check`, and artifact existence.
 
+**Sharpen-first invariant:** the pre-Phase-0/pre-gate invocation MUST NOT route or recommend `/z-brainstorm`. If `approach_uncertain`, `asks_what_should_we_do`, `alternatives_unsettled`, `architecture_decision`, or `reversibility_uncertain` is present before sharpen, record those signals as `brainstorm_recommendation_deferred_until_after_sharpen` and continue to Phase 0.5. Brainstorm is only offered by the post-sharpen Brainstorm ask gate, after `GRILL.md` exists.
+
 Deterministic routes:
 - Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
 - Route small targeted fixes (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-fix`; if the task is an unknown bug symptom, use contextual `/z-debug`.
 - Stay in `/z-plan` for coherent medium changes, especially `expected_tasks <= 25` with no clear independent cluster seams.
 - Route large or independently separable work to `/z-plan-split` when `expected_tasks > 25` or `cluster_seams` is in `2..6`.
-- For unknown terrain or missing citations, surface the grounding risk and ask the user to narrow/gather facts; route multiple plausible framings with sufficient terrain to `/z-brainstorm`.
+- For unknown terrain or missing citations, surface the grounding risk and ask the user to narrow/gather facts. Route multiple plausible framings with sufficient terrain to `/z-brainstorm` only in Phase 0.5 or later, never before mandatory sharpen.
 - Recommend contextual `/z-audit-plan` only after `SPEC.md`, `PLAN.md`, and `TASKS.md` exist; use `/z-amend` when the user is changing an existing plan, and `/z-maintain-docs` when doc drift blocks confidence.
 
 Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. During the pre-gate route preflight, this is a **deferred expensive subagent**: do not invoke it before the `/z-plan` hard cost gate below. If deterministic routing cannot decide and the run still needs `/z-plan`, carry the compact signal payload forward, complete the hard cost gate, then invoke `planning-router` after a successful gate and before Phase 1 dispatch. Malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
@@ -1479,60 +1481,99 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 
 ## Phase 0 — Premise check
 
-### 0-sharpen. Auto-sharpen (handoff input)
+### 0-sharpen. Mandatory conversational sharpen
 
 Run this step **before** the premise check below, immediately after Phase telemetry begins.
 
-**Purpose:** When `/z-plan` is invoked with a handoff-generated task description (e.g. from `/z-handoff`, a downstream prompt, or a machine-authored brief) the request may be under-specified or carry implicit assumptions. This step sharpens it into a confirmed problem statement written to `GRILL.md` — the same artifact that Phase 0 premise check and Phase 2 decisions seeding already consume.
+**Purpose:** `/z-plan` starts from a sharpened problem statement, not from an unexamined prompt. Invoke the shared `/z-sharpen` inline component contract (not the `/z-sharpen` wrapper lifecycle) or consume an existing fresh `$Z_HARNESS_PLAN_DIR/GRILL.md`. The component clarifies the concrete problem, minimal scope, evidence/pain, non-goals, acceptance signals, and surviving alternatives.
 
-**Opt-out:** Skip this step entirely if any of the following is true:
+**Surface boundary:** `/z-plan` owns its slug, claim/register state, telemetry, and archive paths. It MUST NOT depend on `/z-sharpen` wrapper-only behavior: wrapper slug derivation, collision prompts, run lifecycle, or advisory handoff.
 
-1. The `--no-sharpen` flag was parsed from `$ARGUMENTS`.
-2. `Z_HARNESS_SHARPEN=off` is set in the environment.
-3. `workflow.auto_sharpen` resolves to `false` via `python3 scripts/config.py get workflow.auto_sharpen`.
-4. `$Z_HARNESS_PLAN_DIR/GRILL.md` already exists with `status: complete` in its frontmatter — the problem has already been sharpened.
+**Skip / consume existing artifact:** If `$Z_HARNESS_PLAN_DIR/GRILL.md` already exists with a completed `## Sharpened problem`, read it and emit `sharpen_gate` with `decision: "existing_grill"`. Do not re-interview the user unless the existing artifact is stale, question-heavy, or contradicts `$ARGUMENTS`.
 
-When any opt-out condition is true, emit a `sharpen_skipped` event and proceed directly to the Premise check:
+**Interactive sharpen procedure (when no usable GRILL.md exists):**
 
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_skipped \
-  "$(printf '{"reason":"%s"}' "<opt_out_reason>")"
-```
+1. Restate the current understanding in 2–3 sentences: actor, pain, approximate scope, constraints, and what "done" appears to mean.
+2. Self-serve codebase-answerable gaps via doc-fetcher/Explore only when the answer is in the repo; do not ask the user what tools can answer.
+3. Ask at most the highest-signal clarification at a time, with a recommended answer. Keep it conversational prose; this is not a checklist and not a full `/z-grill` interview.
+4. Stop when the problem is buildable enough to plan, or when the shared component says material alternatives remain. A `route_to_brainstorm` result becomes the Phase 0.5 Brainstorm ask recommendation; it does not auto-dispatch `/z-brainstorm`.
 
-**Auto-sharpen procedure (when none of the opt-out conditions above apply):**
-
-Check whether the input looks handoff-generated. Signals: starts with a structured prefix (`[handoff]`, `Task:`, `From:`, `---`, or a YAML/JSON block), was piped via stdin with `$ARGUMENTS` empty, or contains no sentence-ending punctuation and is shorter than 40 characters. If the input does NOT look handoff-generated (i.e. it reads as natural-language prose from a human), skip the sharpen and emit `sharpen_skipped` with `reason: not_handoff_input`.
-
-When the input looks handoff-generated, pose 1–2 brief clarifying questions **in prose** (NOT an `AskUserQuestion` call). Write the questions directly in the response, end the turn, and wait for the user's free-text reply. A one-word reply of `"skip"` or `"go"` proceeds with the raw task unchanged.
-
-Adapt the questions to the specific task — choose 1–2 of the most useful:
-- What constraint or success criterion matters most here? (e.g. speed, simplicity, backward-compatibility)
-- Who is the primary consumer of the output?
-- Are there existing patterns or constraints to work within or avoid?
-- What does "done" look like — what would a passing plan let you implement first?
-
-After the user replies (or sends `"skip"/"go"`), write `$Z_HARNESS_PLAN_DIR/GRILL.md` with the following two sections (same format as `/z-brainstorm`'s `§0-sharpen` write path):
+Write `$Z_HARNESS_PLAN_DIR/GRILL.md` on convergence:
 
 ```markdown
 ## Sharpened problem
 
-<synthesize the original task + any clarifications the user gave into 2–4 sentences
- that name the goal, the key constraint(s), and the intended outcome.
- If the user replied "skip" or "go", restate the raw task verbatim here.>
+<2–4 sentences naming the goal, intended outcome, constraints, and what observable completion means.>
 
 ## Open branches
 
-<!-- populated by Phase 2 decisions enumeration -->
+<Unresolved alternatives or "none". Material alternatives feed the Brainstorm ask gate.>
 ```
 
-Emit a `sharpen_gate` event:
+Emit a `sharpen_gate` event with `decision` (`existing_grill` or `sharpened`) and `recommendation` (`proceed` or `ask_brainstorm`):
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_gate \
-  "$(printf '{"decision":"sharpened","grill_md_existed":false}')"
+  "$(printf '{"decision":"%s","recommendation":"%s","grill_md_existed":%s}' \
+    "<existing_grill|sharpened>" "<proceed|ask_brainstorm>" "<true|false>")"
 ```
 
-The sharpened problem statement flows into the Premise check below and into Phase 2's GRILL.md decision seeding (Step 2 already reads `## Open branches` from GRILL.md when detected in Setup step 10).
+### 0.5 Brainstorm ask gate (no auto-route)
+
+After sharpening, decide whether to recommend `/z-brainstorm`. Recommend it when `GRILL.md` has material alternatives, the user is unsure about framing, architecture/product direction matters, or the plan would be expensive to reverse. Recommend skipping when the task is narrow, the approach is already chosen, or remaining forks are minor implementation details.
+
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the brainstorm choice via their native channel and await a response. Silent omission is forbidden. -->
+Ask the user whether to run `/z-brainstorm`:
+
+- **Run brainstorm** — stop this `/z-plan` run after writing a route-decision artifact that points to `/z-brainstorm <slug>`. The user or watcher invokes the command; `/z-plan` never auto-dispatches it.
+- **Skip brainstorm** — write `$Z_HARNESS_PLAN_DIR/archive/$RUN/brainstorm-choice.json` with `{"choice":"skipped"}` and continue. This explicit skip prevents repeated route nudges in later route checks.
+- **Use existing framing** — if `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists with a selected user framing, record `{"choice":"existing","path":"BRAINSTORM.md"}` and continue.
+
+If brainstorming was run before this `/z-plan` invocation, consume only the user-selected framing from `BRAINSTORM.md`; do not treat raw ideator alternatives as approved scope.
+
+### 0.6 Planning-entry watcher checkpoint seam
+
+After `GRILL.md` and any user-approved `BRAINSTORM.md` choice are stable, evaluate the shared clear-context watcher before entering high-context planning. This seam is an opportunity to checkpoint, not an unconditional `/clear`.
+
+```bash
+export Z_HARNESS_PLAN_DIR
+export Z_HARNESS_SLUG
+export Z_HARNESS_CHECKPOINT_STATUS="context_pressure"
+export Z_HARNESS_CHECKPOINT_PRODUCER="z-plan"
+export Z_HARNESS_CHECKPOINT_PHASE_ID="plan-entry"
+export Z_HARNESS_CHECKPOINT_PHASE_NAME="Post-sharpen / optional-brainstorm planning entry"
+export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$Z_HARNESS_PLAN_DIR/GRILL.md"
+export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/GRILL.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" <<'PYEOF'
+import hashlib, os, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    if os.path.exists(path):
+        h.update(path.encode()); h.update(b"\0")
+        h.update(open(path, "rb").read()); h.update(b"\0")
+print(h.hexdigest())
+PYEOF
+)"
+export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-plan $Z_HARNESS_SLUG"
+export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-plan for $Z_HARNESS_SLUG from GRILL.md and optional BRAINSTORM.md; continue conversational planning."
+export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-plan","seam":"plan-entry","run":"%s"}' "$RUN")"
+
+COMPACTION_TRIGGERED=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+  CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
+  printf '%s\n' "$CHECKPOINT_OUT"
+  case "$CHECKPOINT_OUT" in
+    STATUS:\ clear_checkpoint_fast_forward*) ;;
+    STATUS:\ clear_checkpoint*) exit 0 ;;
+    *) exit 1 ;;
+  esac
+elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+  RB_HALT_REASON="context pressure estimate failed in strict mode at plan-entry seam"
+  FINALIZE_STATUS=aborted
+  exit 1
+fi
+```
 
 ---
 
@@ -1931,6 +1972,27 @@ If anything is still unclear about scope, constraints, or success criteria — a
 
 ## Phase 5 — Present + approve
 
+**Intent-mode approval model:** keep this phase conversational. For `PLANNING_MODE=intent`, do not present a giant technical decision dossier as the default. Present the sharpened problem, selected brainstorm framing (if any), non-goals, constraints, and any truly high-impact decisions in plain language. Boring implementation defaults are recorded as LLM-derived details, not user gates.
+
+Before writing the final `INTENT.md`, run a bounded 1–2 pass iteration loop:
+
+1. Draft the intent from `GRILL.md`, optional selected `BRAINSTORM.md`, Phase 1 grounding, and approved high-impact decisions.
+2. Ask the user: "What feels wrong, missing, over-scoped, or not observable?"
+3. Apply corrections and repeat at most once more by default. Stop early when the user says the intent matches.
+
+After the iteration loop and before final approval, run an **LLM concern/decision flagging pass**. The pass reads the draft `INTENT.md`, `GRILL.md`, optional `BRAINSTORM.md`, and grounding notes, then writes `$Z_HARNESS_PLAN_DIR/archive/$RUN/intent-readthrough-flags.md` with:
+
+- concerns and risky assumptions;
+- unresolved decisions the user should notice;
+- acceptance criteria that may be non-observable;
+- possible scope creep;
+- irreversible or public API/schema choices;
+- places implementation convenience may diverge from user intent.
+
+Then ask whether to fold in an audit-plan scan before the final read-through. Recommend **run audit** for medium/large/risky plans and **skip audit** for narrow obvious plans. This is an ask, not an automatic `/z-audit-plan` handoff. When the user chooses audit, run the audit-plan review inline or as the existing `/z-audit-plan` machinery permits, and append findings to `intent-readthrough-flags.md`. When the user skips, record the skip in the same file.
+
+Final read-through input for intent mode is: final `INTENT.md` draft + `intent-readthrough-flags.md` + optional audit findings. The user chooses approve, amend, route back to sharpen/brainstorm, or stop.
+
 ```bash
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && <PushNotification: "Decisions ready for review.">
 ```
@@ -2015,7 +2077,7 @@ if [[ "$PLANNING_MODE" == "intent" ]]; then
 
 **INTENT.md writer (intent-mode only).**
 
-Author an `INTENT.md` document at `$Z_HARNESS_PLAN_DIR/INTENT.md`. Populate it from the planning work done in Phases 0–5 (premise check, exploration, decisions, consult findings).
+Author an `INTENT.md` document at `$Z_HARNESS_PLAN_DIR/INTENT.md`. Populate it from the conversational intent loop: `GRILL.md` `## Sharpened problem`, optional user-selected `BRAINSTORM.md` framing, Phase 1 grounding, approved high-impact decisions, the 1–2 user iteration corrections from Phase 5, and any concerns/audit findings the user accepted. Do not transcribe raw brainstorm alternatives or consultant chatter as approved scope.
 
 **Frontmatter** — all six fields are required:
 
@@ -2228,6 +2290,8 @@ print(json.dumps(items))
       description="Generate initial BFS level 0 task batch",
       prompt="intent_snapshot_path: ${Z_HARNESS_PLAN_DIR}/INTENT.md
 ledger_path: ${LEDGER_FILE}
+intent_readthrough_flags_path: ${Z_HARNESS_PLAN_DIR}/archive/${RUN}/intent-readthrough-flags.md
+brainstorm_choice_path: ${Z_HARNESS_PLAN_DIR}/archive/${RUN}/brainstorm-choice.json
 level: 0
 unmet_criteria: ${UNMET_CRITERIA_JSON}
 prior_level_outcomes: none
@@ -2235,7 +2299,9 @@ tasks_output_path: ${LEVEL_TASKS_FILE}
 plan_dir: ${Z_HARNESS_PLAN_DIR}
 level_cap: ${INTENT_BFS_LEVEL_CAP}
 budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
-task_id_start: 1"
+task_id_start: 1
+execution_strategy_required: true
+task_to_intent_mapping_required: true"
     ))"
 
     GENERATOR_STATUS="$(printf '%s' "$GENERATOR_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
@@ -2460,10 +2526,204 @@ base: $Z_HARNESS_PLAN_DIR"
 
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" heartbeat     --run-id "$RUN" --phase phase8 || true
 
-  HERMES_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.hermes_enabled 2>/dev/null || echo false)"
-  if [ "$HERMES_ENABLED" = "true" ]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py"       --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" || true
+  # Generate and validate workstreams/DAG metadata for all intent-mode plans.
+  # This is load-bearing execution-strategy data, not an optional Hermes nicety:
+  # if the generator cannot produce a valid manifest, halt before handoff.
+  WORKSTREAMS_FILE="$Z_HARNESS_PLAN_DIR/workstreams.json"
+  WORKSTREAM_GEN_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
+    --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" 2>&1)"
+  WORKSTREAM_GEN_RC=$?
+  if [ "$WORKSTREAM_GEN_RC" -ne 0 ] || [ ! -s "$WORKSTREAMS_FILE" ]; then
+    printf '%s\n' "$WORKSTREAM_GEN_OUT" >&2
+    WORKSTREAM_GEN_JSON="$(printf '%s' "$WORKSTREAM_GEN_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"phase8_workstreams_generation_failed","rc":%d,"output":%s,"path":"%s"}' \
+        "$WORKSTREAM_GEN_RC" "$WORKSTREAM_GEN_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
+    RB_HALT_REASON="intent workstreams generation failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
   fi
+
+  WORKSTREAM_VALIDATE_OUT="$(python3 - "$WORKSTREAMS_FILE" 2>&1 <<'PYEOF'
+from __future__ import annotations
+import json, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"{path}: cannot read valid JSON: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+errors = []
+if data.get("protocol") != "hermes-v1":
+    errors.append("protocol must be hermes-v1")
+workstreams = data.get("workstreams")
+merge_order = data.get("merge_order")
+if not isinstance(workstreams, list) or not workstreams:
+    errors.append("workstreams must be a non-empty list")
+if not isinstance(merge_order, list):
+    errors.append("merge_order must be a list")
+workstream_entries = workstreams if isinstance(workstreams, list) else []
+ids = [ws.get("id") for ws in workstream_entries if isinstance(ws, dict)]
+if len(ids) != len(workstream_entries) or any(not isinstance(wid, str) or not wid for wid in ids):
+    errors.append("every workstream must have a non-empty string id")
+if isinstance(merge_order, list) and sorted(merge_order) != sorted(ids):
+    errors.append("merge_order must be a permutation of workstream ids")
+id_set = set(ids)
+for ws in workstream_entries:
+    if not isinstance(ws, dict):
+        continue
+    for dep in ws.get("depends_on", []):
+        if dep not in id_set:
+            errors.append(f"{ws.get('id', '<unknown>')} depends on unknown workstream {dep}")
+if errors:
+    for err in errors:
+        print(err, file=sys.stderr)
+    raise SystemExit(1)
+print(json.dumps({"workstreams": len(workstreams), "merge_order": len(merge_order)}, separators=(",", ":")))
+PYEOF
+)"
+  WORKSTREAM_VALIDATE_RC=$?
+  if [ "$WORKSTREAM_VALIDATE_RC" -ne 0 ]; then
+    printf '%s\n' "$WORKSTREAM_VALIDATE_OUT" >&2
+    WORKSTREAM_VALIDATE_JSON="$(printf '%s' "$WORKSTREAM_VALIDATE_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"phase8_workstreams_validation_failed","output":%s,"path":"%s"}' \
+        "$WORKSTREAM_VALIDATE_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
+    RB_HALT_REASON="intent workstreams validation failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" workstreams_generated \
+    "$(printf '{"slug":"%s","path":"%s","source":"z-plan","validation":%s}' \
+      "$Z_HARNESS_SLUG" "$WORKSTREAMS_FILE" "$WORKSTREAM_VALIDATE_OUT")" 2>/dev/null || true
+
+  # Execution strategy metadata for intent-mode /z-execute.
+  # This is derived from TASKS.md + validated workstreams.json; it is not static boilerplate.
+  EXECUTION_STRATEGY_OUT="$(python3 - "$Z_HARNESS_PLAN_DIR" "$RUN" 2>&1 <<'PYEOF'
+from __future__ import annotations
+import json, re, sys
+from pathlib import Path
+
+plan_dir = Path(sys.argv[1])
+run = sys.argv[2]
+tasks_path = plan_dir / "TASKS.md"
+workstreams_path = plan_dir / "workstreams.json"
+flags_path = plan_dir / "archive" / run / "intent-readthrough-flags.md"
+out_path = plan_dir / "execution-strategy.md"
+
+try:
+    tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.exists() else ""
+except OSError as exc:
+    raise SystemExit(f"TASKS.md unreadable while writing execution strategy: {exc}") from exc
+task_blocks = re.findall(r"^## (T\d{3}) — (.*?) `\[ \]`(.*?)(?=^## T\d{3} — |\Z)", tasks_text, re.M | re.S)
+tasks = []
+for task_id, title, body in task_blocks:
+    files = re.search(r"^\*\*Files:\*\*\s*(.+)$", body, re.M)
+    advances = re.search(r"^\*\*Advances:\*\*\s*(.+)$", body, re.M)
+    complexity = re.search(r"^\*\*Complexity:\*\*\s*(.+)$", body, re.M)
+    tasks.append({
+        "id": task_id,
+        "title": title.strip(),
+        "files": files.group(1).strip() if files else "unknown",
+        "advances": advances.group(1).strip() if advances else "unknown",
+        "complexity": complexity.group(1).strip() if complexity else "medium",
+    })
+
+if not workstreams_path.exists():
+    raise SystemExit("workstreams.json missing after Phase 8 validation")
+try:
+    workstreams = json.loads(workstreams_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"workstreams.json became unreadable or invalid after Phase 8 validation: {exc}") from exc
+if not isinstance(workstreams, dict):
+    raise SystemExit("workstreams.json root must be an object")
+parallel_groups = {}
+for ws in workstreams.get("workstreams", []) if isinstance(workstreams, dict) else []:
+    group = ws.get("parallel_group")
+    parallel_groups.setdefault(str(group), []).append(ws.get("id", "<unknown>"))
+parallel_groups.pop("None", None)
+
+serial_blockers = []
+for conflict in workstreams.get("file_conflicts", []):
+    path = conflict.get("file") or conflict.get("path") or "<unknown>"
+    serial_blockers.append(f"{path}: {', '.join(conflict.get('workstreams', []))}")
+
+lines = [
+    "# Execution strategy",
+    "",
+    "## Source of truth",
+    "",
+    "- INTENT.md is the user-approved contract.",
+    f"- {flags_path.relative_to(plan_dir) if flags_path.exists() else 'archive/<run>/intent-readthrough-flags.md'} contains concerns, decisions, and optional audit-plan notes the user saw before approval when present.",
+    "- TASKS.md maps each task to INTENT acceptance criteria via **Advances:** lines.",
+    "- workstreams.json is the validated conflict DAG for safe parallel batches.",
+    "",
+    "## Task-to-intent mapping",
+    "",
+]
+for task in tasks:
+    lines.append(f"- {task['id']} — {task['title']}: {task['advances']} (files: {task['files']}; complexity: {task['complexity']})")
+if not tasks:
+    lines.append("- none — TASKS.md had no pending canonical task blocks")
+
+lines.extend(["", "## Parallel batches", ""])
+if parallel_groups:
+    for group, ids in sorted(parallel_groups.items()):
+        lines.append(f"- parallel_group {group}: {', '.join(ids)}")
+else:
+    lines.append("- none declared by the validated workstreams.json; execute in DAG order and do not infer extra parallelism from missing metadata.")
+
+lines.extend(["", "## Serial blockers", ""])
+if serial_blockers:
+    lines.extend(f"- {item}" for item in serial_blockers)
+else:
+    lines.append("- none recorded in the validated workstreams.json")
+
+lines.extend([
+    "",
+    "## Review gates",
+    "",
+    "- Every task gets a reviewer pass.",
+    "- Retry once on review failure.",
+    "- Run aggregate review for larger, high-risk, or cross-cutting plans before declaring completion.",
+    "",
+    "## Checkpoint cadence",
+    "",
+    "- Use the shared context watcher at durable task, batch, and BFS-level boundaries.",
+    "- Never checkpoint while a task is in flight or before TASKS.md / LEDGER.md state is flushed.",
+])
+try:
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+except OSError as exc:
+    raise SystemExit(f"cannot write execution-strategy.md: {exc}") from exc
+print(out_path)
+PYEOF
+)"
+  EXECUTION_STRATEGY_RC=$?
+  if [ "$EXECUTION_STRATEGY_RC" -ne 0 ] || [ ! -s "$Z_HARNESS_PLAN_DIR/execution-strategy.md" ]; then
+    printf '%s\n' "$EXECUTION_STRATEGY_OUT" >&2
+    EXECUTION_STRATEGY_JSON="$(printf '%s' "$EXECUTION_STRATEGY_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"phase8_execution_strategy_failed","rc":%d,"output":%s,"path":"%s"}' \
+        "$EXECUTION_STRATEGY_RC" "$EXECUTION_STRATEGY_JSON" "$Z_HARNESS_PLAN_DIR/execution-strategy.md")" 2>/dev/null || true
+    RB_HALT_REASON="intent execution strategy generation failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" execution_strategy_written \
+    "$(printf '{"path":"%s","source":"z-plan","planning_mode":"intent","derived_from_tasks":true,"workstreams_path":"%s","workstreams_validated":true}' "$Z_HARNESS_PLAN_DIR/execution-strategy.md" "$Z_HARNESS_PLAN_DIR/workstreams.json")" 2>/dev/null || true
   # T007: backward-compat SPEC detection is resolved upstream in Mode detection (Invariant 4).
   # When SPEC.md is present, PLANNING_MODE is forced to "full" before Phase 6 runs, so
   # INTENT.md is never written and this `if` branch is never entered for legacy slug dirs.
@@ -2611,7 +2871,7 @@ The handoff producer runs only after Phase 7 has generated/required `TASKS.md`, 
 ```bash
 if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
   cp "$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/INTENT.md" || true
-  # Also copy LEDGER.md when it exists (created by BFS level execution).
+  # Copy LEDGER.md when it already exists; planning may hand off before execution creates it.
   [[ -f "$Z_HARNESS_PLAN_DIR/LEDGER.md" ]] && \
     cp "$Z_HARNESS_PLAN_DIR/LEDGER.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/LEDGER.md" || true
 fi
@@ -2631,12 +2891,14 @@ if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; the
   _HANDOFF_ARTIFACT_KIND="INTENT.md"
   _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/TASKS.md")
   [[ -f "$Z_HARNESS_PLAN_DIR/LEDGER.md" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/LEDGER.md")
+  [[ -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/intent-readthrough-flags.md" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/archive/$RUN/intent-readthrough-flags.md")
 else
   _HANDOFF_PRIMARY_ARTIFACT="$Z_HARNESS_PLAN_DIR/PLAN.md"
   _HANDOFF_ARTIFACT_KIND="PLAN.md"
   _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/SPEC.md" "$Z_HARNESS_PLAN_DIR/PLAN.md" "$Z_HARNESS_PLAN_DIR/TASKS.md")
 fi
 [[ -f "$Z_HARNESS_PLAN_DIR/workstreams.json" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/workstreams.json")
+[[ -f "$Z_HARNESS_PLAN_DIR/execution-strategy.md" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/execution-strategy.md")
 _HANDOFF_PRIMARY_ARTIFACT_LIST="$(printf '%s\n' "${_HANDOFF_PRIMARY_ARTIFACTS[@]}")"
 ```
 
@@ -2657,7 +2919,7 @@ generated_at: <ISO UTC timestamp>
 
 ## Primary artifacts
 
-<One bullet per path in $_HANDOFF_PRIMARY_ARTIFACT_LIST. Use pointers only; do not paste file contents. Include role labels such as "HANDOFF.md — curated context", "INTENT.md — accepted intent contract", "SPEC.md/PLAN.md — full SDD artifacts", "TASKS.md — executable task contract", "workstreams.json — generated workstream split", and "LEDGER.md — intent-mode BFS ledger" when present.>
+<One bullet per path in $_HANDOFF_PRIMARY_ARTIFACT_LIST. Use pointers only; do not paste file contents. Include role labels such as "HANDOFF.md — curated context", "INTENT.md — accepted intent contract", "SPEC.md/PLAN.md — full SDD artifacts", "TASKS.md — executable task contract", "workstreams.json — generated workstream split", and "LEDGER.md — intent-mode BFS ledger" when present. In intent mode, note that `LEDGER.md` is created or finalized by `/z-execute` before it recommends `/z-review-all`; its absence at planning handoff is allowed, but its absence after completed execution is not.>
 
 ## Intent / Goal
 
@@ -2668,6 +2930,10 @@ or PLAN.md goals section — do not invent; quote or lightly paraphrase the appr
 
 <Summarize the current TASKS.md level and staged groups (base, independent, dependent) in 3–6 bullets. Preserve canonical task ids and status marks from `## TNNN — title \`[ ]\`` headings.>
 
+## Execution strategy
+
+<Summarize `execution-strategy.md` and `workstreams.json` when present: safe parallel batches, serial blockers, checkpoint cadence, and aggregate review recommendation. Use pointers; do not paste raw JSON.>
+
 ## Key decisions
 
 <Bullet list of the top 3–5 approved decisions from decisions.md — one line each:
@@ -2676,6 +2942,10 @@ or PLAN.md goals section — do not invent; quote or lightly paraphrase the appr
 ## Accepted shortcuts (if any)
 
 <Bullet list of any shortcuts approved in Phase 5, or "none".>
+
+## Concern flags and audit notes
+
+<Pointer to `archive/$RUN/intent-readthrough-flags.md` when present. Summarize only the flags that survived final user approval. Use "none recorded" when no flags or audit scan were produced.>
 
 ## Grounding notes
 
@@ -2703,13 +2973,13 @@ key files, key constraints, or notable surprises. Omit if nothing noteworthy.>
 Choose one of the Phase 8.6 gate options (`fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`). Do not hard-code an audit-first recommendation before `FINAL_HANDOFF_CHOICE` is captured.
 ```
 
-Machine handoff files (`handoff.json`, when produced by `scripts/write-handoff.sh`) must stay thin: `context_files` contains only `{path, role}` pointers. For a complete plan directory it should point at `HANDOFF.md`, the HANDOFF.md context categories (`invariants`, `rejected_approaches`, `decisions_archive`, `verification_commands`), `INTENT.md` when present, `SPEC.md`/`PLAN.md` when present, `TASKS.md`, `workstreams.json` when present, `LEDGER.md` when present, and `SESSION.md`; the schema owns the allowed roles.
+Machine handoff files (`handoff.json`, when produced by `scripts/write-handoff.sh`) must stay thin: `context_files` contains only `{path, role}` pointers. For a complete plan directory it should point at `HANDOFF.md`, the HANDOFF.md context categories (`invariants`, `rejected_approaches`, `decisions_archive`, `verification_commands`), `INTENT.md` when present, `SPEC.md`/`PLAN.md` when present, `TASKS.md`, `workstreams.json` when present, `LEDGER.md` when present, and `SESSION.md`; the schema owns the allowed roles. Intent-mode handoff prose must make the LEDGER lifecycle observable: planning handoff may omit `LEDGER.md`, but completed `/z-execute` must create/snapshot it before `/z-review-all`.
 
 After writing `HANDOFF.md`, call the machine handoff producer before Phase 8.6. Set the required z-plan overrides so the generated `handoff.json` describes a completed planning handoff, not an in-progress execute checkpoint; validate that the file exists and log both the human and machine artifacts:
 
 ```bash
 export Z_HARNESS_HANDOFF_STATUS="complete"
-export Z_HARNESS_HANDOFF_NEXT_STEP="Plan complete for ${Z_HARNESS_SLUG}. Choose the Phase 8.6 next step: fresh-session implementation, audit first, stop with handoff, or amend. Read HANDOFF.md, ${_HANDOFF_ARTIFACT_KIND}, and TASKS.md before acting."
+export Z_HARNESS_HANDOFF_NEXT_STEP="Plan complete for ${Z_HARNESS_SLUG}. Choose the Phase 8.6 next step: fresh-session implementation, audit first, stop with handoff, or amend. Read HANDOFF.md, ${_HANDOFF_ARTIFACT_KIND}, and TASKS.md before acting; after completed intent-mode /z-execute, LEDGER.md must be present before /z-review-all."
 export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
 
 HANDOFF_PRODUCER_OUT="$(Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" Z_HARNESS_SLUG="$Z_HARNESS_SLUG" bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" 2>&1)"
@@ -2742,6 +3012,50 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" handoff_json_validated "$HANDOFF_JSON_VALIDATE"
 ```
 
+### Pre-execute watcher checkpoint seam
+
+After `HANDOFF.md`, `handoff.json`, `TASKS.md`, and execution-strategy metadata are written and validated, evaluate the shared clear-context watcher before offering `/z-execute`. This replaces unconditional manual `/clear` prose with a watcher-readable checkpoint opportunity.
+
+```bash
+export Z_HARNESS_PLAN_DIR
+export Z_HARNESS_SLUG
+export Z_HARNESS_CHECKPOINT_STATUS="clean_break"
+export Z_HARNESS_CHECKPOINT_PRODUCER="z-plan"
+export Z_HARNESS_CHECKPOINT_PHASE_ID="pre-execute-handoff"
+export Z_HARNESS_CHECKPOINT_PHASE_NAME="Pre-execute planning handoff"
+export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$Z_HARNESS_PLAN_DIR/HANDOFF.md"
+export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/TASKS.md" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$Z_HARNESS_PLAN_DIR/execution-strategy.md" <<'PYEOF'
+import hashlib, os, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    if os.path.exists(path):
+        h.update(path.encode()); h.update(b"\0")
+        h.update(open(path, "rb").read()); h.update(b"\0")
+print(h.hexdigest())
+PYEOF
+)"
+export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-execute $Z_HARNESS_SLUG"
+export Z_HARNESS_CHECKPOINT_NEXT_STEP="Run /z-execute $Z_HARNESS_SLUG from HANDOFF.md, INTENT.md, TASKS.md, concern flags, and execution-strategy metadata."
+export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-plan","seam":"pre-execute-handoff","run":"%s"}' "$RUN")"
+
+COMPACTION_TRIGGERED=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+  CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
+  printf '%s\n' "$CHECKPOINT_OUT"
+  case "$CHECKPOINT_OUT" in
+    STATUS:\ clear_checkpoint_fast_forward*) ;;
+    STATUS:\ clear_checkpoint*) exit 0 ;;
+    *) exit 1 ;;
+  esac
+elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+  RB_HALT_REASON="context pressure estimate failed in strict mode at pre-execute handoff seam"
+  FINALIZE_STATUS=aborted
+  exit 1
+fi
+```
+
 ## Phase 8.6 — Final handoff gate
 
 Print the completion summary, then surface one final user gate. This gate occurs **after** Phase 8.5 writes `HANDOFF.md` and **before** Phase 9 finalizes the run:
@@ -2763,8 +3077,8 @@ Handoff context written to: $Z_HARNESS_PLAN_DIR/HANDOFF.md
      Silent omission is forbidden. -->
 Ask the user to choose exactly one next step:
 
-- **Fresh-session implementation** — run `/clear`, then `/z-execute <$Z_HARNESS_SLUG>`.
-- **Audit first** — run `/clear`, then `/z-audit-plan <$Z_HARNESS_SLUG>`.
+- **Fresh-session implementation** — let the watcher consume the pre-execute checkpoint when it fired, then run `/z-execute <$Z_HARNESS_SLUG>` from `HANDOFF.md`, `INTENT.md`, `TASKS.md`, concern flags, and execution strategy.
+- **Audit first** — ask for `/z-audit-plan <$Z_HARNESS_SLUG>` before execution when the final read-through still needs an external plan audit; do not present this as mandatory when the folded audit gate already ran or was explicitly skipped.
 - **Stop with handoff** — leave `HANDOFF.md` as the next-session context and do not start another command.
 - **Amend** — run `/z-amend <$Z_HARNESS_SLUG>` and resume from the mapped phase below.
 
@@ -2848,7 +3162,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
 ```
 
-After planning, prefer a clear checkpoint over `/compact`: planning (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. A watcher-readable checkpoint lets Oh My Pi/Hermes/MCP or the user clear before implementation starts; implementation subagents are fresh-context already, so no per-batch compact is needed.
+After planning, prefer the shared watcher-readable clear checkpoint over manual `/compact`: planning (Explore agents, user intent iteration, concern flags, audit notes, and task DAG drafting) is the heaviest context burner in the harness. The `check-compaction.sh` / `write-clear-checkpoint.sh` seam lets Oh My Pi/Hermes/MCP or the user clear before implementation starts; implementation subagents are fresh-context already, and `/z-execute` owns later durable checkpoint seams.
 
 ## Run Brief — halt finalize
 
@@ -2905,8 +3219,8 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
 | `next_step_choice` | Phase 8.6 final handoff gate selection emitted (source: `phase_8_6_final_handoff_gate`) | `choice`, `source` |
-| `sharpen_gate` | Phase 0 auto-sharpen gate decision | `decision` (`sharpened`\|`skipped`), `grill_md_existed` |
-| `sharpen_skipped` | Phase 0 auto-sharpen step skipped (opt-out or not handoff input) | `reason` |
+| `sharpen_gate` | Phase 0 mandatory conversational sharpen decision | `decision` (`existing_grill`\|`sharpened`), `recommendation` (`proceed`\|`ask_brainstorm`), `grill_md_existed` |
+| `execution_strategy_written` | Phase 8 wrote intent-mode execution strategy metadata for `/z-execute` | `path`, `source`, `planning_mode` |
 | `handoff_written` | Phase 8.5 handoff artifacts written to HANDOFF.md and handoff.json | `slug`, `path`, `artifact_kind`, `handoff_json`, `producer_output` |
 | `handoff_json_validated` | Phase 8.5 verified the machine handoff before Phase 8.6 | `path`, `roles`, `context_file_count` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
