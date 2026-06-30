@@ -553,6 +553,26 @@ PY
     "$profile" "$decision_count" "$validation" "$brief")"
 
   bash "$LOG_EVENT" "$run" "run_brief_end" "$payload"
+
+  # Hermes done marker — emitted at every terminal finalize (normal completion
+  # AND abort). NOT emitted on clear-checkpoint (that is handoff_continue).
+  if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
+    _RB_OUTCOME="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    v = d.get("outcome") or d.get("status") or "done"
+    print(v[:400])
+except Exception:
+    print("done")
+' "$brief" 2>/dev/null || echo "done")"
+    _RB_TASK="${Z_HARNESS_SLUG:-$run}"
+    _RB_PAYLOAD="$(python3 -c \
+      'import json, sys; print(json.dumps({"summary": sys.argv[1]}))' \
+      "$_RB_OUTCOME" 2>/dev/null || printf '{"summary":"done"}')"
+    bash "$SCRIPT_DIR/emit-hermes-marker.sh" \
+      "done" "$_RB_TASK" "$_RB_PAYLOAD" >/dev/null 2>&1 || true
+  fi
 }
 
 # ---------------------------------------------------------------------------

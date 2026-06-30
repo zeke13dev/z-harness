@@ -174,3 +174,20 @@ append() {
 
 append "$RUN_DIR/events.jsonl"
 append "$ZH_BASE/metrics.jsonl"
+
+# Hermes marker emission — gated on HERMES_MARKER_FILE (no-op when unset).
+# emit-hermes-marker.sh itself exits 0 immediately when HERMES_MARKER_FILE is
+# unset, so the test here is a cheap fast-path that avoids the fork entirely.
+if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
+  # Map event kind to hermes marker kind:
+  #   context_pressure → heartbeat (periodic liveness signal emitted at every
+  #                       durable boundary by check-compaction.sh)
+  #   everything else  → status
+  _HM_KIND="status"
+  if [[ "$KIND" == "context_pressure" ]]; then
+    _HM_KIND="heartbeat"
+  fi
+  _HM_TASK="${SLUG:-${RUN:-orchestration}}"
+  bash "$(dirname "$0")/emit-hermes-marker.sh" \
+    "$_HM_KIND" "$_HM_TASK" "{\"phase\":\"$KIND\"}" >/dev/null 2>&1 || true
+fi

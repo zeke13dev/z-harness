@@ -21,6 +21,14 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
+## Hermes-managed mode (HERMES_MARKER_FILE)
+
+When env var `HERMES_MARKER_FILE` is set the session is driven by the hermes watcher (remote-control). In this mode:
+
+- **Do NOT call `AskUserQuestion`** for any `resolve-question` gate. Instead, call `emit-hermes-marker.sh needs_input` with the question id, options, and `context: "hermes-managed"`, then halt. The hermes watcher relays the question to the user and resumes the session with their answer.
+- This gate is enforced automatically by `scripts/config.py resolve-question`: it emits the `needs_input` marker and returns a halt envelope (`result: halt, source: hermes_managed`) before any interactive resolution path runs.
+- Clear-checkpoints emit `handoff_continue` (autonomous-resume signal); run-end emits `done`; every `log-event.sh` call emits a `status` or `heartbeat` marker. All emission is best-effort and never changes exit codes.
+
 ## Phase 0.0 — Active-plan registration + cross-session overlap scan
 
 Register this run in the shared active-plan registry, seed its file scope, and surface overlap
