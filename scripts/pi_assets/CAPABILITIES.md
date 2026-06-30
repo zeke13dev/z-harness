@@ -23,7 +23,7 @@ How z-harness constructs map onto [pi](https://pi.dev), and where the mapping is
 
 ## Notes
 
-- **Source of truth.** Generated files (`agents/`, `prompts/`, `AGENTS.md`) come from z-harness `commands/`, `agents/`, `skills/`. pi-only files (`explore` agent, the subagent extension, the AGENTS preamble, this file, `README.md`) live in `scripts/pi_assets/` and are copied verbatim by `runtime.drivers.pi.export.export`. Never edit `exports/pi/` by hand — re-run `/z-export --target=pi`.
-- **OMP is separate.** First-class OMP support writes `exports/omp` via `/z-export --target=omp`; do not route native OMP export through the legacy pi exporter or `scripts/omp-consult.sh`.
+- **Source of truth.** Generated files (`agents/`, `prompts/`, `AGENTS.md`) come from z-harness `skills/*/SKILL.md` and `agents/*.md` sources. pi-only files (`explore` agent, the subagent extension, the AGENTS preamble, this file, `README.md`) live in `scripts/pi_assets/` and are copied verbatim by `runtime.drivers.pi.export.export`. Never edit a generated pi export tree by hand — re-run `/z-export --target=pi` into scratch output such as `temp/exports/pi`.
+- **OMP is separate.** First-class OMP support writes the selected OMP export root (for example `temp/exports/omp`) via `/z-export --target=omp`; do not route native OMP export through the legacy pi exporter or `scripts/omp-consult.sh`.
 - **Refreshing the vendored extension** after a pi upgrade: see `extensions/subagent/VENDOR.md`.
-- **Install** is by symlink from `exports/pi/` into `~/.pi/agent/` — see `README.md`.
+- **Install** is by symlink from the generated pi export root into `~/.pi/agent/` — see `README.md`.

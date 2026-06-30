@@ -22,11 +22,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build dependencies
-        run: pip install build hatchling hatch-vcs
+      - name: Install build and test dependencies
+        run: pip install -e ".[dev]" build hatchling hatch-vcs
+
+      - name: Run full release gate set
+        run: make release-verify
+
+      - name: Stage prod release surface
+        run: python scripts/stage-release-surface.py --repo-root "$GITHUB_WORKSPACE" --out /tmp/z-harness-release-stage --keep-git
 
       - name: Build wheel
-        run: python -m build --wheel --outdir dist/
+        run: python -m build --wheel --outdir "$GITHUB_WORKSPACE/dist/"
+        working-directory: /tmp/z-harness-release-stage
 
       - name: Locate wheel
         id: wheel
@@ -48,7 +55,7 @@ jobs:
           SHA256="$(sha256sum "${{ steps.wheel.outputs.path }}" | awk '{print $1}')"
           echo "value=$SHA256" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke installed wheel
+      - name: Smoke installed wheel and prod exports
         run: |
           python3 -m venv /tmp/z-harness-wheel-smoke
           /tmp/z-harness-wheel-smoke/bin/pip install "${{ steps.wheel.outputs.path }}"
@@ -57,10 +64,19 @@ jobs:
           /tmp/z-harness-wheel-smoke/bin/z-harness install --help >/tmp/z-harness-install-help.txt
           /tmp/z-harness-wheel-smoke/bin/z-harness doctor --help >/tmp/z-harness-doctor-help.txt
           /tmp/z-harness-wheel-smoke/bin/z-harness serve --help >/tmp/z-harness-serve-help.txt
-          rm -rf temp/release-wheel-export
-          /tmp/z-harness-wheel-smoke/bin/z-harness export --host codex --surface prod --out temp/release-wheel-export --force
-          test -f temp/release-wheel-export/.codex-plugin/plugin.json
-
+          rm -rf temp/release-wheel-export-codex temp/release-wheel-export-omp
+          # Codex is degraded/export-only coverage; OMP is the blocking prod export proof.
+          /tmp/z-harness-wheel-smoke/bin/z-harness export --host codex --surface prod --out temp/release-wheel-export-codex --force
+          test -f temp/release-wheel-export-codex/.codex-plugin/plugin.json
+          /tmp/z-harness-wheel-smoke/bin/python scripts/omp-prod-export-smoke.py \
+            --cli /tmp/z-harness-wheel-smoke/bin/z-harness \
+            --out temp/release-wheel-export-omp
+          (
+            cd /tmp
+            Z_HARNESS_RELEASE_SURFACE=prod /tmp/z-harness-wheel-smoke/bin/python \
+              -m z_harness_cli.mcp_prod_tool_list_smoke \
+              --repo-root "$GITHUB_WORKSPACE"
+          )
       - name: Build plugin tarball
         run: Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh
 
@@ -75,6 +91,9 @@ jobs:
           fi
           TARBALL_PATH="$(ls dist/z-harness-*.tar.gz)"
           echo "path=$TARBALL_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Audit plugin tarball
+        run: bash scripts/audit-tarball.sh "${{ steps.tarball.outputs.path }}"
 
       - name: Compute plugin tarball sha256
         id: tarball_sha256

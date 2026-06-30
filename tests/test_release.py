@@ -37,6 +37,7 @@ from z_harness_cli.release import (
     is_dev_sha,
     parse_manifest,
     verify_sha256,
+    require_plugin_tarball_metadata,
 )
 
 
@@ -182,6 +183,21 @@ class TestParseManifest(unittest.TestCase):
             parse_manifest(raw)
         m = parse_manifest(raw, allow_file_urls=True)
         self.assertEqual(m.wheel_url, "file:///tmp/z-harness.whl")
+
+    def test_require_plugin_tarball_metadata_returns_audited_tuple(self):
+        m = _make_manifest(
+            plugin_tarball_url="https://example.com/z-harness-1.2.3.tar.gz",
+            plugin_tarball_sha256="c" * 64,
+        )
+        self.assertEqual(
+            require_plugin_tarball_metadata(m),
+            ("https://example.com/z-harness-1.2.3.tar.gz", "c" * 64),
+        )
+
+    def test_require_plugin_tarball_metadata_rejects_missing_fields(self):
+        m = _make_manifest()
+        with self.assertRaises(ManifestParseError):
+            require_plugin_tarball_metadata(m)
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +416,43 @@ class TestFetchManifest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# install.run integration (mocked manifest fetch)
+# ---------------------------------------------------------------------------
+
+class TestInstallRun(unittest.TestCase):
+    """Test the install command wrapper's manifest-backed tarball arguments."""
+
+    def test_manifest_tarball_sha256_passed_to_install_sh(self):
+        import z_harness_cli.commands.install as install_mod
+
+        manifest = _make_manifest(
+            plugin_tarball_url="https://example.com/z-harness.tar.gz",
+            plugin_tarball_sha256="c" * 64,
+        )
+        completed = MagicMock()
+        completed.returncode = 0
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            with patch("z_harness_cli.commands.install._harness_root", return_value=root):
+                with patch("z_harness_cli.commands.install._is_source_checkout", return_value=False):
+                    with patch("z_harness_cli.commands.install.fetch_manifest", return_value=manifest):
+                        with patch("subprocess.run", return_value=completed) as mock_run:
+                            install_mod.run(
+                                MagicMock(),
+                                target="claude",
+                                tarball=None,
+                                force=False,
+                                generate_exports=False,
+                            )
+
+        args = mock_run.call_args.args[0]
+        self.assertIn("--tarball=https://example.com/z-harness.tar.gz", args)
+        self.assertIn("--tarball-sha256=" + ("c" * 64), args)
+
+
+# ---------------------------------------------------------------------------
 # update.run integration (mocked fetch)
 # ---------------------------------------------------------------------------
 
@@ -411,12 +464,11 @@ class TestUpdateRun(unittest.TestCase):
                     expect_exit_code: int = 0):
         """Helper: patch __version__ + fetch_manifest, call run(), capture output.
 
-        Mocks _is_uv_tool_install to False so stale-notice tests never invoke the
-        real uv upgrade path (which would shell out or raise on sha256).
+        Mocks _is_uv_tool_install to False and _detect_plugin_install to an
+        unknown non-uv payload so stale-notice tests never invoke the real uv
+        or git update paths.
         """
-        import io
         import typer
-        from contextlib import redirect_stdout
 
         raw = _manifest_json(version=manifest_version, schema_version=schema_version)
         manifest = parse_manifest(raw) if schema_version <= SUPPORTED_SCHEMA_VERSION else None
@@ -432,9 +484,12 @@ class TestUpdateRun(unittest.TestCase):
 
         with patch.object(update_mod, "__version__", installed_version, create=True):
             with patch("z_harness_cli.commands.update.__version__", installed_version):
-                # Always mock _is_uv_tool_install → False so no subprocess is spawned.
+                # Always mock install mode so no subprocess is spawned.
                 with patch("z_harness_cli.commands.update._is_uv_tool_install",
-                           return_value=False):
+                           return_value=False), patch(
+                    "z_harness_cli.commands.update._detect_plugin_install",
+                    return_value=update_mod.PluginInstall("unknown", None, None),
+                ):
                     if schema_version > SUPPORTED_SCHEMA_VERSION:
                         exc = ManifestSchemaError(
                             f"schema_version {schema_version} is newer. update z-harness"
@@ -523,6 +578,9 @@ class TestUpdateRun(unittest.TestCase):
                                 e.exit_code, 0,
                                 f"Dev SHA install must not exit non-zero (got {e.exit_code})",
                             )
+        combined = " ".join(output_lines).lower()
+        self.assertIn("git pull --ff-only", combined)
+        self.assertIn("z-harness install", combined)
 
     def test_fetch_error_exits_1(self):
         """Network error on fetch → clean exit 1."""
@@ -566,12 +624,13 @@ class TestUpdateRun(unittest.TestCase):
                                 e.exit_code, 0,
                                 f"PEP 440 dev install must not exit non-zero (got {e.exit_code})",
                             )
+        combined = " ".join(output_lines).lower()
+        self.assertIn("not a tagged release", combined)
+        self.assertIn("git pull --ff-only", combined)
+        self.assertIn("z-harness install", combined)
 
-    def test_symlink_install_exits_1_with_actionable_message(self):
-        """Non-uv (symlink/tarball) install type → exit 1 with specific update instructions.
-
-        The update MUST NOT silently no-op. The user must see actionable steps.
-        """
+    def test_tarball_install_exits_1_with_manifest_backed_reinstall_path(self):
+        """Tarball installs must route to deterministic reinstall, not host self-swap prose."""
         import typer
         import z_harness_cli.commands.update as update_mod
         mock_ctx = MagicMock()
@@ -581,23 +640,95 @@ class TestUpdateRun(unittest.TestCase):
             output_lines.append(str(msg))
 
         manifest = _make_manifest(version="2.0.0")
+        install = update_mod.PluginInstall("tarball", Path("/tmp/z-harness"), "claude")
         with patch("z_harness_cli.commands.update.__version__", "1.0.0"):
             with patch("z_harness_cli.commands.update.fetch_manifest",
                        return_value=manifest):
-                # Pretend this is NOT a uv install.
                 with patch("z_harness_cli.commands.update._is_uv_tool_install",
-                           return_value=False):
+                           return_value=False), patch(
+                    "z_harness_cli.commands.update._detect_plugin_install",
+                    return_value=install,
+                ):
                     with patch("typer.echo", side_effect=fake_echo):
                         with self.assertRaises(typer.Exit) as cm:
                             update_mod.run(mock_ctx)
         self.assertEqual(cm.exception.exit_code, 1,
                          "Non-uv install update must exit 1 (not silently no-op)")
         combined = " ".join(output_lines).lower()
-        # Must mention some actionable path.
-        self.assertTrue(
-            "/z-update" in combined or "install script" in combined or "curl" in combined,
-            f"Expected actionable update instructions in output, got: {output_lines}",
+        self.assertIn("z-harness install --target=claude --force", combined)
+        self.assertIn("deterministic installer", combined)
+        self.assertNotIn("run /z-update inside claude", combined)
+        self.assertIn("python3 -m z_harness_cli install --target=claude --force", combined)
+        self.assertNotIn("curl -fssl <install-url>", combined)
+
+    def test_symlink_install_fast_forwards_clean_checkout(self):
+        """Symlink/source installs update via git pull --ff-only in deterministic code."""
+        import z_harness_cli.commands.update as update_mod
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            return result
+
+        install = update_mod.PluginInstall("symlink", Path("/repo/z-harness"), "claude")
+        with patch("subprocess.run", side_effect=fake_run), patch("typer.echo"):
+            update_mod._apply_symlink_update(install)
+
+        self.assertEqual(
+            calls,
+            [
+                ["git", "-C", "/repo/z-harness", "status", "--porcelain"],
+                ["git", "-C", "/repo/z-harness", "pull", "--ff-only"],
+            ],
         )
+
+    def test_symlink_install_dirty_checkout_aborts_before_pull(self):
+        """Dirty source installs must be actionable and must not pull."""
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = " M skills/z-update/SKILL.md\n"
+            return result
+
+        output_lines = []
+
+        def fake_echo(msg="", err=False, **kw):
+            output_lines.append(str(msg))
+
+        install = update_mod.PluginInstall("symlink", Path("/repo/z-harness"), "claude")
+        with patch("subprocess.run", side_effect=fake_run), patch("typer.echo", side_effect=fake_echo):
+            with self.assertRaises(typer.Exit) as cm:
+                update_mod._apply_symlink_update(install)
+
+        self.assertEqual(cm.exception.exit_code, 1)
+        self.assertEqual(calls, [["git", "-C", "/repo/z-harness", "status", "--porcelain"]])
+        combined = " ".join(output_lines).lower()
+        self.assertIn("uncommitted changes", combined)
+        self.assertIn("commit or stash", combined)
+
+    def test_z_update_skill_delegates_security_logic_to_cli(self):
+        """Skill prose must not duplicate manifest parsing or checksum implementation."""
+        skill = (REPO_ROOT / "skills" / "z-update" / "SKILL.md").read_text(encoding="utf-8")
+        forbidden = (
+            "checksum",
+            "plugin_tarball_sha256",
+            "sha256sum",
+            "shasum -a 256",
+            "curl -fsSL \"$RELEASE_URL\"",
+            "tar -xzf \"$TMP_TARBALL\"",
+        )
+        for needle in forbidden:
+            self.assertNotIn(needle, skill)
 
     def test_uv_upgrade_sha256_mismatch_aborts(self):
         """SHA256 mismatch during uv upgrade → exit 1, wheel NOT installed (F9)."""

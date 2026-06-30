@@ -6,7 +6,7 @@ These files are copied verbatim from the pi coding-agent npm package:
 
 - **Pinned version:** 0.78.1
 - **Files:** `index.ts`, `agents.ts`
-- **Why vendored:** so `exports/pi/` is self-contained and the live symlinks in
+- **Why vendored:** so the generated pi export tree is self-contained and the live symlinks in
   `~/.pi/agent/extensions/subagent/` point at stable z-harness paths (the npm path
   embeds the Node version and moves on every `pi update` / node bump).
 

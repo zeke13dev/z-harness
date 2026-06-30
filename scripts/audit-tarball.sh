@@ -13,14 +13,6 @@
 #                     Note: drivers live under runtime/drivers/; there is no
 #                     separate top-level drivers/ directory in this repo.
 #   personas/       — persona preset files (.md) for builtin and user layers.
-#                     Per-target persona exports land under exports/<target>/personas/
-#                     (Cursor), exports/<target>/.agent/personas/ (agy), etc.
-#
-# LEGACY-ALLOWLIST (remove at v<next-minor>):
-#   exports/codex/  — legacy per-host Codex exporter output       # REMOVE-AT: v<next-minor>
-#   exports/agy/    — legacy per-host AGY exporter output          # REMOVE-AT: v<next-minor>
-#   exports/cursor/ — legacy per-host Cursor exporter output       # REMOVE-AT: v<next-minor>
-#   exports/pi/     — pi exporter output (agents/prompts/extension) # REMOVE-AT: v<next-minor>
 #
 # Forbidden patterns (any match is a violation):
 #   providers.json          — provider registry (credentials/config)
@@ -28,9 +20,8 @@
 #   z-harness/plans/        — plan artifacts
 #   z-harness/archive/      — run archives
 #   z-harness/improvements/ — improvement artifacts
-#   exports/<other>/        — re-packaging exports (non-legacy paths); see
-#                             LEGACY-ALLOWLIST above for the three permitted
-#                             exports/ subdirs during the transition window
+#   exports/              — generated per-host mirrors; release artifacts are
+#                            built from source and must not re-package exports
 #   /Users/<anything>       — macOS absolute user paths
 #   /home/<anything>        — Linux absolute home paths
 #   paths containing ~/     — tilde-expanded home paths
@@ -83,6 +74,15 @@ case "$TARBALL" in
 esac
 
 LISTING="$(tar $TAR_FLAGS "$TARBALL" 2>/dev/null)"
+SURFACE="${Z_HARNESS_RELEASE_SURFACE:-prod}"
+if [[ "$SURFACE" == "prod" || "$SURFACE" == "production" ]]; then
+    if ! _surface_audit_output="$(printf '%s\n' "$LISTING" | python3 -m z_harness_cli.release_surface audit-listing --surface "$SURFACE")"; then
+        printf '%s\n' "$_surface_audit_output"
+        printf '[audit-tarball] tarball: %s\n' "$TARBALL"
+        exit 1
+    fi
+fi
+
 
 # ---------------------------------------------------------------------------
 # Audit checks
@@ -108,8 +108,8 @@ _check_pattern() {
 
 # Fixed-string patterns (literal substring matches)
 # Note: personas/ (top-level persona preset files) is NOT forbidden — it is explicitly
-# allowlisted (see ALLOWLIST header comment above).  Per-target persona exports under
-# exports/<target>/personas/ are also allowed via the exports/ filter below.
+# allowlisted (see ALLOWLIST header comment above). Generated per-target persona
+# exports are still forbidden because every exports/ mirror is generated scratch.
 _check_pattern "providers.json"         -F  "providers.json"
 _check_pattern ".z-harness/"            -F  ".z-harness/"
 _check_pattern "z-harness/plans/"       -F  "z-harness/plans/"
@@ -130,21 +130,10 @@ _check_pattern ".antigravitycli/"       -E  "^\./\.antigravitycli/|^\.antigravit
 _check_pattern ".venv/"                  -E  "^\./\.venv/|^\.venv/"
 _check_pattern "~/"                     -F  "~/"
 
-# exports/ is forbidden except for the three legacy subdirs that are permitted
-# during the one-minor-version transition window (see LEGACY-ALLOWLIST above).
-# REMOVE-AT: v<next-minor> — once the legacy window closes, replace this block
-# with: _check_pattern "exports/" -F "exports/"
-#
-# Per-target persona exports (e.g. exports/cursor/personas/, exports/agy/.agent/personas/,
-# exports/codex/personas/) are implicitly allowed because they fall under the permitted
-# exports/<target>/ prefix checked by the regex below.
-_exports_hit="$(printf '%s\n' "$LISTING" \
-    | grep -F "exports/" \
-    | grep -Ev "^\.?/?exports/(codex|agy|cursor|pi)(/|$)" \
-    | head -n1 || true)"
-if [[ -n "$_exports_hit" ]]; then
-    _audit_fail "exports/ (non-legacy path)" "$_exports_hit"
-fi
+# Generated export mirrors are never release source. The central
+# release_surface audit above should reject these first; keep this local check
+# as defense in depth for dev/non-prod invocations of this script.
+_check_pattern "exports/" -E  "^\./exports/|^exports/"
 
 # Regex patterns for absolute home paths
 _check_pattern "/Users/<path>"          -E  "^/?Users/"

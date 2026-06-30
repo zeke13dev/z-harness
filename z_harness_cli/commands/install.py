@@ -1,8 +1,9 @@
 """commands/install.py — `z-harness install` plugin installer wrapper.
 
 The Python CLI is the first-run entrypoint installed by the curl/uv flow.  The
-actual Claude/Codex plugin installation logic remains in install.sh so source
-clone, tarball, and packaged-wheel paths share one implementation.
+actual plugin installation logic remains in install.sh so source clone, tarball,
+and packaged-wheel paths share one implementation. Public prod installs default
+to the Claude plugin path; Codex remains source/dev-only.
 """
 
 from __future__ import annotations
@@ -12,7 +13,14 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from z_harness_cli.release import FetchError, ManifestParseError, ManifestSchemaError, fetch_manifest
+from z_harness_cli.release import (
+    FetchError,
+    ManifestParseError,
+    ManifestSchemaError,
+    fetch_manifest,
+    require_plugin_tarball_metadata,
+)
+from z_harness_cli import release_surface
 
 import typer
 
@@ -36,21 +44,14 @@ def _is_source_checkout(root: Path) -> bool:
     )
 
 
-def _manifest_tarball_url() -> str:
+def _manifest_tarball_metadata() -> tuple[str, str]:
     allow_file_urls = bool(os.environ.get("Z_HARNESS_ALLOW_FILE_RELEASE_URLS"))
     try:
         manifest = fetch_manifest(allow_file_urls=allow_file_urls)
+        return require_plugin_tarball_metadata(manifest)
     except (FetchError, ManifestParseError, ManifestSchemaError) as exc:
         typer.echo(f"Error: could not resolve release manifest for tarball install: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    if not manifest.plugin_tarball_url:
-        typer.echo(
-            "Error: release manifest does not include plugin_tarball_url. "
-            "Pass --tarball explicitly or install from a source checkout.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    return manifest.plugin_tarball_url
 
 
 def run(
@@ -67,6 +68,16 @@ def run(
         raise typer.Exit(code=2)
 
     root = _harness_root()
+    source_checkout = _is_source_checkout(root)
+    surface = release_surface.default_surface()
+    if surface == "prod" and target == "codex":
+        typer.echo(
+            "Error: Codex plugin install is a source/dev path, not a public prod install target.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    resolved_target = "claude" if surface == "prod" and target == "all" else target
+
     script = root / "install.sh"
     if not script.is_file():
         typer.echo(
@@ -77,12 +88,15 @@ def run(
         raise typer.Exit(code=1)
 
     resolved_tarball = tarball
-    if not resolved_tarball and not _is_source_checkout(root):
-        resolved_tarball = _manifest_tarball_url()
+    resolved_tarball_sha256: Optional[str] = None
+    if not resolved_tarball and not source_checkout:
+        resolved_tarball, resolved_tarball_sha256 = _manifest_tarball_metadata()
 
-    args = ["bash", str(script), f"--target={target}"]
+    args = ["bash", str(script), f"--target={resolved_target}"]
     if resolved_tarball:
         args.append(f"--tarball={resolved_tarball}")
+    if resolved_tarball_sha256:
+        args.append(f"--tarball-sha256={resolved_tarball_sha256}")
     if force:
         args.append("--force")
     if generate_exports:

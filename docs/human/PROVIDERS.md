@@ -1,7 +1,7 @@
 # PROVIDERS — Runtime Registry Guide
 
 > Last updated: 2026-06-24
-> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, commands/z-providers-discover.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, scripts/omp-consult.sh, .z-harness/providers.json
+> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, skills/z-providers-discover/SKILL.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, scripts/omp-consult.sh, .z-harness/providers.json
 
 ## Overview
 
@@ -160,9 +160,9 @@ Leave `Z_HARNESS_CONSULT` unset (or set to `on`) for normal multi-model operatio
 
 ### OMP consult-provider compatibility
 
-OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The wrapper adapts provider-registry prompt handling to `omp -p --no-session --no-rules --model ... <prompt>` and remains separate from OMP adapter/export support and future native command dispatch.
+OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The wrapper adapts provider-registry prompt handling to `omp -p --no-session --no-rules --model ... <prompt>` and remains separate from OMP adapter/export support and native command dispatch.
 
-Do not treat `omp-gemini`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current partial OMP support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports partial fidelity, blocks multi-agent commands, and keeps single-agent commands degraded until the T009/native parity gate.
+Do not treat `omp-gemini`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current OMP adapter/export support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports native adapter/export fidelity, and bounds command-family native claims to the capabilities parity matrix: `/z-execute`, `/z-consult`, `/z-gate`, and `/z-panel` are native with T008 evidence; other families remain degraded until promoted by parity evidence.
 
 ---
 

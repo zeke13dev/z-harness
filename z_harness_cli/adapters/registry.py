@@ -36,6 +36,7 @@ from z_harness_cli.adapters.cursor import CursorAdapter
 from z_harness_cli.adapters.codex import CodexAdapter
 from z_harness_cli.adapters.omp import OmpAdapter
 from z_harness_cli.adapters.base import DetectResult, HostAdapter
+from z_harness_cli import release_surface
 
 if TYPE_CHECKING:
     pass
@@ -78,6 +79,12 @@ _ALL_ADAPTERS: list[HostAdapter] = [
 
 #: Map of host name -> adapter instance for O(1) lookup by name.
 _ADAPTER_BY_NAME: dict[str, HostAdapter] = {a.name: a for a in _ALL_ADAPTERS}
+
+
+def _default_selectable_names() -> set[str] | None:
+    if release_surface.default_surface() == "prod":
+        return set(release_surface.public_release_hosts())
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +167,25 @@ def select(
         result = adapter.detect()
         return adapter, result
 
-    # Auto-detect installed hosts.
+    # Auto-detect installed hosts. Installed public releases auto-select only
+    # release-supported hosts; explicit --host remains available for advanced
+    # dev/export paths.
     all_results = detect_all()
-    installed = [(adapter, result) for adapter, result in all_results if result.installed]
+    selectable_names = _default_selectable_names()
+    installed = [
+        (adapter, result)
+        for adapter, result in all_results
+        if result.installed and (selectable_names is None or adapter.name in selectable_names)
+    ]
 
     if not installed:
+        if selectable_names is None:
+            hint = ", ".join(f"'{a.name}'" for a in _ALL_ADAPTERS)
+        else:
+            hint = "'claude' or 'omp'"
         raise NoHostInstalledError(
             "No supported host is installed. "
-            "Install one of: "
-            + ", ".join(f"'{a.name}'" for a in _ALL_ADAPTERS)
-            + ". Then re-run z-harness."
+            f"Install one of: {hint}. Then re-run z-harness."
         )
 
     if len(installed) == 1:

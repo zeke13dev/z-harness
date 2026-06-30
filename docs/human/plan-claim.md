@@ -1,7 +1,7 @@
 # plan-claim — Slug-level claim lock
 
 > Last updated: 2026-06-19
-> Covers source: scripts/plan-claim.sh, scripts/sink-lock.sh, scripts/plan-path.sh (claims_dir), commands/z-plan.md, commands/z-audit-plan.md
+> Covers source: scripts/plan-claim.sh, scripts/sink-lock.sh, scripts/plan-path.sh (claims_dir), skills/z-plan/SKILL.md, skills/z-audit-plan/SKILL.md
 
 ## Overview
 
@@ -246,8 +246,8 @@ Event emission is non-fatal — claim correctness never depends on telemetry. Fa
 
 ## How it interacts with others
 
-- **`commands/z-plan.md`** — calls `acquire` at setup (claim-first, before register), `heartbeat` at every phase boundary and before every AskUserQuestion, `release` at every halt path and at Phase 9. Offers `use-new-slug` on exit-1 contention.
-- **`commands/z-audit-plan.md`** — same heartbeat/release pattern; no `use-new-slug` option (slug is fixed to the plan being audited); early heartbeat before slug-select gate.
+- **`skills/z-plan/SKILL.md`** — calls `acquire` at setup (claim-first, before register), `heartbeat` at every phase boundary and before every AskUserQuestion, `release` at every halt path and at Phase 9. Offers `use-new-slug` on exit-1 contention.
+- **`skills/z-audit-plan/SKILL.md`** — same heartbeat/release pattern; no `use-new-slug` option (slug is fixed to the plan being audited); early heartbeat before slug-select gate.
 - **`scripts/sink-lock.sh`** — provides the underlying flock + daemon + TTL mechanics. `plan-claim.sh` is a thin policy wrapper.
 - **`scripts/plan-path.sh`** — provides `claims_dir()` (the lock directory path resolver).
 - **`scripts/active-plan-registry.py`** — **orthogonal**. The registry stays lockless and advisory. The claim lock and the registry write to different files under the same external base. Neither reads nor modifies the other.

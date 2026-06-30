@@ -12,7 +12,7 @@ Behavior (in order):
      and ``inject_safety.cleanup(project)`` finishes that restore before we
      inject anew (the durable manifest at ``<git-root>/.z-harness/
      injected_files.json`` makes this resumable).
-  3. Detect / select the host adapter (``--host`` override or the Rich picker).
+  3. Detect / select the host adapter (``--host`` override or the Rich picker; installed prod defaults are Claude/OMP only).
   4. Build the injected-env bundle via ``env_bundle.resolve_env_bundle()`` in
      ``"ephemeral"`` mode (launch is ALWAYS the gitignored/ephemeral path —
      SPEC.md:115-116) paired with the adapter's ``"ephemeral"`` inject mode.  Per

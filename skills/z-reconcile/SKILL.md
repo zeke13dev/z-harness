@@ -535,4 +535,4 @@ Report saved to <SAVE_PATH>
 
 Driver support requirements: see frontmatter `driver_features_required`.
 
-Each `AskUserQuestion` call site is annotated with a `<!-- RUNTIME-GATE: ask_user; ... -->` comment immediately before it.
+Each `AskUserQuestion` call site is annotated with a runtime-gate comment immediately before it.

@@ -8,7 +8,7 @@ import typer
 
 app = typer.Typer(
     name="z-harness",
-    help="z-harness setup CLI — install and configure existing AI harnesses.",
+    help="z-harness setup CLI — Claude Code plugin install plus OMP package/export.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -53,20 +53,20 @@ def main(
 @app.command("setup")
 def setup_cmd(
     target: str = typer.Option(
-        "claude",
+        "all",
         "--target",
         "--host",
-        help="Harness(es) to configure: claude, omp, pi, cursor, codex, or all.",
+        help="Harness(es) to configure. Release default/all: claude, omp. Dev/advanced explicit targets: pi, cursor, codex.",
     ),
     install: bool = typer.Option(
         False,
         "--install",
-        help="Install Claude/Codex plugin targets after showing the setup plan.",
+        help="Install direct plugin targets after showing the setup plan (Claude in prod; Claude/Codex in source/dev).",
     ),
     force: bool = typer.Option(
         False,
         "--force",
-        help="Overwrite existing Claude/Codex plugin installs when used with --install.",
+        help="Overwrite existing direct plugin installs when used with --install.",
     ),
     posture: Optional[str] = typer.Option(
         None,
@@ -84,7 +84,7 @@ def setup_cmd(
         help="Skip setup.py confirmation prompts for posture application.",
     ),
 ) -> None:
-    """First-run onboarding for the harnesses you already use."""
+    """First-run onboarding for Claude Code and OMP release surfaces."""
     from z_harness_cli.commands import setup as _setup_mod
 
     _setup_mod.run(
@@ -104,7 +104,7 @@ def install_cmd(
         "claude",
         "--target",
         "--host",
-        help="Plugin host to install: claude, codex, or all.",
+        help="Plugin host to install: claude (codex/all remain source/dev plugin paths).",
     ),
     tarball: Optional[str] = typer.Option(
         None,
@@ -122,7 +122,7 @@ def install_cmd(
         help="Regenerate host exports after plugin install.",
     ),
 ) -> None:
-    """Bootstrap / install z-harness plugins (wraps install.sh)."""
+    """Bootstrap / install z-harness plugins (Claude release path; Codex dev path)."""
     from z_harness_cli.commands import install as _install_mod
 
     _install_mod.run(
@@ -137,8 +137,8 @@ def install_cmd(
 @app.command("export")
 def export_cmd(
     ctx: typer.Context,
-    host: Optional[str] = typer.Option(None, "--host", "-H", help="Target host."),
-    all_hosts: bool = typer.Option(False, "--all", help="Export to all hosts."),
+    host: Optional[str] = typer.Option(None, "--host", "-H", help="Target host. Release-supported: claude, omp; dev/export-only targets remain explicit."),
+    all_hosts: bool = typer.Option(False, "--all", help="Export to release-supported hosts by default; source/dev includes all detected adapters."),
     in_place: bool = typer.Option(
         False, "--in-place", help="Write into project (committed)."
     ),
@@ -156,13 +156,13 @@ def export_cmd(
         "--force",
         help="Allow overwriting a non-empty existing --out directory.",
     ),
-    surface: str = typer.Option(
-        "dev",
+    surface: Optional[str] = typer.Option(
+        None,
         "--surface",
-        help="Export surface: dev (all commands) or prod (hide experimental commands).",
+        help="Export surface: auto (prod for installed releases, dev in source checkouts), dev, or prod.",
     ),
 ) -> None:
-    """Export z-harness commands/agents/skills to a host (Model A)."""
+    """Export z-harness commands/agents/skills to Claude/OMP or explicit advanced hosts."""
     try:
         from z_harness_cli.commands import export as _export_mod  # type: ignore[import]
     except ImportError:
@@ -183,7 +183,7 @@ def export_cmd(
 @app.command("launch")
 def launch_cmd(
     ctx: typer.Context,
-    host: Optional[str] = typer.Option(None, "--host", "-H", help="Host to launch."),
+    host: Optional[str] = typer.Option(None, "--host", "-H", help="Host to launch. Release auto-selection is Claude/OMP; other adapters are explicit dev paths."),
     quiet: bool = typer.Option(
         False, "--quiet", help="Suppress the fidelity banner before handover."
     ),

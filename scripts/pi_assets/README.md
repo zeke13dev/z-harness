@@ -2,14 +2,14 @@
 
 Brings z-harness to [pi](https://pi.dev): every agent as an executable fan-out subagent, every command/skill as a prompt, and the global rule that wires `doc-fetcher` (cheap grounding) and `explore` (parallel recon) together. Unlike the Cursor/Codex/agy exports, pi has no native subagent primitive — fan-out runs through pi's **subagent extension**, which this export vendors.
 
-This tree is **generated** by `/z-export --target=pi`, which calls the runtime-owned `runtime.drivers.pi.export.export` entry point. Do not edit `exports/pi/` by hand.
+This tree is **generated** by `/z-export --target=pi`, which calls the runtime-owned `runtime.drivers.pi.export.export` entry point. Do not edit generated pi export output by hand; regenerate it into scratch output such as `temp/exports/pi/`.
 
 For first-class OMP support, use `/z-export --target=omp`; the legacy pi export remains separate and does not route native OMP through pi rewrites or `scripts/omp-consult.sh` (the consult-provider fallback shim, not the native OMP export path).
 
 ## What's here
 
 ```
-exports/pi/
+temp/exports/pi/
 ├── AGENTS.md             # generated: fan-out preamble + auto agent index
 ├── CAPABILITIES.md       # what maps cleanly to pi and what's lossy
 ├── README.md             # this file
@@ -17,7 +17,7 @@ exports/pi/
 │   ├── <id>.md           # generated: every z-harness agent, frontmatter normalized
 │   └── explore.md        # pi-only fan-out recon agent (no z-harness source)
 ├── prompts/
-│   └── <id>.md           # generated: commands + skills, Agent()/Skill() → subagent hints
+│   └── <id>.md           # generated: skills rendered as prompts, Agent()/Skill() → subagent hints
 └── extensions/subagent/  # vendored pi subagent extension (the fan-out primitive)
 ```
 
@@ -25,7 +25,7 @@ exports/pi/
 
 | Output | Comes from |
 |--------|-----------|
-| `agents/<id>.md`, `prompts/<id>.md`, `AGENTS.md` index | z-harness `agents/`, `commands/`, `skills/` (generated) |
+| `agents/<id>.md`, `prompts/<id>.md`, `AGENTS.md` index | z-harness `agents/` and `skills/*/SKILL.md` (generated) |
 | `agents/explore.md`, `extensions/subagent/`, AGENTS preamble, `CAPABILITIES.md`, this README | `scripts/pi_assets/` (copied verbatim) |
 
 ## How pi consumes each piece
@@ -45,7 +45,7 @@ Source of truth stays in this repo; symlinks make it live under `~/.pi/agent/`:
 
 ```bash
 PI=~/.pi/agent
-ZX="$(cd "$(dirname "$0")" && pwd)"   # absolute path to exports/pi
+ZX="$(cd "$(dirname "$0")" && pwd)"   # absolute path to the generated pi export root
 
 # subagent extension (the fan-out primitive)
 mkdir -p "$PI/extensions/subagent"
@@ -60,7 +60,7 @@ for f in "$ZX"/agents/*.md; do ln -sf "$f" "$PI/agents/$(basename "$f")"; done
 ln -sf "$ZX/AGENTS.md" "$PI/AGENTS.md"
 ```
 
-Then start pi and run `/reload`. To wire the prompts, add `exports/pi/prompts` to the `prompts` array in `~/.pi/agent/settings.json` (the subagent-aware versions supersede the codex prompts).
+Then start pi and run `/reload`. To wire the prompts, add the generated `<pi-export-root>/prompts` path to the `prompts` array in `~/.pi/agent/settings.json` (the subagent-aware versions supersede the codex prompts).
 
 ## Usage
 
@@ -84,6 +84,6 @@ Or just describe the intent — `AGENTS.md` tells the orchestrator to reach for 
 /z-export --target=pi
 ```
 
-Edit z-harness sources (`agents/`, `commands/`, `skills/`) or the pi-only assets (`scripts/pi_assets/`), then re-run `/z-export --target=pi`. After regenerating, `pi /reload` picks up extension changes; symlinks stay valid since paths are stable.
+Edit z-harness sources (`agents/`, `skills/`) or the pi-only assets (`scripts/pi_assets/`), then re-run `/z-export --target=pi`. After regenerating, `pi /reload` picks up extension changes; symlinks stay valid since paths are stable.
 
 See `CAPABILITIES.md` for the full mapping and its lossy edges (no Haiku tier, line-based call rewrites, etc.).

@@ -59,6 +59,10 @@ if [ -d "$OUT_DIR/cursor/.cursor/skills/z-map" ]; then
   echo 'ux-smoke: ERROR z-map leaked into prod cursor export' >&2
   exit 1
 fi
+if [ -d "$OUT_DIR/cursor/.cursor/skills/z-explore" ]; then
+  echo 'ux-smoke: ERROR z-explore leaked into prod cursor export' >&2
+  exit 1
+fi
 if [ ! -d "$OUT_DIR/cursor/.cursor/skills/z-learn" ]; then
   echo 'ux-smoke: ERROR z-learn missing from prod cursor export' >&2
   exit 1

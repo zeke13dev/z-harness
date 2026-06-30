@@ -20,7 +20,7 @@
 #   agents/consultant-secondary.md       must contain log-subagent.sh
 #
 # DRIFT DETECTION (broad scan — fails on NEW role dispatches without logging):
-#   Scans ALL commands/*.md and agents/*.md for subagent_type="implementer".
+#   Scans ALL skills/*/SKILL.md and agents/*.md for subagent_type="implementer".
 #   Any such file that lacks BOTH log-subagent.sh AND a # no-subagent-log: opt-out
 #   is a VIOLATION.  This catches someone adding a new orchestrator that dispatches
 #   implementers without wiring the telemetry.
@@ -130,7 +130,7 @@ done
 # ---------------------------------------------------------------------------
 # Part 2: Broad drift scan — any file with subagent_type="implementer" must be logged
 #
-# Scans commands/ and agents/ for implementer dispatch sites.
+# Scans skills/ and agents/ for implementer dispatch sites.
 # Each file must have EITHER log-subagent.sh OR a # no-subagent-log: opt-out,
 # unless it appears in _IMPLEMENTER_DISPATCH_EXCEPTIONS (pre-existing gap).
 # ---------------------------------------------------------------------------

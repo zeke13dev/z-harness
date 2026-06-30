@@ -1,7 +1,7 @@
 # MR Reviewer
 
 > Last updated: 2026-05-23
-> Covers source: commands/z-mr-review.md, agents/mr-reviewer.md, scripts/extract-dismissals.py
+> Covers source: skills/z-mr-review/SKILL.md, agents/mr-reviewer.md, scripts/extract-dismissals.py
 
 ## What it does
 
@@ -75,7 +75,7 @@ These thresholds determine when to retire or re-examine this reviewer. They are 
 
 ## Integration: `/z-debug` post-mortem hook
 
-After committing a fix, `/z-debug`'s post-mortem phase offers (via `AskUserQuestion`) to run `/z-mr-review` on the fix diff. If accepted, the `mr-reviewer` agent runs with the debug run's slug. P0 and P1 findings are automatically appended to the post-mortem's "Preventative actions" section as bullet items, cited by `T-MR-NNN` ID. P2–P4 findings stay in MR-REVIEW.md only. See `commands/z-debug.md` for the integration details.
+After committing a fix, `/z-debug`'s post-mortem phase offers (via `AskUserQuestion`) to run `/z-mr-review` on the fix diff. If accepted, the `mr-reviewer` agent runs with the debug run's slug. P0 and P1 findings are automatically appended to the post-mortem's "Preventative actions" section as bullet items, cited by `T-MR-NNN` ID. P2–P4 findings stay in MR-REVIEW.md only. See `skills/z-debug/SKILL.md` for the integration details.
 
 ## See also
 

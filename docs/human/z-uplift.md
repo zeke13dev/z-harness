@@ -1,30 +1,30 @@
 # /z-uplift
 
 > Last updated: 2026-06-19
-> Covers source: commands/z-uplift.md
+> Covers source: skills/z-uplift/SKILL.md
 
 ## Overview
 
 `/z-uplift` is a bulk codebase quality uplift command for repos adopting z-harness or undergoing periodic cleanup. It decomposes the repository into components (Cargo workspace members, Python packages, JS workspaces, or top-level directories), runs a repo-wide cross-cutting pass to surface global issues (duplicated abstractions, style drift, dead code at module boundaries), dispatches per-component audits across `correctness`, `cleanliness`, and `design` dimensions, and produces per-component `TASKS.md` files that `/z-execute --tasks=` can directly consume.
 
-The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`commands/z-uplift.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-execute --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
+The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `skills/z-uplift/SKILL.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`skills/z-uplift/SKILL.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-execute --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
 | Phase | Line | Purpose |
 |-------|------|---------|
-| Argument parsing | `commands/z-uplift.md:22` | Parse all flags before any state is initialized |
-| Setup | `commands/z-uplift.md:70` | Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5); Sub-steps 6a/6b/6c handle --retry-bailed, --refresh-component, and SKIP_TO_PHASE resume detection |
-| STYLE.md gate | `commands/z-uplift.md:478` | Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style |
-| Phase 0 | `commands/z-uplift.md:564` | Premise check — one-paragraph goal confirmation |
-| Phase 1 | `commands/z-uplift.md:605` | Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with no-progress sanity counter; `SLUG_RE` validates custom slugs as `^[a-z0-9]+(?:-[a-z0-9]+)*$` |
-| Phase 1.5 | `commands/z-uplift.md:1124` | Pre-fanout cost gate — call `pre-run-cost-gate.sh` with component count; hard gate that requires user confirmation before cross-cutting and per-component audits begin; skipped on resume paths |
-| Phase 2 | `commands/z-uplift.md:1221` | Cross-cutting pass — parallel consultant dispatches, output CROSS-CUTTING.md; parser emits `cross_cutting_findings_dropped` for non-G/C/R bullets; Step 6 inserts synthetic row as `[a] audited` using atomic write |
-| Phase 3 | `commands/z-uplift.md:1765` | Per-component audits — parallel per-dimension auditors; Step 2f dispatches cross-LLM consult on REPORT.md (primary+secondary in parallel); Step 2i dispatches reviewer over TASKS.md (mandatory safety gate); CRIT_HIGH parser handles `### [CRITICAL]` headers structurally; auto-bail check; produce REPORT.md + TASKS.md |
-| Phase 4 | `commands/z-uplift.md:2433` | Review gate — informational queue summary only (no AskUser); cross-cutting-first ordering callout printed if synthetic row is present |
-| Phase 5 | `commands/z-uplift.md:2579` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits; auto-transitions `[i] implementing` → `[x] done` when TASKS.md is fully done; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
-| Phase 6 | `commands/z-uplift.md:2961` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
+| Argument parsing | `skills/z-uplift/SKILL.md:22` | Parse all flags before any state is initialized |
+| Setup | `skills/z-uplift/SKILL.md:70` | Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5); Sub-steps 6a/6b/6c handle --retry-bailed, --refresh-component, and SKIP_TO_PHASE resume detection |
+| STYLE.md gate | `skills/z-uplift/SKILL.md:478` | Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style |
+| Phase 0 | `skills/z-uplift/SKILL.md:564` | Premise check — one-paragraph goal confirmation |
+| Phase 1 | `skills/z-uplift/SKILL.md:605` | Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with no-progress sanity counter; `SLUG_RE` validates custom slugs as `^[a-z0-9]+(?:-[a-z0-9]+)*$` |
+| Phase 1.5 | `skills/z-uplift/SKILL.md:1124` | Pre-fanout cost gate — call `pre-run-cost-gate.sh` with component count; hard gate that requires user confirmation before cross-cutting and per-component audits begin; skipped on resume paths |
+| Phase 2 | `skills/z-uplift/SKILL.md:1221` | Cross-cutting pass — parallel consultant dispatches, output CROSS-CUTTING.md; parser emits `cross_cutting_findings_dropped` for non-G/C/R bullets; Step 6 inserts synthetic row as `[a] audited` using atomic write |
+| Phase 3 | `skills/z-uplift/SKILL.md:1765` | Per-component audits — parallel per-dimension auditors; Step 2f dispatches cross-LLM consult on REPORT.md (primary+secondary in parallel); Step 2i dispatches reviewer over TASKS.md (mandatory safety gate); CRIT_HIGH parser handles `### [CRITICAL]` headers structurally; auto-bail check; produce REPORT.md + TASKS.md |
+| Phase 4 | `skills/z-uplift/SKILL.md:2433` | Review gate — informational queue summary only (no AskUser); cross-cutting-first ordering callout printed if synthetic row is present |
+| Phase 5 | `skills/z-uplift/SKILL.md:2579` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits; auto-transitions `[i] implementing` → `[x] done` when TASKS.md is fully done; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
+| Phase 6 | `skills/z-uplift/SKILL.md:2961` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
 <!-- AUTO-END: entry-points -->
 
 ## How it interacts with others
@@ -49,7 +49,7 @@ Both `/z-audit` and `/z-mr-review` remain the right tools for their respective s
 
 ## STYLE.md prerequisite and MANIFEST states
 
-`/z-uplift` requires a `STYLE.md` at the repo root (the same prerequisite as `/z-mr-review`). If `STYLE.md` is absent, the STYLE.md gate at `commands/z-uplift.md:478` halts and recommends running `/z-style-init` first. Pass `--no-style` to proceed without it; the cleanliness and design auditors will fall back to a generic rubric and will not cite STYLE rule IDs.
+`/z-uplift` requires a `STYLE.md` at the repo root (the same prerequisite as `/z-mr-review`). If `STYLE.md` is absent, the STYLE.md gate at `skills/z-uplift/SKILL.md:478` halts and recommends running `/z-style-init` first. Pass `--no-style` to proceed without it; the cleanliness and design auditors will fall back to a generic rubric and will not cite STYLE rule IDs.
 
 MANIFEST states:
 - `[ ] pending` — not yet started
@@ -116,7 +116,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `docs.staleness_threshold` in config), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 - **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 - **Slug preference resolver.** `scripts/config.py resolve-question workflow.slug_confirm` is queried after the hard collision check but before the user-visible slug gate. On resolver failure (any non-zero exit), falls back to the normal ask path — never silently skips.
-- **SKILL.md frontmatter quoting.** The `argument-hint` value in `commands/z-uplift.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.
+- **SKILL.md frontmatter quoting.** The `argument-hint` value in `skills/z-uplift/SKILL.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.
 - **Phase line anchors.** Line numbers shift whenever the command file is edited; always verify against grep before citing a specific line number.
 
 ## Examples

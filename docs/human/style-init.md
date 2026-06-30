@@ -1,7 +1,7 @@
 # Style Init
 
 > Last updated: 2026-05-23
-> Covers source: commands/z-style-init.md
+> Covers source: skills/z-style-init/SKILL.md
 
 ## What it does
 

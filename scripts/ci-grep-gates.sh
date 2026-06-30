@@ -29,7 +29,6 @@
 #   - scripts/discover-providers.py — legacy v1 discovery script; generates v1 format
 #   - scripts/config.py         — contains _PROVIDER_RENAME migration dict
 #   - scripts/test_config.py    — migration tests; old names appear as test input
-#   - scripts/audit-tarball.sh  — only exports/codex/ path references
 #   - scripts/extract-dismissals.py — only comment example text
 #   - scripts/log-event.sh      — only comment example text
 #   - scripts/log-phase.sh      — only comment example text
@@ -84,8 +83,6 @@ EXEMPT_PATHS=(
     "scripts/config.py"
     # Migration tests: old names appear as input strings being tested
     "scripts/test_config.py"
-    # Only references exports/codex/ as a directory path
-    "scripts/audit-tarball.sh"
     # Only has old names in a comment example line
     "scripts/extract-dismissals.py"
     # Only has old names in comment examples

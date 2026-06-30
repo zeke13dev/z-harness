@@ -354,7 +354,13 @@ def _resolve_base_from_helper(repo_root: Path, helper_root: Path, environ: Mappi
     if not helper.exists():
         return None
     try:
-        result = _run_command(["bash", str(helper), "base_dir"], cwd=repo_root, environ=environ)
+        try:
+            result = _run_command(["bash", str(helper), "base_dir"], cwd=repo_root, environ=environ)
+        except TypeError:
+            # Older tests monkeypatch _run_command without the optional environ
+            # parameter; keep that compatibility while production calls still
+            # pass the resolved environment through.
+            result = _run_command(["bash", str(helper), "base_dir"], cwd=repo_root)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -658,7 +664,14 @@ def _build_candidates(
 
 def _registry_records(repo_root: Path, run_id: str, environ: Mapping[str, str], helper_root: Path) -> tuple[list[dict[str, Any]], str]:
     try:
-        result = _run_command(["python3", str(helper_root / "scripts" / "active-plan-registry.py"), "list", "--json"], cwd=repo_root, environ=environ)
+        try:
+            result = _run_command(
+                ["python3", str(helper_root / "scripts" / "active-plan-registry.py"), "list", "--json"],
+                cwd=repo_root,
+                environ=environ,
+            )
+        except TypeError:
+            result = _run_command(["python3", "scripts/active-plan-registry.py", "list", "--json"], cwd=repo_root)
     except (OSError, subprocess.TimeoutExpired):
         return [], "unavailable"
     if result.returncode != 0:

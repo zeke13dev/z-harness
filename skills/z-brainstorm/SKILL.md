@@ -131,9 +131,9 @@ Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. 
 - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
 - `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
 
-## Phase 0 — Shared sharpen + scope probe
+## Phase 0 — Scope probe
 
-Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. The shared sharpen step runs first and writes or reuses `GRILL.md`; scope-probe then dispatches doc-fetcher internally (per its step 4). Phase 0 does not depend on Phase 1's doc-fetcher run.
+Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. The shared sharpen step runs before scope-probe and writes or reuses `GRILL.md`; scope-probe then dispatches doc-fetcher internally (per its step 4). Phase 0 does not depend on Phase 1's doc-fetcher run.
 
 ### 0-sharpen. Shared GRILL precontext sharpen
 

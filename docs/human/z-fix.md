@@ -1,7 +1,7 @@
 # z-fix
 
 > Last updated: 2026-06-19
-> Covers source: commands/z-fix.md
+> Covers source: skills/z-fix/SKILL.md
 
 ## Overview
 
@@ -12,22 +12,22 @@
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `commands/z-fix.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
-- `commands/z-fix.md:24` — Setup — slug derivation (two-step: collision check then resolver gate with halt branch), run-id, directory creation, version stamp, Run Brief init, `fix_run_start` telemetry
-- `commands/z-fix.md:90` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
-- `commands/z-fix.md:101` — Phase 0 — non-skippable wrong-tool gate; exits to `/z-debug` if no hypothesis
-- `commands/z-fix.md:116` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
-- `commands/z-fix.md:149` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
-- `commands/z-fix.md:155` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel, cause-explains-symptoms framing)
-- `commands/z-fix.md:175` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
-- `commands/z-fix.md:184` — Phase 5 — approve/modify/abandon gate (conversational prose, not AskUserQuestion popup); shortcuts need separate explicit approval
-- `commands/z-fix.md:198` — Phase 6 — write FIX.md (single artifact, status=approved not yet shipped)
-- `commands/z-fix.md:248` — Phase 7 — inline implementation by orchestrator; no implementer subagent; hard limit >7 files
-- `commands/z-fix.md:268` — Phase 8 — Codex review (non-negotiable, base gate); optional advisory eval-reviewer in parallel when `personas.review_eval` ON; retry once on blockers; `REVIEW_CYCLES` counter
-- `commands/z-fix.md:300` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
-- `commands/z-fix.md:345` — Phase 10 — finalize: FIX.md status=shipped, Run Brief finalize, `fix_run_end` log, `/z-maintain-docs` hint
-- `commands/z-fix.md:380` — Run Brief halt finalize — shared block for all terminal halts after Run Brief init
-- `commands/z-fix.md:408` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
+- `skills/z-fix/SKILL.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
+- `skills/z-fix/SKILL.md:24` — Setup — slug derivation (two-step: collision check then resolver gate with halt branch), run-id, directory creation, version stamp, Run Brief init, `fix_run_start` telemetry
+- `skills/z-fix/SKILL.md:90` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
+- `skills/z-fix/SKILL.md:101` — Phase 0 — non-skippable wrong-tool gate; exits to `/z-debug` if no hypothesis
+- `skills/z-fix/SKILL.md:116` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
+- `skills/z-fix/SKILL.md:149` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
+- `skills/z-fix/SKILL.md:155` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel, cause-explains-symptoms framing)
+- `skills/z-fix/SKILL.md:175` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
+- `skills/z-fix/SKILL.md:184` — Phase 5 — approve/modify/abandon gate (conversational prose, not AskUserQuestion popup); shortcuts need separate explicit approval
+- `skills/z-fix/SKILL.md:198` — Phase 6 — write FIX.md (single artifact, status=approved not yet shipped)
+- `skills/z-fix/SKILL.md:248` — Phase 7 — inline implementation by orchestrator; no implementer subagent; hard limit >7 files
+- `skills/z-fix/SKILL.md:268` — Phase 8 — Codex review (non-negotiable, base gate); optional advisory eval-reviewer in parallel when `personas.review_eval` ON; retry once on blockers; `REVIEW_CYCLES` counter
+- `skills/z-fix/SKILL.md:300` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
+- `skills/z-fix/SKILL.md:345` — Phase 10 — finalize: FIX.md status=shipped, Run Brief finalize, `fix_run_end` log, `/z-maintain-docs` hint
+- `skills/z-fix/SKILL.md:380` — Run Brief halt finalize — shared block for all terminal halts after Run Brief init
+- `skills/z-fix/SKILL.md:408` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
 <!-- AUTO-END: entry-points -->
 
 ## How it interacts with others
@@ -62,7 +62,7 @@ This mirrors the advisory eval-reviewer pattern used by `/z-execute` and `/z-do`
 `/z-fix` participates in the Run Brief system:
 
 - **Init**: immediately after `fix_run_start`, `run-brief.sh init` is called with profile=full, artifact=FIX.md.
-- **Halt paths**: every terminal halt (wrong tool, abandoned, escalated) calls the "Run Brief halt finalize" block at `commands/z-fix.md:380` before logging `fix_run_end`. When FIX.md is missing, the shared fragment auto-downgrades to lite mode (Intent + Outcome + Next).
+- **Halt paths**: every terminal halt (wrong tool, abandoned, escalated) calls the "Run Brief halt finalize" block at `skills/z-fix/SKILL.md:380` before logging `fix_run_end`. When FIX.md is missing, the shared fragment auto-downgrades to lite mode (Intent + Outcome + Next).
 - **Finalize (Phase 10)**: `run-brief.sh set-section` populates outcome/status/next, then the shared `_fragments/run-brief-finalize.md` renders the Briefing. The `$NEXT_JSON` is derived from FIX.md "Docs touched" — if non-empty, next = `/z-maintain-docs`; otherwise next = done.
 
 ## Auto-bail thresholds
@@ -124,7 +124,7 @@ At Phase 0 the command confirms you have a hypothesis. If you typed only a sympt
 
 ## See also
 
-- `commands/z-fix.md` — full phase-by-phase procedure
+- `skills/z-fix/SKILL.md` — full phase-by-phase procedure
 - `docs/human/commands.md` — index of all slash commands
 - `docs/human/config.md` — notification policy, workflow.slug_confirm, personas.review_eval, and other harness config keys
 - `docs/human/z-debug.md` — the hypothesis-generation counterpart

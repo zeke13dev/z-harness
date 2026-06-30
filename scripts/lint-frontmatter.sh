@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # lint-frontmatter.sh — Validate all frontmatter-bearing .md files
 #
-# Checks every file under agents/, skills/, commands/, personas/, and
-# scripts/pi_assets/ for YAML frontmatter that is parseable by a strict
+# Checks every file under agents/, skills/, personas/, and scripts/pi_assets/
+# for YAML frontmatter that is parseable by a strict
 # YAML 1.2 parser. Catches unquoted colons in description values
 # (e.g. "file:line", "tasks: [...]") that the custom regex frontmatter
 # parser silently accepts.

@@ -11,17 +11,25 @@ This document summarizes the beta support level for each shipped host/export tar
 
 ## Hosts
 
+### Public release defaults
+
 | Host / target | Tier | Runtime CLI adapter | Export support | Notes |
 |---|---:|---:|---:|---|
-| Claude Code | native | yes | plugin/source install | Best-supported beta path. |
-| Antigravity | high | yes | `.agent/` workflows/rules/skills | Some subagent/provider-routing features require explicit fallback instructions. |
-| Cursor | flattened | yes | `.cursor/skills` + rules | Supported setup/export target; subagent fan-out is not native and remains blocked until parity tests prove otherwise. |
-| Codex | flattened | yes | `skills/` + `.codex-plugin/plugin.json` | Supported setup/export target; MCP registration is global/persistent in `~/.codex/config.toml`; subagent fan-out is not native. |
-| OMP / pi | native/export | yes for OMP, no for legacy pi | `.omp/z-harness/` package and pi compatibility exports | OMP native claims are bounded by parity evidence; legacy pi remains export-only. |
-| Windsurf | export-only | no | rules | Curated/full export only. |
-| Kiro | export-only | no | steering docs | Curated/full export only. |
-| Cline | export-only | no | `.clinerules/` | Pointer export by default to avoid context bloat. |
-| Copilot | export-only | no | instructions/prompts | Pointer/curated export only. |
+| Claude Code | native | yes | plugin/source install | Best-supported beta path and public plugin installer. |
+| OMP | native | yes | `.omp/z-harness/` package | First-class public package/export target; native claims are bounded by parity evidence. |
+
+### Explicit dev/advanced or export-only targets
+
+| Host / target | Tier | Runtime CLI adapter | Export support | Notes |
+|---|---:|---:|---:|---|
+| Antigravity | high | yes | `.agent/` workflows/rules/skills | Explicit dev/advanced path; not selected by installed prod defaults. |
+| Cursor | flattened | yes | `.cursor/skills` + rules | Explicit dev/advanced export/injection; subagent fan-out is not native. |
+| Codex | flattened | yes | `skills/` + `.codex-plugin/plugin.json` | Explicit source/dev plugin/export path; MCP registration is global/persistent in `~/.codex/config.toml`; subagent fan-out is not native. |
+| legacy pi | export-only | no | pi compatibility exports | Explicit compatibility export-only target. |
+| Windsurf | export-only | no | rules | Explicit export-only target. |
+| Kiro | export-only | no | steering docs | Explicit export-only target. |
+| Cline | export-only | no | `.clinerules/` | Explicit export-only target. |
+| Copilot | export-only | no | instructions/prompts | Explicit export-only target. |
 
 ## Unsupported or degraded constructs
 
@@ -38,9 +46,10 @@ Export drivers must not silently drop those constructs. They preserve `RUNTIME-G
 
 ## Release surfaces
 
-- **dev/main surface:** includes experimental research commands for local development.
-- **prod surface:** hides `/z-research`, `/z-explore`, `/z-map` (legacy), `/z-overnight`, `/z-attend`, and `z-axiom-*` by default while keeping `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`.
-- Use `z-harness export --surface prod ...` for public-beta exports.
+- `z_harness_cli.release_surface` is the single release-surface manifest. MCP tool registration, CLI/runtime export filtering, prod tarball pruning, release staging, and tarball audits read that contract instead of maintaining separate hidden-command lists.
+- **dev/main surface:** includes experimental research, axiom, Hermes/Discord/tmux, and generated-mirror resources for local development.
+- **prod surface:** ships the manifest-approved public surface and physically excludes `/z-research`, `/z-explore`, `/z-map` (legacy), `/z-overnight`, `/z-attend`, `z-axiom-*`, their dev-only agents, Hermes/Discord/tmux orchestration paths, and generated mirrors.
+- Installed wheels/tarballs default to prod, and public CLI/setup/export auto-selection defaults to Claude + OMP. Source checkouts can opt into the full development surface with `z-harness export --surface dev ...` or explicit dev/advanced hosts.
 
 ## Safety posture
 

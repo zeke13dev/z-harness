@@ -2,14 +2,14 @@
 runtime/drivers — host-driver implementations and driver selection for z-harness provider backends.
 
 Each sub-package implements a HostDriver for a specific CLI or SDK backend.
-Currently implemented:
+Currently implemented (release-default hosts first):
 
-- claude:       SubprocessClaudeDriver (subprocess)
-- cursor:       CursorCLIDriver (subprocess); CursorSDKDriver stubbed (v2 milestone)
-- codex:        CodexDriver — Codex CLI driver (runtime/drivers/codex/)
-- antigravity:  AntigravityHostDriverShim — HostDriver wrapper around AntigravityDriver
-                (runtime/drivers/antigravity/host_driver_shim.py)
-- omp:         OmpHostDriver — native OMP CLI driver (runtime/drivers/omp/)
+- claude:       SubprocessClaudeDriver (subprocess); primary public path
+- omp:          OmpHostDriver — native OMP CLI driver (runtime/drivers/omp/)
+- cursor:       CursorCLIDriver (subprocess); explicit dev/advanced path
+- codex:        CodexDriver — Codex CLI driver (explicit dev/advanced path)
+- antigravity:  AntigravityHostDriverShim — explicit dev/advanced wrapper around
+                AntigravityDriver (runtime/drivers/antigravity/host_driver_shim.py)
 
 Note: SelfHostDriver (formerly an in-process driver for Claude Code) is tombstoned
 and not reachable via select_driver(). See docs/human/runtime-dispatch.md.
@@ -68,8 +68,9 @@ def select_driver(
     Parameters
     ----------
     host:
-        The provider host identifier.  Supported values: ``"claude"``,
-        ``"cursor"``, ``"codex"``, ``"antigravity"``, ``"omp"``.  Any other value raises
+        The provider host identifier. Release-default values are ``"claude"``
+        and ``"omp"``. Explicit dev/advanced values ``"cursor"``, ``"codex"``,
+        and ``"antigravity"`` remain implemented. Any other value raises
         :class:`DriverNotFoundError`.
     driver_override:
         Optional explicit driver selection.  When provided, bypasses
@@ -149,7 +150,7 @@ def select_driver(
 
     else:
         raise DriverNotFoundError(
-            f"Unknown host {host!r}. Supported hosts: 'claude', 'cursor', 'codex', 'antigravity', 'omp'."
+            f"Unknown host {host!r}. Release-default hosts: 'claude', 'omp'. Explicit dev/advanced hosts: 'cursor', 'codex', 'antigravity'."
         )
 
 

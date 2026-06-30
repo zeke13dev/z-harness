@@ -6,8 +6,8 @@ Shared helpers for the multi-IDE export pipeline.  Strict port of
 Any quirk preserved from the legacy script is noted with a
 ``# preserved quirk:`` comment.
 
-Importable directly (no importlib-by-path hack needed) and has zero imports
-from ``z_harness_cli``.
+Importable directly (no importlib-by-path hack needed). Release-surface
+filtering intentionally imports the CLI manifest from ``z_harness_cli``.
 
 Public surface
 --------------
@@ -53,6 +53,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from z_harness_cli import release_surface
 
 
 # ---------------------------------------------------------------------------
@@ -314,51 +315,27 @@ def _collect_skills(skills_dir: Path, repo_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
-_PROD_HIDDEN_SKILL_IDS: frozenset[str] = frozenset(
-    {
-        "z-research",
-        "z-map",
-        "z-overnight",
-        "z-attend",
-    }
-)
-
-_PROD_HIDDEN_AGENT_IDS: frozenset[str] = frozenset(
-    {
-        "axiom-extractor",
-        "research-judge",
-    }
-)
-
-
-def _is_prod_hidden(kind: str, entry_id: str) -> bool:
-    if kind == "skills":
-        return entry_id in _PROD_HIDDEN_SKILL_IDS or entry_id.startswith("z-axiom-")
-    if kind == "agents":
-        return entry_id in _PROD_HIDDEN_AGENT_IDS
-    return False
+def _is_prod_visible(kind: str, entry_id: str) -> bool:
+    return release_surface.is_prod_visible(kind, entry_id, "prod")
 
 
 def _apply_release_surface(
     sources: dict[str, list[dict[str, Any]]],
     surface: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Filter experimental sources from the public prod release surface.
-
-    `main`/development exports default to the full dev surface. The `prod`
-    branch or release scripts opt into the public surface by setting
-    `Z_HARNESS_RELEASE_SURFACE=prod` or by passing `--surface prod` through the
-    CLI export command.
-    """
-    resolved = (surface or os.environ.get("Z_HARNESS_RELEASE_SURFACE") or "dev").strip().lower()
-    if resolved not in {"prod", "production"}:
+    """Filter sources through the central release-surface manifest."""
+    try:
+        resolved = release_surface.default_surface(surface)
+    except ValueError:
+        resolved = "prod"
+    if resolved == "dev":
         return sources
 
     return {
         kind: [
             entry
             for entry in entries
-            if not _is_prod_hidden(kind, entry["id"])
+            if _is_prod_visible(kind, entry["id"])
         ]
         for kind, entries in sources.items()
     }

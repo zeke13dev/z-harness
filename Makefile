@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run version-sync version-check
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run release-verify version-sync version-check
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -74,13 +74,13 @@ lint-strict:
 lint-frontmatter:
 	bash scripts/lint-frontmatter.sh
 
-# Halt-category lint — validates that every ask_user RUNTIME-GATE in commands/*.md
+# Halt-category lint — validates that every ask_user RUNTIME-GATE in skills/*/SKILL.md
 # carries a valid category= token from the halt_category enum
 # {decision, risk, shortcut, archiving, mechanical_proceed}.
 # Exit 0 = all gates tagged; exit 1 = missing or invalid category tokens.
 # Wired into CI (lint-askuser.yml lint-halt-categories job).
 lint-halt:
-	bash scripts/lint-halt-categories.sh --strict --commands-dir commands
+	bash scripts/lint-halt-categories.sh --strict --skills-dir skills
 
 preflight:
 	bash scripts/preflight.sh
@@ -114,6 +114,13 @@ test-ecc-lessons:
 # .gitignored; exports are never committed.
 export:
 	python3 scripts/generate-exports.py
+
+# Full release-publishing gate set for a single checked-out SHA. The release
+# workflow runs this before creating any tag assets; each prerequisite must pass
+# in this same worktree so a skipped/failing gate blocks publication.
+release-verify: test test-sh
+	python3 -m pytest tests/test_install_sh_integrity.py -v
+	bash scripts/release-dry-run.sh
 
 release-dry-run:
 	bash scripts/release-dry-run.sh

@@ -1,7 +1,7 @@
 # z-test-prune
 
 > Last updated: 2026-06-19
-> Covers source: commands/z-test-prune.md
+> Covers source: skills/z-test-prune/SKILL.md
 
 ## Overview
 

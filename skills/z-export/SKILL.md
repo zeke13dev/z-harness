@@ -1,7 +1,7 @@
 ---
 name: z-export
 disable-model-invocation: false
-description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / OMP / pi / Windsurf / Kiro / Cline / Copilot."
+description: "Export z-harness skill, agent, and persona sources to OMP and explicit dev/advanced host layouts."
 argument-hint: "[--target=<cursor|codex|agy|omp|pi|windsurf|kiro|cline|copilot|all>] [--include=personas]"
 runtime: c1
 driver_features_required: []
@@ -10,7 +10,7 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-export`**.
 
-This command invokes the runtime export CLI (or, for `pi` and the export-only drivers, the standalone runtime driver) to translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. Persona files from `personas/` are exported in the same pass for cursor/codex/agy; OMP writes OMP profiles from the runtime exporter.
+This command invokes the runtime export CLI (or, for `pi` and the export-only drivers, the standalone runtime driver) to translate z-harness source files (`skills/*/SKILL.md`, `agents/*.md`, and supporting runtime/persona files) into IDE-specific formats under a generated export root. Persona files from `personas/` are exported in the same pass for cursor/codex/agy; OMP writes OMP profiles from the runtime exporter.
 
 > **OMP target:** `omp` is a **first-class native host** (T009 complete). It exports `.omp/config.yml` plus `.omp/z-harness/{manifest.yml,skills,rules,prompts,agents,profiles}` and reports native fidelity. `OmpAdapter.fidelity_tier` and OMP `ExportResult.fidelity` are `"native"`. Four command families are native (z-execute, z-consult, z-gate, z-panel); all others are degraded. `.omp/config.yml` is never modified by the exporter.
 
@@ -62,7 +62,7 @@ Build the target list:
   ```
   This prints a JSON array string (e.g. `["cursor","codex","agy","omp","pi"]`). JSON-parse the output to obtain the list of hosts. Use that list as the target set for `all`. New hosts appear automatically once their entry is registered in config and their driver exists — no hardcoded list is maintained here.
 
-> **pi note:** the `pi` target emits a richer tree than the export-only pointer/curated drivers — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
+> **pi note:** the `pi` target emits a richer tree than the export-only pointer/curated drivers — executable subagent files under `<export-root>/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
 
 > **Export-only target notes:**
 > - `windsurf` → curated rule files under `.windsurf/rules/*.md` with `trigger` frontmatter.
@@ -78,17 +78,17 @@ For each target in the list, run the export in sequence (not in parallel). For *
 
 ### cursor / codex / agy / omp targets
 
-Run via the runtime CLI, writing to the committed `exports/<target>/` mirror with `--out`:
+Run via the runtime CLI, writing to a generated scratch/export directory with `--out`:
 
 ```bash
-python3 -m z_harness_cli export --host <host> --out exports/<target> --force
+python3 -m z_harness_cli export --host <host> --out temp/exports/<target> --force
 ```
 
-Replace `<host>` with `cursor`, `codex`, `antigravity`, or `omp`, and `<target>` with the matching `exports/` dir name: `cursor` → `exports/cursor`, `codex` → `exports/codex`, **`agy` in the target list maps to `--host antigravity --out exports/agy`**, and `omp` → `exports/omp`.
+Replace `<host>` with `cursor`, `codex`, `antigravity`, or `omp`, and `<target>` with the matching scratch dir name: `cursor` → `temp/exports/cursor`, `codex` → `temp/exports/codex`, **`agy` in the target list maps to `--host antigravity --out temp/exports/agy`**, and `omp` → `temp/exports/omp`. A caller may choose a different explicit `--out`, but root `exports/` mirrors are not release source.
 
-Use `--out exports/<target>` (NOT `--in-place`): `--in-place` writes the host layout into the current project root (cwd) for live use in a workspace — it does **not** populate the committed `exports/` mirror. `--force` is required because `exports/<target>/` is a non-empty existing directory.
+Use `--out temp/exports/<target>` (NOT `--in-place`) for generated mirrors: `--in-place` writes the host layout into the current project root (cwd) for live use in a workspace. `--force` is safe because the scratch output is regenerated on demand.
 
-The CLI exports commands, agents, skills, and host-specific persona/profile resources in a single pass. Cursor/codex/agy write personas via their adapter persona loop. OMP writes `.omp/z-harness/profiles/` from the runtime exporter and reports native fidelity (T009).
+The CLI exports skill, agent, and host-specific persona/profile resources in a single pass. Cursor/codex/agy write personas via their adapter persona loop. OMP writes `.omp/z-harness/profiles/` from the runtime exporter and reports native fidelity (T009).
 
 **Important:** run targets sequentially, not in parallel. Capture stdout and stderr for each separately.
 
@@ -97,11 +97,11 @@ For each target:
 1. Note the exit code.
 2. On **exit 0**: parse stdout for a line matching the pattern `files=<N>` or similar output from the CLI. Extract the file count and output path. Then print:
    ```
-   [<target>] OK — <count> files written to exports/<target>/
+   [<target>] OK — <count> files written to temp/exports/<target>/
    ```
    If the CLI does not emit a parseable count/path line, print:
    ```
-   [<target>] OK — exports/<target>/
+   [<target>] OK — temp/exports/<target>/
    ```
 3. On **nonzero exit**: capture the last 20 lines of stderr. Mark this target as FAILED. Print:
    ```
@@ -121,7 +121,7 @@ python3 - <<'EOF'
 import sys, pathlib
 
 repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
-export_root = repo_root / "exports" / "pi"
+export_root = repo_root / "temp" / "exports" / "pi"
 
 sys.path.insert(0, str(repo_root))
 from runtime.drivers.pi.export import export
@@ -140,7 +140,7 @@ EOF
 
 Capture stdout and stderr. On exit 0, print:
 ```
-[pi] OK — <count> files written to exports/pi/
+[pi] OK — <count> files written to temp/exports/pi/
 ```
 
 On nonzero exit (including when `result.warnings` is non-empty), capture the last 20 lines of stderr. Mark `pi` as FAILED. Print:
@@ -162,7 +162,7 @@ import sys, pathlib, importlib
 
 repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
 target = "<target>"  # windsurf | kiro | cline | copilot
-export_root = repo_root / "exports" / target
+export_root = repo_root / "temp" / "exports" / target
 
 sys.path.insert(0, str(repo_root))
 driver = importlib.import_module(f"runtime.drivers.{target}.export")
@@ -216,7 +216,7 @@ Exit nonzero (return a non-zero status to the user). You may signal this by endi
 - **No LLM interpretation of export output.** Just capture the CLI's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
 - **Relative paths in OK output.** Output paths should be relative to the repo root (strip the leading absolute path prefix).
 - **No writes by this command.** All file I/O is delegated to the runtime CLI, OMP runtime exporter, and standalone pi/export-only drivers.
-- **No double persona export.** The runtime CLI (cursor/codex/agy) already writes personas in the same pass as commands/agents/skills, and OMP writes profiles from its runtime exporter. There is no separate persona/profile step for these hosts.
+- **No double persona export.** The runtime CLI (cursor/codex/agy) already writes personas in the same pass as skills and agents, and OMP writes profiles from its runtime exporter. There is no separate persona/profile step for these hosts.
 
 ---
 

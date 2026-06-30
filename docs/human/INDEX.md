@@ -18,7 +18,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [commands](./commands.md) | high | `commands/z-amend.md`, `commands/z-audit.md`, `commands/z-brainstorm.md`, `commands/z-git-guardrails.md`, `commands/z-grill.md` | Propagates targeted plan amendments consistently across plan artifacts. New: `/z-grill` (requirements interview, produces GRILL.md), `/z-git-guardrails` (installs git-safety PreToolUse hook). Updated: `/z-init-docs` (bootstraps CONTEXT.md by default, `--no-glossary` opts out), `/z-maintain-docs` (new `--glossary` flag), `/z-debug` (Phase 2 feedback-loop ladder + `repro_confidence`), `/z-plan` + `/z-brainstorm` (GRILL.md precontext detection). |
+| [commands](./commands.md) | high | `skills/z-amend/SKILL.md`, `skills/z-audit/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-git-guardrails/SKILL.md`, `skills/z-grill/SKILL.md` | Propagates targeted plan amendments consistently across plan artifacts. New: `/z-grill` (requirements interview, produces GRILL.md), `/z-git-guardrails` (installs git-safety PreToolUse hook). Updated: `/z-init-docs` (bootstraps CONTEXT.md by default, `--no-glossary` opts out), `/z-maintain-docs` (new `--glossary` flag), `/z-debug` (Phase 2 feedback-loop ladder + `repro_confidence`), `/z-plan` + `/z-brainstorm` (GRILL.md precontext detection). |
 
 ## config
 
@@ -37,7 +37,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [skills](./skills.md) | high | `commands/z-amend.md`, `commands/z-brainstorm.md`, `commands/z-debug.md` | Checklists for amending spec, plan, and task checklists consistently. |
+| [skills](./skills.md) | high | `skills/z-amend/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-debug/SKILL.md` | Checklists for amending spec, plan, and task checklists consistently. |
 
 ## repo-root artifacts
 

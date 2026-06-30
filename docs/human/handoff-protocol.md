@@ -1,7 +1,7 @@
 # handoff-protocol
 
 > Last updated: 2026-06-19
-> Covers source: docs/human/handoff-v1.md, docs/schemas/handoff.schema.json, commands/z-handoff.md, scripts/write-handoff.sh
+> Covers source: docs/human/handoff-v1.md, docs/schemas/handoff.schema.json, skills/z-handoff/SKILL.md, scripts/write-handoff.sh
 
 ## Overview
 
@@ -14,7 +14,7 @@ There are three producers. The `/z-handoff` slash command is the agent-facing ex
 ## Key entry points
 
 - `docs/schemas/handoff.schema.json:1` — `handoff schema` — JSON Schema draft 2020-12 defining the full contract; `protocol_version` is an enum `["1.0","1.1"]` (not a const) so both protocol variants validate against the same schema
-- `commands/z-handoff.md:1` — `/z-handoff` — agent-facing command; 5-phase procedure (context detect, assemble/validate, atomic write to plan dir, telemetry, exit); supports `$ARGUMENTS` override of `next_step`
+- `skills/z-handoff/SKILL.md:1` — `/z-handoff` — agent-facing command; 5-phase procedure (context detect, assemble/validate, atomic write to plan dir, telemetry, exit); supports `$ARGUMENTS` override of `next_step`
 - `scripts/write-clear-checkpoint.sh:1` — generic clear-checkpoint producer; writes watcher-readable protocol-1.0 `handoff.json` and emits `clear_checkpoint_written`
 - `scripts/write-handoff.sh:1` — low-level schema writer; reads `Z_HARNESS_PLAN_DIR`, `Z_HARNESS_SLUG`, `Z_HARNESS_AGENT`; protocol version determined by `Z_HARNESS_ATTEND_RESUME`: `"0"` (absent) → `1.0`; `"1"` → `1.1` with 5 required attend env vars
 - `docs/human/handoff-v1.md:1` — protocol narrative — defines status enum, context_files role enum, consumer contract, and examples

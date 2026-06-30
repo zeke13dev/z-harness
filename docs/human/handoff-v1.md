@@ -2,7 +2,7 @@
 
 > Last updated: 2026-06-08
 > Schema: `docs/schemas/handoff.schema.json`
-> Command: `commands/z-handoff.md`
+> Command: `skills/z-handoff/SKILL.md`
 
 ## Overview
 
@@ -109,7 +109,7 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "agent": "pi",
   "slug": "handoff-protocol",
   "status": "context_pressure",
-  "next_step": "Continue implementing the handoff protocol. We completed the schema and human doc. Next: write commands/z-handoff.md — the /handoff command spec for agents.",
+  "next_step": "Continue implementing the handoff protocol. We completed the schema and human doc. Next: write skills/z-handoff/SKILL.md — the /handoff command spec for agents.",
   "context_files": [
     {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/FIX.md", "role": "plan"},
     {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},

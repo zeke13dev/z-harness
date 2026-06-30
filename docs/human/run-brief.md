@@ -1,7 +1,7 @@
 # run-brief — Unified command completion receipt
 
 > Last updated: 2026-06-19
-> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/lint-run-brief.sh, commands/_fragments/run-brief-finalize.md, commands/_fragments/run-brief-halt-finalize-implement-all.md, commands/_fragments/run-brief-halt-finalize-implement-next.md
+> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/lint-run-brief.sh, _fragments/run-brief-finalize.md, _fragments/run-brief-halt-finalize-implement-all.md, _fragments/run-brief-halt-finalize-implement-next.md
 
 ## Overview
 
@@ -126,7 +126,7 @@ Set by `run-brief.sh finalize` (often via `run-status.sh classify` when not pres
 
 ## Finalize sequence (full-profile success path)
 
-Steps follow the canonical ordering in `commands/_fragments/run-brief-finalize.md`.
+Steps follow the canonical ordering in `_fragments/run-brief-finalize.md`.
 
 1. **Aggregate decisions** — if `decisions` is still empty, parse `events.jsonl` via `aggregate_decisions()` and append via `run-brief.sh append-decision`.
 2. **Author the approach (required)** — before calling `run-brief.sh finalize`, the orchestrator MUST set a crisp high-level "How" describing the actual solution:

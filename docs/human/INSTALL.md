@@ -1,15 +1,15 @@
 # INSTALL — z-harness Installation Guide
 
-> Last updated: 2026-06-24
+> Last updated: 2026-06-29
 
 ## Overview
 
-z-harness ships two beta install surfaces:
+z-harness ships two public beta install surfaces:
 
-1. **Setup CLI bootstrap** (`z-harness setup`) for first-run detection, provider/auth checks, and host install/export guidance.
-2. **Host plugin/export install** for Claude Code, OMP/pi, Cursor, and Codex. Claude/Codex have direct plugin installers; Cursor/OMP/pi use export/inject layouts.
+1. **Setup CLI bootstrap** (`z-harness setup`) for first-run detection, provider/auth checks, and Claude/OMP release guidance.
+2. **Host plugin/export install** for Claude Code and OMP. Claude has the direct public plugin installer; OMP uses package/export layouts. Non-core hosts remain explicit source/dev or advanced export-only paths.
 
-The canonical command source is `skills/<id>/SKILL.md`; canonical agent source is `agents/`; runtime/export code is under `runtime/` and `z_harness_cli/`.
+The canonical command source is `skills/<id>/SKILL.md`; canonical agent source is `agents/`; runtime/export code is under `runtime/` and `z_harness_cli/`. The prod allowlist is `z_harness_cli.release_surface`: public defaults are Claude + OMP, while generated mirrors remain scratch output rather than release source.
 
 ## Setup CLI bootstrap
 
@@ -29,7 +29,7 @@ Claude Code installs to:
 ~/.claude/plugins/z-harness@zeke-tools
 ```
 
-Codex installs through the personal marketplace at:
+Codex source/dev plugin installs still use the personal marketplace at:
 
 ```text
 ~/.agents/plugins/marketplace.json
@@ -49,9 +49,9 @@ Use source checkout mode for contributors or active local development:
 git clone https://github.com/zeke13dev/z-harness
 cd z-harness
 bash install.sh --target=claude
-# or
+# advanced/source-only plugin path while developing Codex support
 bash install.sh --target=codex
-# or both
+# source/dev all still includes explicit dev targets
 bash install.sh --target=all
 ```
 
@@ -59,16 +59,15 @@ Source mode requires `.git/`, `skills/`, `agents/`, and `runtime/` in the checko
 
 ## CLI setup and plugin wrapper
 
-After installing the wheel, use setup for first-run guidance or direct plugin install for Claude/Codex:
+After installing the wheel, use setup for first-run guidance or direct plugin install for Claude:
 
 ```bash
 z-harness setup --target all --dry-run
-z-harness setup --target claude,codex --install --force
+z-harness setup --target claude --install --force
 z-harness install --target=claude
-z-harness install --target=codex
 ```
 
-`setup` detects harnesses/providers and prints next steps. `install` wraps `install.sh` from the installed harness payload for Claude/Codex.
+`setup --target all` selects the release defaults (Claude + OMP) in installed prod artifacts. Source checkouts keep explicit dev paths such as `z-harness setup --target codex --install --force`. `install` wraps `install.sh` from the installed harness payload; Claude is the public plugin install path.
 
 ## Tarball mode
 
@@ -76,30 +75,30 @@ Tarball mode installs an audited plugin payload without keeping a source clone:
 
 ```bash
 bash install.sh --target=claude --tarball=<release-tarball-url>
-bash install.sh --target=codex --tarball=<release-tarball-url>
+bash install.sh --target=claude --tarball=<release-tarball-url> --tarball-sha256=<sha256>
 ```
 
-Release tarballs are built by `Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh`, audited by `scripts/audit-tarball.sh`, and uploaded by release CI. They must include `skills/`, `agents/`, `runtime/`, `scripts/`, plugin manifests, and docs needed by the shipped commands, excluding dev-only experimental surfaces from the public prod tarball.
+Release tarballs are built by `Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh`, audited by `scripts/audit-tarball.sh`, and uploaded by release CI. Manifest-backed installs verify `plugin_tarball_sha256` before extracting or replacing an existing plugin install. They must include `skills/`, `agents/`, `runtime/`, `scripts/`, plugin manifests, and docs needed by the shipped commands, excluding dev-only experimental surfaces from the public prod tarball.
 
-## Cursor, OMP/pi, and prod-surface exports
+## OMP package export and advanced target exports
 
-Cursor, OMP/pi, and other non-plugin targets are installed by exporting host-native files into a project or session package:
+OMP is the public package/export target:
 
 ```bash
-z-harness export --host cursor --surface prod --out ./temp/z-harness-cursor --force
 z-harness export --host omp --surface prod --out ./temp/z-harness-omp --force
-z-harness export --host pi --surface prod --out ./temp/z-harness-pi --force
 ```
 
-Use `--surface prod` for public-beta exports. It keeps `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`, while hiding dev-only experimental commands such as `/z-research`, `/z-map`, `/z-overnight`, `/z-attend`, and `z-axiom-*`.
+Use `--surface prod` for public-beta OMP exports. It keeps `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`, while hiding dev-only experimental commands such as `/z-research`, `/z-map`, `/z-overnight`, `/z-attend`, and `z-axiom-*`.
+
+Cursor, Codex, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explicit dev/advanced or export-only targets; they are not selected by installed prod `setup --target all` or prod export defaults.
 
 ## Updating
 
 z-harness has no silent background updater.
 
-- **CLI wheel install:** run `z-harness update` explicitly.
-- **Claude/Codex plugin source symlink:** run `/z-update` in the host or pull the checkout manually; dirty trees abort.
-- **Tarball plugin install:** run the host `/z-update` flow or reinstall from the audited tarball URL.
+- **CLI wheel install:** run `z-harness update` explicitly; it fetches the release manifest, verifies the downloaded wheel, then upgrades via `uv`.
+- **Claude plugin source symlink:** run `/z-update` in Claude or `z-harness update` from the checkout; dirty trees abort and only `git pull --ff-only` is attempted. Source/dev Codex symlinks follow the same deterministic source-checkout update path.
+- **Tarball plugin install:** host `/z-update` does not self-swap tarballs. Reinstall through the deterministic manifest-backed installer, for example `z-harness install --target=claude --force` (use `python3 -m z_harness_cli install ...` from the plugin payload if the executable is not on `PATH`), which passes the audited tarball URL and SHA-256 to `install.sh`.
 - **MCP `z_update` tool:** read-only version check; it does not mutate installs.
 
 ## Data and config locations
@@ -118,7 +117,7 @@ If a plugin path already exists as a regular directory, install refuses to repla
 
 ```bash
 bash install.sh --target=claude --force
-z-harness install --target=codex --force
+z-harness install --target=claude --force
 ```
 
 ## Requirements
@@ -132,6 +131,7 @@ z-harness install --target=codex --force
 
 ```bash
 rm ~/.claude/plugins/z-harness@zeke-tools
+# source/dev Codex plugin cleanup, if you opted into that explicit path:
 codex plugin remove z-harness@personal
 rm ~/plugins/z-harness
 uv tool uninstall z-harness

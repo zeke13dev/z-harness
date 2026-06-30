@@ -153,6 +153,40 @@ def test_repeated_export_reconciles_owned_package_without_touching_siblings(tmp_
     config_text = (export_root / ".omp" / "config.yml").read_text(encoding="utf-8")
     assert "enableAgentsProject: false" in config_text
 
+def test_prod_export_filters_hidden_resources_and_records_gate_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = _make_repo(tmp_path)
+    _make_skill(repo_root, "z-research")
+    _make_skill(repo_root, "z-explore")
+    _make_skill(repo_root, "z-axiom-scan")
+    agents_dir = repo_root / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "axiom-extractor.md").write_text("---\nname: axiom-extractor\n---\n\nhidden\n", encoding="utf-8")
+    (agents_dir / "safe-agent.md").write_text("---\nname: safe-agent\n---\n\nsafe\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+    result = export(repo_root, out)
+
+    from z_harness_cli.adapters.omp_parity_gate import omp_export_fidelity
+
+    package_root = out / ".omp" / "z-harness"
+    assert (out / ".omp" / "config.yml").read_text(encoding="utf-8") == (
+        "# z-harness OMP export discovery guidance.\n"
+        "# Point OMP_PLUGIN_ROOT at the sibling .omp/z-harness package root.\n"
+        "# Keep project AGENTS.md autoload disabled so OMP does not ingest unrelated root context.\n"
+        "skills:\n"
+        "  enableAgentsProject: false\n"
+    )
+    assert (package_root / "manifest.yml").is_file()
+    assert f"fidelity: {omp_export_fidelity()}" in (package_root / "manifest.yml").read_text(encoding="utf-8")
+    assert result.fidelity == omp_export_fidelity()
+    assert (package_root / "skills" / "z-safe" / "SKILL.md").is_file()
+    assert (package_root / "agents" / "safe-agent.md").is_file()
+    assert not (package_root / "skills" / "z-research").exists()
+    assert not (package_root / "skills" / "z-explore").exists()
+    assert not (package_root / "skills" / "z-axiom-scan").exists()
+    assert not (package_root / "agents" / "axiom-extractor.md").exists()
+
 
 def test_valid_profile_path_stays_under_omp_profiles(tmp_path: Path) -> None:
     repo_root = _make_repo(tmp_path)

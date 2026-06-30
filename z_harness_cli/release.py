@@ -246,6 +246,22 @@ def parse_manifest(raw: str, *, allow_file_urls: bool = False) -> ReleaseManifes
     )
 
 
+def require_plugin_tarball_metadata(manifest: ReleaseManifest) -> tuple[str, str]:
+    """Return audited plugin tarball metadata or raise a manifest parse error."""
+
+    if not manifest.plugin_tarball_url:
+        raise ManifestParseError(
+            "Release manifest does not include plugin_tarball_url. "
+            "Pass --tarball explicitly or install from a source checkout."
+        )
+    if not manifest.plugin_tarball_sha256:
+        raise ManifestParseError(
+            "Release manifest does not include plugin_tarball_sha256. "
+            "Pass --tarball explicitly or install from a source checkout."
+        )
+    return manifest.plugin_tarball_url, manifest.plugin_tarball_sha256
+
+
 class VersionComparisonResult:
     """Result of comparing installed version against the release manifest."""
 

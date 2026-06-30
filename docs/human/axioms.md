@@ -1,7 +1,7 @@
 # Axioms
 
 > Last updated: 2026-06-19
-> Covers source: scripts/axiom-store.py, scripts/axiom-extract.py, scripts/build-kernel.py, scripts/resolve-kernel.sh, scripts/build-skill-index.py, agents/axiom-extractor.md, commands/z-axiom-scan.md, commands/z-axiom-list.md, commands/z-axiom-approve.md, commands/z-axiom-reject.md, commands/z-axiom-edit.md, docs/schemas/axiom.schema.json, scripts/config.py, scripts/setup.py
+> Covers source: scripts/axiom-store.py, scripts/axiom-extract.py, scripts/build-kernel.py, scripts/resolve-kernel.sh, scripts/build-skill-index.py, agents/axiom-extractor.md, skills/z-axiom-scan/SKILL.md, skills/z-axiom-list/SKILL.md, skills/z-axiom-approve/SKILL.md, skills/z-axiom-reject/SKILL.md, skills/z-axiom-edit/SKILL.md, docs/schemas/axiom.schema.json, scripts/config.py, scripts/setup.py
 
 ## Overview
 
@@ -111,7 +111,7 @@ The `.z-harness/axioms/` directory and `.z-harness/KERNEL.md` should be added to
 `scripts/build-kernel.py` assembles `KERNEL.md` — the single artifact that every behavioral subagent reads at the start of each task. The kernel contains three sections:
 
 1. **Authority precedence** — the authority boundary verbatim from SPEC, so agents always know axioms are advisory.
-2. **Skill dispatch index** — a compact one-line-per-command table (built by `scripts/build-skill-index.py`, crawling `commands/` frontmatter).
+2. **Skill dispatch index** — a compact one-line-per-command table (built by `scripts/build-skill-index.py`, crawling `skills/*/SKILL.md` frontmatter).
 3. **Approved axioms** — sorted by scope (project before global), discipline applicability, confidence (desc), and recency, truncated to the character budget (`axioms.kernel_budget_chars`, default 6000 chars).
 
 The kernel header carries `source_hash` (SHA-256 over skill index + sorted approved axiom id+statement pairs), `n_axioms`, `drop_count`, `compiler_version`, and `generated_at`. Same inputs always produce a byte-identical body (`generated_at` is the only volatile field, R6).
@@ -140,7 +140,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 - `config` — The resolver (`scripts/config.py _build_resolve_envelope`) applies the axiom layer as the last (lowest-authority) input. `_load_axiom_matches` gates on `axioms.enabled`, validates `<value>` against registered QUESTION_IDS choices, and delegates store access to `axiom-store.py`. Config/memory always win direct conflicts; conflicts are surfaced, not silenced.
 - `agents` — The `axiom-extractor` agent (Sonnet) wraps `axiom-extract.py` with LLM judgement; it is dispatched by `/z-axiom-scan`. Behavioral subagents (implementer, reviewer, auditor, consultants, spec-precheck, pre-reviewer, self-reviewer) each read `KERNEL.md` at task start, either via a `kernel_path` injected by the caller or via self-resolution with `resolve-kernel.sh`.
 - `commands` — The five `/z-axiom-*` commands are the user-facing surface. `/z-setup` (axioms scope) configures keys and installs the `CLAUDE.md` kernel pointer. `/z-plan`, `/z-audit`, and `/z-debug` each resolve the kernel path once at run start and inject it into every behavioral agent dispatch.
-- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner (resolves `metrics.jsonl` via `plan-path.sh base_dir`); `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel by crawling `commands/` frontmatter.
+- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner (resolves `metrics.jsonl` via `plan-path.sh base_dir`); `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel by crawling `skills/*/SKILL.md` frontmatter.
 
 ## Key entry points
 
@@ -153,7 +153,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 - `scripts/axiom-extract.py:105` — `_resolved_base_dir` — Resolve artifact base directory via plan-path.sh base_dir (Phase-D external-base).
 - `scripts/build-kernel.py:1` — `build-kernel` — Compile KERNEL.md for a scope. R1/R2/R5/R6 invariants. --print-hash: non-mutating hash mode.
 - `scripts/resolve-kernel.sh:1` — `resolve-kernel` — Resolve absolute KERNEL.md path; non-blocking staleness check via --print-hash.
-- `scripts/build-skill-index.py:198` — `build_skill_index` — Crawl commands/ frontmatter; emit compact dispatch table for KERNEL.md. (skills/ dir removed 2026-06-17; only commands/ is crawled now.)
+- `scripts/build-skill-index.py:198` — `build_skill_index` — Crawl `skills/*/SKILL.md` frontmatter; emit compact dispatch table for KERNEL.md. Skills are the sole command source tier.
 - `agents/axiom-extractor.md:1` — `axiom-extractor` — Sonnet-tier agent: sharpen statements, merge near-duplicates, draft falsifiability fields, cap at <=5 candidates.
 - `scripts/config.py:2109` — `_load_axiom_matches` — Load graph-valid approved axioms matching a question_id; validates <value> against QUESTION_IDS choices; gates on axioms.enabled.
 - `scripts/config.py:2475` — `_build_resolve_envelope` — Core resolver applying axiom layer: agree / gap-fill / conflict outcomes.
@@ -174,7 +174,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 - **Mutual conflict exemption requires demotion:** `validate_graph` check 2 only exempts a supersedes relationship from mutual-conflict errors if the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be rejected first.
 - **Project scope _load_active_set always includes global records.** This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught.
 - **metrics.jsonl is now resolved via external base:** Since the Phase-D flip, `axiom-extract.py` calls `plan-path.sh base_dir` to find the aggregate metrics file; the hardcoded `repo_root/z-harness/metrics.jsonl` path is only a last-resort fallback. Running `/z-axiom-scan` against a repo where the external base is not set up will mine zero candidates from the wrong location.
-- **build-skill-index.py only crawls commands/ now:** the `skills/` directory was removed 2026-06-17. The `_crawl_skills` helper still exists in the source for backward-compatibility but returns an empty list since the directory is gone. The skill dispatch index in KERNEL.md reflects commands/ only.
+- **build-skill-index.py uses the current skill source tier:** `skills/*/SKILL.md` is the canonical command source. The skill dispatch index in KERNEL.md is generated from skill frontmatter only; legacy `commands/` directory assumptions are stale.
 
 ## Examples
 

@@ -25,6 +25,8 @@ __pycache__/
 /.cursor/
 /prompts/
 /.agent/
+/.pi/
+/.omp/z-harness/
 /.codex-plugin/
 /.claude/scheduled_tasks.lock
 

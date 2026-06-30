@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from z_harness_cli import release_surface
 
 try:
     import yaml
@@ -485,77 +486,17 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_subagent_dispatch":{"command_id": "/z-subagent-dispatch", "description": "Dispatch a subagent via LLM CLI",                                  "is_heavy": True},
 }
 
-_PROD_HIDDEN_TOOL_NAMES = frozenset(
-    {
-        "z_research",
-        "z_map",
-        "z_overnight",
-        "z_attend",
-        "z_axiom_scan",
-        "z_axiom_list",
-        "z_axiom_approve",
-        "z_axiom_reject",
-        "z_axiom_edit",
-    }
-)
-
-_PROD_HIDDEN_SKILL_IDS = frozenset(
-    {
-        "z-research",
-        "z-map",
-        "z-overnight",
-        "z-attend",
-        "z-axiom-scan",
-        "z-axiom-list",
-        "z-axiom-approve",
-        "z-axiom-reject",
-        "z-axiom-edit",
-    }
-)
-
-
-def _candidate_repo_roots() -> list[Path]:
-    roots: list[Path] = [Path.cwd()]
-    module_path = Path(__file__).resolve()
-    roots.extend(module_path.parents[:4])
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    for root in roots:
-        resolved = root.resolve()
-        if resolved not in seen:
-            unique.append(resolved)
-            seen.add(resolved)
-    return unique
-
-
-def _packaged_prod_surface_detected() -> bool:
-    """Infer prod when dev-only skill files were omitted from the package."""
-    for root in _candidate_repo_roots():
-        skills_dir = root / "skills"
-        if not skills_dir.is_dir():
-            continue
-        hidden_present = any((skills_dir / skill_id / "SKILL.md").is_file() for skill_id in _PROD_HIDDEN_SKILL_IDS)
-        visible_present = any((skills_dir / skill_id / "SKILL.md").is_file() for skill_id in ("z-plan", "z-brainstorm", "z-learn"))
-        if visible_present and not hidden_present:
-            return True
-    return False
-
-
-
 def _release_surface() -> str:
-    explicit = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
-    if explicit:
-        return explicit.strip().lower()
-    return "prod" if _packaged_prod_surface_detected() else "dev"
+    return release_surface.default_surface()
 
 
 def _active_command_tools() -> dict[str, dict[str, Any]]:
-    if _release_surface() not in {"prod", "production"}:
+    if _release_surface() == "dev":
         return COMMAND_TOOLS
     return {
         name: meta
         for name, meta in COMMAND_TOOLS.items()
-        if name not in _PROD_HIDDEN_TOOL_NAMES
+        if release_surface.is_prod_visible("mcp_tools", name, "prod")
     }
 
 

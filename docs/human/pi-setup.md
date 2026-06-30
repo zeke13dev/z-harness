@@ -51,7 +51,7 @@ Discovery comes entirely from `OMP_PLUGIN_ROOT`.
 ### Export
 
 ```bash
-python3 -m z_harness_cli export --host omp --out exports/omp --force
+python3 -m z_harness_cli export --host omp --out temp/exports/omp --force
 ```
 
 Emits the OMP-native package layout under `.omp/z-harness/`:

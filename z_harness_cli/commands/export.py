@@ -33,20 +33,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+from z_harness_cli import release_surface
 
-_EXPORT_ONLY_HOSTS = frozenset({"pi", "windsurf", "kiro", "cline", "copilot"})
+_EXPORT_ONLY_HOSTS = release_surface.runtime_driver_export_hosts()
 _RUNTIME_DRIVER_HOSTS = _EXPORT_ONLY_HOSTS
-
-_PROD_HIDDEN_SKILL_IDS = (
-    "z-research",
-    "z-map",
-    "z-overnight",
-    "z-attend",
-)
-_PROD_HIDDEN_AGENT_IDS = (
-    "axiom-extractor",
-    "research-judge",
-)
 
 
 def _remove_generated_path(path: Path) -> None:
@@ -57,12 +47,11 @@ def _remove_generated_path(path: Path) -> None:
 
 
 def _cleanup_prod_surface(dest: Path) -> None:
-    """Remove stale dev-only files before writing a prod-surface export."""
-    surface = (os.environ.get("Z_HARNESS_RELEASE_SURFACE") or "dev").strip().lower()
-    if surface not in {"prod", "production"}:
+    """Remove stale manifest-excluded files before writing a prod-surface export."""
+    if release_surface.default_surface() != "prod":
         return
 
-    skill_ids = set(_PROD_HIDDEN_SKILL_IDS)
+    skill_ids = set(release_surface.dev_only_skill_ids())
     for skills_dir in (
         dest / "skills",
         dest / ".cursor" / "skills",
@@ -70,31 +59,16 @@ def _cleanup_prod_surface(dest: Path) -> None:
         dest / ".omp" / "z-harness" / "skills",
     ):
         if skills_dir.is_dir():
-            skill_ids.update(path.name for path in skills_dir.glob("z-axiom-*"))
+            for pattern in release_surface.dev_only_skill_patterns():
+                skill_ids.update(path.name for path in skills_dir.glob(pattern))
 
     for skill_id in skill_ids:
-        for path in (
-            dest / "skills" / skill_id,
-            dest / "prompts" / f"{skill_id}.md",
-            dest / ".cursor" / "skills" / skill_id,
-            dest / ".cursor" / "rules" / f"{skill_id}.mdc",
-            dest / ".agent" / "skills" / skill_id,
-            dest / ".agent" / "workflows" / f"{skill_id}.md",
-            dest / ".agent" / "rules" / f"z-harness-{skill_id}.md",
-            dest / ".omp" / "z-harness" / "skills" / skill_id,
-            dest / ".omp" / "z-harness" / "prompts" / f"{skill_id}.md",
-            dest / ".omp" / "z-harness" / "rules" / f"{skill_id}.md",
-        ):
-            _remove_generated_path(path)
+        for relative in release_surface.cleanup_relative_paths_for_id("skills", skill_id):
+            _remove_generated_path(dest / relative)
 
-    for agent_id in _PROD_HIDDEN_AGENT_IDS:
-        for path in (
-            dest / "prompts" / f"{agent_id}.md",
-            dest / ".cursor" / "rules" / f"{agent_id}.mdc",
-            dest / ".agent" / "rules" / f"z-harness-{agent_id}.md",
-            dest / ".omp" / "z-harness" / "agents" / f"{agent_id}.md",
-        ):
-            _remove_generated_path(path)
+    for agent_id in release_surface.dev_only_agent_ids():
+        for relative in release_surface.cleanup_relative_paths_for_id("agents", agent_id):
+            _remove_generated_path(dest / relative)
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +227,7 @@ def run(
     in_place: bool,
     out: Optional[str],
     force: bool,
-    surface: str = "dev",
+    surface: Optional[str] = None,
 ) -> None:
     """Entry point called from __main__.export_cmd."""
     from z_harness_cli.adapters.registry import (
@@ -264,7 +238,9 @@ def run(
     )
 
     repo_root = _repo_root()
-    if surface not in {"dev", "prod"}:
+    try:
+        resolved_surface = release_surface.default_surface(surface)
+    except ValueError:
         typer.echo("Error: --surface must be one of: dev, prod", err=True)
         raise typer.Exit(code=2)
 
@@ -303,14 +279,22 @@ def run(
 
     runtime_hosts: list[str] = []
     if all_hosts:
+        default_hosts = set(release_surface.public_release_hosts()) if resolved_surface == "prod" else None
         adapters = [
             adapter
             for adapter, result in detect_all()
-            if result.installed
+            if result.installed and (default_hosts is None or adapter.name in default_hosts)
         ]
         runtime_hosts = []
         if not adapters:
-            typer.echo("Error: no installed hosts found.", err=True)
+            if default_hosts is None:
+                typer.echo("Error: no installed hosts found.", err=True)
+            else:
+                typer.echo(
+                    "Error: no installed release-supported hosts found (Claude or OMP). "
+                    "Use --host with an explicit dev/advanced target if needed.",
+                    err=True,
+                )
             raise typer.Exit(code=1)
         # Multiple hosts sharing one destination root — namespace per host to
         # prevent collisions.
@@ -330,6 +314,12 @@ def run(
                 raise typer.Exit(code=1)
             adapters = [adapter]
             runtime_hosts = []
+        if resolved_surface == "prod" and host not in release_surface.public_release_hosts():
+            typer.echo(
+                f"warning: {host} is an explicit dev/advanced or export-only target; "
+                "prod defaults are Claude and OMP.",
+                err=True,
+            )
         # Single explicit host — write directly to dest, no sub-directory.
         namespace_by_host = False
     else:
@@ -347,7 +337,7 @@ def run(
     # Run exports.
     # -----------------------------------------------------------------------
     dest.mkdir(parents=True, exist_ok=True)
-    os.environ["Z_HARNESS_RELEASE_SURFACE"] = surface
+    os.environ["Z_HARNESS_RELEASE_SURFACE"] = resolved_surface
 
     try:
         for adapter in adapters:

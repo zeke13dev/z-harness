@@ -70,16 +70,11 @@ EXCLUDES=(
   "--exclude=./providers.json"
 )
 
-if [[ "${Z_HARNESS_RELEASE_SURFACE:-dev}" == "prod" || "${Z_HARNESS_RELEASE_SURFACE:-dev}" == "production" ]]; then
-  EXCLUDES+=(
-    "--exclude=./skills/z-research"
-    "--exclude=./skills/z-map"
-    "--exclude=./skills/z-overnight"
-    "--exclude=./skills/z-attend"
-    "--exclude=./skills/z-axiom-*"
-    "--exclude=./agents/axiom-extractor.md"
-    "--exclude=./agents/research-judge.md"
-  )
+SURFACE="${Z_HARNESS_RELEASE_SURFACE:-dev}"
+if [[ "$SURFACE" == "prod" || "$SURFACE" == "production" ]]; then
+  while IFS= read -r exclude_arg; do
+    [[ -n "$exclude_arg" ]] && EXCLUDES+=("$exclude_arg")
+  done < <(python3 -m z_harness_cli.release_surface tar-excludes --surface "$SURFACE")
 fi
 
 # Enumerate legacy plan dirs — any z-harness/<slug>/ that contains PLAN.md,

@@ -1,11 +1,11 @@
 # agy-plugin.yaml
 # z-harness agy export manifest — read by runtime/drivers/antigravity/export.py
-# NOT a native Antigravity file format (agy does not read this)
+# Explicit dev/advanced export surface; NOT a public release default and NOT a native Antigravity file format
 schema_version: 1
 
 metadata:
   name: z-harness
-  description: z-harness planning and implementation workflow for Antigravity IDE
+  description: z-harness planning workflow export for Antigravity IDE (explicit dev/advanced surface)
   source_repo: https://github.com/zeke13dev/z-harness
 
 # Commands → .agent/workflows/*.md

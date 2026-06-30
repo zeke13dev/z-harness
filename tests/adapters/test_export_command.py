@@ -602,6 +602,51 @@ class TestAllHostsMode(_ExportCmdBase):
         for adapter in adapters:
             adapter.export_payload.assert_called_once()
 
+
+    def test_prod_all_hosts_exports_only_release_supported_adapters(self):
+        """Installed prod --all is narrowed to Claude/OMP release defaults."""
+        claude = _make_adapter("claude", "native")
+        codex = _make_adapter("codex", "flattened")
+        omp = _make_adapter("omp", "native")
+        state_root = self.tmp_root / "state-root"
+
+        with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
+            "z_harness_cli.commands.export._resolve_default_dest",
+            return_value=state_root,
+        ), patch(
+            "z_harness_cli.commands.export._repo_root",
+            return_value=REPO_ROOT,
+        ), patch(
+            "z_harness_cli.adapters.registry.detect_all",
+            return_value=[(a, MagicMock(installed=True)) for a in (claude, codex, omp)],
+        ):
+            result = self.runner.invoke(app, ["export", "--all"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        claude.export_payload.assert_called_once()
+        omp.export_payload.assert_called_once()
+        codex.export_payload.assert_not_called()
+
+    def test_prod_explicit_advanced_host_is_labeled_not_default(self):
+        """Explicit non-core prod exports remain available but are labeled advanced."""
+        codex = _make_adapter("codex", "flattened")
+        state_root = self.tmp_root / "state-root"
+
+        with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
+            "z_harness_cli.commands.export._resolve_default_dest",
+            return_value=state_root,
+        ), patch(
+            "z_harness_cli.commands.export._repo_root",
+            return_value=REPO_ROOT,
+        ), patch(
+            "z_harness_cli.adapters.registry.select",
+            return_value=(codex, MagicMock(installed=True)),
+        ):
+            result = self.runner.invoke(app, ["export", "--host", "codex"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("explicit dev/advanced or export-only target", result.output)
+        codex.export_payload.assert_called_once()
     def test_all_hosts_prints_fidelity_for_each(self):
         """--all prints fidelity for every adapter."""
         adapters = [

@@ -1,7 +1,7 @@
 # z-debug
 
 > Last updated: 2026-05-24
-> Covers source: commands/z-debug.md
+> Covers source: skills/z-debug/SKILL.md
 
 ## What it does
 
@@ -232,6 +232,6 @@ If either condition fails, either upgrade the root cause statement or return to 
 
 ## See also
 
-- `commands/z-debug.md` — full phase-by-phase procedure with prompts, schemas, and loop logic.
+- `skills/z-debug/SKILL.md` — full phase-by-phase procedure with prompts, schemas, and loop logic.
 - `docs/human/z-fix.md` — the lightweight companion for known-root-cause bugs.
 - `docs/human/commands.md` — index of all slash commands.

@@ -5,10 +5,10 @@
 
 ## Overview
 
-The pi export builds resources for [pi](https://pi.dev) — a coding agent harness that z-harness itself runs inside. Unlike the Cursor/Codex/agy exports, pi has no native subagent dispatch primitive. Fan-out runs through pi's **subagent extension**, which this export vendors under `exports/pi/extensions/subagent/`. pi is **export-only**: there is no adapter, HostDriver, or launch/inject host. The export pipeline lives entirely in `runtime/drivers/pi/export.py`, invoked directly via `from runtime.drivers.pi.export import export`.
+The pi export builds resources for [pi](https://pi.dev) — a coding agent harness that z-harness itself runs inside. Unlike the Cursor/Codex/agy exports, pi has no native subagent dispatch primitive. Fan-out runs through pi's **subagent extension**, which this export vendors under the selected export root, for example `temp/exports/pi/extensions/subagent/`. pi is **export-only**: there is no adapter, HostDriver, or launch/inject host. The export pipeline lives entirely in `runtime/drivers/pi/export.py`, invoked directly via `from runtime.drivers.pi.export import export`.
 
 The export tree has two classes of output:
-- **Generated** from z-harness source (`agents/`, `skills/`, with `commands/` kept as an empty/back-compat source key): agent files (`agents/<id>.md`), prompt files (`prompts/<id>.md`), and the `AGENTS.md` index. `skills/<id>/SKILL.md` is the hand-authored command/skill source tier; pi renders those skills as prompts.
+- **Generated** from z-harness source (`agents/` and `skills/`; the legacy `commands` source key stays empty for compatibility): agent files (`agents/<id>.md`), prompt files (`prompts/<id>.md`), and the `AGENTS.md` index. `skills/<id>/SKILL.md` is the hand-authored command/skill source tier; pi renders those skills as prompts.
 - **Copied verbatim** from `scripts/pi_assets/`: the `explore` agent (pi-only; no z-harness source), the subagent extension (`index.ts`, `agents.ts`), the AGENTS preamble, `CAPABILITIES.md`, and `README.md`.
 
 The explore agent is the headline fan-out agent. It is read-only, returns `path:line` conclusions, and is designed for parallel dispatch via pi's `subagent { "tasks": [...] }` syntax.
@@ -51,7 +51,7 @@ Agents without a model tier in their frontmatter inherit pi's configured default
 - `runtime/drivers/pi/export.py:193` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser.
 - `runtime/drivers/pi/export.py:223` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools.
 - `runtime/drivers/pi/export.py:295` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser). Silently skips if PyYAML is not available.
-- `scripts/lint-frontmatter.sh:1` — `lint-frontmatter.sh` — Standalone lint script. Scans `agents/`, `skills/`, `personas/`, `scripts/pi_assets/`, and any back-compat `commands/` files for `.md` files with YAML frontmatter and validates each with a strict YAML 1.2 parser. Requires PyYAML; skips gracefully if unavailable.
+- `scripts/lint-frontmatter.sh:1` — `lint-frontmatter.sh` — Standalone lint script. Scans `agents/`, `skills/`, `personas/`, `scripts/pi_assets/`, and any legacy/back-compat command files for `.md` files with YAML frontmatter and validates each with a strict YAML 1.2 parser. Requires PyYAML; skips gracefully if unavailable.
 - `Makefile:74` — `lint-frontmatter` target — `make lint-frontmatter` invokes `scripts/lint-frontmatter.sh`. Wired into CI at `.github/workflows/tests.yml:49`.
 - `scripts/pi_assets/AGENTS.preamble.md:1` — `AGENTS.preamble.md` — Fan-out rule preamble appended to `AGENTS.md`; encodes "doc-fetcher first, explore for gaps" discipline.
 - `scripts/pi_assets/agents/explore.md:1` — `explore.md` — pi-only fan-out recon agent definition with YAML frontmatter.
@@ -60,9 +60,9 @@ Agents without a model tier in their frontmatter inherit pi's configured default
 ## How it interacts with others
 
 - `multi-ide-exports` — pi is a separate export target from Cursor/Codex/agy. It has its own driver (`runtime/drivers/pi/export.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc. pi is export-only: no adapter, no `--host pi`, not a launch/inject host.
-- `skills` — `export()` enumerates `skills/*/SKILL.md` as pi prompt files. `commands/` remains a back-compat source key but is empty in the current tree.
+- `skills` — `export()` enumerates `skills/*/SKILL.md` as pi prompt files. the legacy `commands` source key remains only as an empty compatibility field.
 - `agents` — `export()` enumerates all z-harness agent definitions and renders them as pi agent files with normalized frontmatter. The `explore` agent is pi-only and lives in `scripts/pi_assets/`.
-- `export-utils` — `export.py` imports `ExportResult`, `_parse_frontmatter`, `enumerate_sources`, `validate_capabilities` from `runtime/drivers/_export_utils.py`. `enumerate_sources` returns `commands: []` when the legacy `commands/` directory is absent, while `skills/` drives prompt generation in the current tree.
+- `export-utils` — `export.py` imports `ExportResult`, `_parse_frontmatter`, `enumerate_sources`, `validate_capabilities` from `runtime/drivers/_export_utils.py`. `enumerate_sources` returns `commands: []` when the legacy legacy command source directory is absent, while `skills/` drives prompt generation in the current tree.
 - `test-export-golden` — golden snapshot tests drive `runtime.drivers.pi.export` directly via dynamic import in `runtime/tests/test_export_golden.py`.
 - `capabilities-matrix` — marks pi as export-only and OMP as a first-class native host (T009); Claude Code is the OMP ground-truth parity target; pi is not a stepping stone to OMP native fidelity.
 - `.omp/config.yml` — belongs to OMP sessions, not pi export. Its `skills.enableAgentsProject: false` setting prevents OMP from auto-loading this repo's large root `AGENTS.md`; OMP package discovery must use an explicit package root instead.
@@ -86,7 +86,7 @@ Additionally, `scripts/lint-frontmatter.sh` provides source-tree-level lint befo
 
 - pi is **export-only** — there is no adapter, no `--host pi`, no subprocess/SDK tier. The z-harness runtime cannot launch pi or inject sessions into it.
 - pi has no native subagent dispatch. Fan-out works through the vendored `extensions/subagent/` extension, which spawns isolated `pi` child processes.
-- `skills/` is the source for prompts. `commands/` is absent in the current tree and remains only as a back-compat source key so export drivers do not KeyError.
+- `skills/` is the source for prompts. the legacy command source directory is absent in the current tree and remains only as an empty back-compat source key so export drivers do not KeyError.
 - Asset resolution is `__file__`-relative (MINOR-7). The module is standalone-importable without `z_harness_cli`. If you move `export.py` without moving `scripts/pi_assets/`, the fallback path inferred from `__file__` will break.
 - `_validate_frontmatter_yaml` silently skips if PyYAML is not installed (import error fallback). The export succeeds but the strict YAML gate is bypassed.
 - Multi-line `Agent()`/`Skill()` call rewrites are line-based. Only the line containing `Agent(` / `Skill(` is rewritten; argument lines on following lines are left in place.
@@ -98,14 +98,14 @@ Additionally, `scripts/lint-frontmatter.sh` provides source-tree-level lint befo
 
 <!-- DO NOT EDIT this section by hand — regenerated from docs/llm/pi-export.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
-- **2026-06-08 bugfix** ([pi-export](#)) — Subagent YAML dispatch bug resolved. pi's YAML frontmatter parser (dist/utils/frontmatter.js) could fail to parse agent .md files when the description field contained an unquoted colon (triggered by 'subagent `tasks: [...]`' in explore.md). Three-layer defense applied: (1) pi runtime patched with quoteUnquotedColonValues() + catch-and-retry in frontmatter.js; (2) scripts/pi_assets/agents/explore.md description quoted at source; (3) exports/pi/agents/explore.md description quoted (generated from source). Additionally, runtime/drivers/pi/export.py:193 _yaml_quote already prevents this for all generated agent files by quoting any description containing regex [:[]{}#"']. _(tags: pi-export, yaml, frontmatter, bugfix)_
+- **2026-06-08 bugfix** ([pi-export](#)) — Subagent YAML dispatch bug resolved. pi's YAML frontmatter parser (dist/utils/frontmatter.js) could fail to parse agent .md files when the description field contained an unquoted colon (triggered by 'subagent `tasks: [...]`' in explore.md). Three-layer defense applied: (1) pi runtime patched with quoteUnquotedColonValues() + catch-and-retry in frontmatter.js; (2) scripts/pi_assets/agents/explore.md description quoted at source; (3) the generated pi agent description is quoted when exported from source. Additionally, runtime/drivers/pi/export.py:193 _yaml_quote already prevents this for all generated agent files by quoting any description containing regex [:[]{}#"']. _(tags: pi-export, yaml, frontmatter, bugfix)_
 
-- **2026-06-08 infra** ([pi-export](#)) — Post-review YAML validation hardening. Three additions: (1) runtime/drivers/pi/export.py:295 _validate_frontmatter_yaml() re-validates every generated/copied agent file with yaml.safe_load() — strict YAML 1.2 parser — after the custom regex frontmatter parser passes; imports yaml with silent skip fallback. (2) scripts/lint-frontmatter.sh scans agents/, skills/, commands/, personas/, scripts/pi_assets/ for .md frontmatter and validates with strict YAML 1.2 parser; wired into make lint-frontmatter. (3) Two infra issues posted: runtime/drivers/pi/export.py copied assets bypass _yaml_quote (only generated agents get quoting), and make lint-frontmatter is not wired into CI (.github/workflows/tests.yml). The CI gap means frontmatter regressions can land on main undetected until the next export. _(tags: pi-export, yaml, frontmatter, validation, ci, infra)_
+- **2026-06-08 infra** ([pi-export](#)) — Post-review YAML validation hardening. Three additions: (1) runtime/drivers/pi/export.py:295 _validate_frontmatter_yaml() re-validates every generated/copied agent file with yaml.safe_load() — strict YAML 1.2 parser — after the custom regex frontmatter parser passes; imports yaml with silent skip fallback. (2) scripts/lint-frontmatter.sh scans agents/, skills/, personas/, scripts/pi_assets/ for .md frontmatter and validates with strict YAML 1.2 parser; wired into make lint-frontmatter. (3) Two infra issues posted: runtime/drivers/pi/export.py copied assets bypass _yaml_quote (only generated agents get quoting), and make lint-frontmatter is not wired into CI (.github/workflows/tests.yml). The CI gap means frontmatter regressions can land on main undetected until the next export. _(tags: pi-export, yaml, frontmatter, validation, ci, infra)_
 
 ## Examples
 
-- `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('exports/pi'))"` — regenerates the full `exports/pi/` tree with all four YAML defense layers.
+- `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('temp/exports/pi'))"` — regenerates the full `temp/exports/pi/` tree with all four YAML defense layers.
 - `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('/tmp/pi-test'))"` — exports to a non-default output directory.
 - `/z-export --target=pi` — invokes the pi export via the z-harness command wrapper (pi is export-only; no adapter host).
-- `make lint-frontmatter` — validates YAML frontmatter across all source `.md` files (agents, commands, personas, pi_assets).
+- `make lint-frontmatter` — validates YAML frontmatter across all source `.md` files (agents, skills, personas, pi_assets).
 - `bash scripts/lint-frontmatter.sh` — runs the standalone lint directly.
