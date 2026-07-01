@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -19,6 +21,14 @@ from hermes.mcp_hermes_orchestrator import (  # noqa: E402
 from hermes import so_watcher  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_spawn_sleep(monkeypatch):
+    """Neutralise the spawn settle/readiness sleeps so tests stay fast."""
+    monkeypatch.setattr(
+        "hermes.mcp_hermes_orchestrator._sleep", lambda *_a, **_k: None
+    )
+
+
 class FakeTmuxRunner:
     def __init__(self):
         self.calls = []
@@ -28,7 +38,7 @@ class FakeTmuxRunner:
             {"argv": list(argv), "cwd": cwd, "env": dict(env or {}), "timeout": timeout}
         )
         text = " ".join(argv)
-        stdout = "Need input?" if "capture-pane" in text else ""
+        stdout = "Need input?\n>" if "capture-pane" in text else ""
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
 
@@ -74,16 +84,20 @@ def test_fake_llm_to_mcp_tmux_to_reply_flow(tmp_path):
     assert launched.status == "running"
     assert runner.calls[0]["argv"][:2] == ["ssh", "zeke-pc"]
     assert "tmux new-session" in runner.calls[0]["argv"][2]
-    assert "tmux send-keys" in runner.calls[1]["argv"][2]
-    assert "z-debug" in runner.calls[1]["argv"][2]
-    assert "fix blah" in runner.calls[1]["argv"][2]
+    # calls[1] is the readiness capture-pane poll; the prompt lands in calls[2],
+    # with Enter sent separately in calls[3].
+    assert "tmux capture-pane" in runner.calls[1]["argv"][2]
+    assert "tmux send-keys" in runner.calls[2]["argv"][2]
+    assert "z-debug" in runner.calls[2]["argv"][2]
+    assert "fix blah" in runner.calls[2]["argv"][2]
+    assert runner.calls[3]["argv"][2].strip().endswith("Enter")
 
     continued = send_to_so_session("so-test", "continue", cfg, runner=runner)
     read_back = read_so_session("so-test", cfg, runner=runner)
 
     assert continued.turn_count == 2
     assert read_back.status == "needs_input"
-    assert SoSessionStore.from_config(cfg).get("so-test").last_output == "Need input?"
+    assert SoSessionStore.from_config(cfg).get("so-test").last_output == "Need input?\n>"
 
 
 def test_deterministic_watcher_script_runs_one_poll(monkeypatch, capsys):

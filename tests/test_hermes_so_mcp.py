@@ -27,6 +27,14 @@ from hermes.mcp_hermes_orchestrator import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_spawn_sleep(monkeypatch):
+    """Neutralise the spawn settle/readiness sleeps so tests stay fast."""
+    monkeypatch.setattr(
+        "hermes.mcp_hermes_orchestrator._sleep", lambda *_a, **_k: None
+    )
+
+
 class FakeRunner:
     def __init__(self, fail_on=None, capture="Proceed?"):
         self.fail_on = fail_on or set()
@@ -89,10 +97,18 @@ def test_start_session_creates_tmux_and_sends_initial_prompt(tmp_path):
     assert record.session_id == "so-test"
     assert record.status == "running"
     assert runner.calls[0]["argv"][:3] == ["tmux", "new-session", "-d"]
-    assert runner.calls[1]["argv"][:3] == ["tmux", "send-keys", "-t"]
-    prompt = runner.calls[1]["argv"][4]
+    # Readiness poll before typing, so the booting TUI has painted a frame.
+    assert runner.calls[1]["argv"][:2] == ["tmux", "capture-pane"]
+    # Prompt is typed literally (-l), then Enter is a SEPARATE keystroke so the
+    # composer's bracketed-paste doesn't swallow the submit.
+    submit = runner.calls[2]["argv"]
+    assert submit[:3] == ["tmux", "send-keys", "-t"]
+    assert submit[4] == "-l"
+    prompt = submit[5]
     assert "fix blah" in prompt
     assert "z-debug" in prompt
+    assert runner.calls[3]["argv"][:2] == ["tmux", "send-keys"]
+    assert runner.calls[3]["argv"][-1] == "Enter"
     assert SoSessionStore.from_config(cfg).get("so-test").tmux_session
 
 
@@ -146,6 +162,30 @@ def test_read_captures_on_demand_and_sets_needs_input(tmp_path):
     assert events[0]["event"] == "so_needs_input"
     assert events[0]["session_id"] == "so-test"
     assert events[0]["discord_thread_id"] == "thread-1"
+
+
+def test_read_detects_omp_selection_menu(tmp_path):
+    # omp Accept/Defer/Reject-style menus end in a navigation footer (below a
+    # separator rule), NOT a prompt char — these must still read as needs_input.
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+    menu = (
+        "│ Defer                                              │\n"
+        "│    Keep it in the retro, no edits now.             │\n"
+        "│ Reject                                             │\n"
+        "│  Other (type your own)                             │\n"
+        "──────────────────────────────────────────────────────\n"
+        " up/down navigate  enter select  esc cancel\n"
+        "──────────────────────────────────────────────────────"
+    )
+    record = read_so_session("so-test", cfg, runner=FakeRunner(capture=menu))
+
+    assert record.status == "needs_input"
+    events = drain_signal_events(cfg)
+    assert events[0]["event"] == "so_needs_input"
+    assert events[0]["session_id"] == "so-test"
 
 
 def test_read_deduplicates_needs_input_signals(tmp_path):

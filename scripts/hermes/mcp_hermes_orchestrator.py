@@ -11,7 +11,8 @@ import re
 import shlex
 import subprocess
 import sys
-from typing import Any, Optional, Protocol
+import time
+from typing import Any, Callable, Optional, Protocol
 from uuid import uuid4
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -330,6 +331,47 @@ def _run_for_alias(
     return ["ssh", alias.ssh_target, command], None
 
 
+# --- spawn robustness: avoid the send-keys/Enter race against a booting TUI ---
+#: How many times to poll capture-pane for a painted first frame before giving up.
+_TUI_READY_ATTEMPTS = 40
+#: Seconds between readiness polls (40 * 0.25 = up to 10s bounded wait).
+_TUI_READY_INTERVAL = 0.25
+#: Settle gap between typing the prompt and sending the submit Enter, so the
+#: TUI's bracketed-paste closes before Enter arrives.
+_SUBMIT_SETTLE_SECONDS = 0.2
+#: Indirection so tests can monkeypatch the sleep to a no-op.
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _await_tui_ready(
+    runner: CommandRunner,
+    alias: DiscordProjectAlias,
+    record: SoSessionRecord,
+    env: dict[str, str],
+) -> bool:
+    """Wait until the agent TUI has painted its first frame.
+
+    A freshly created tmux window is not immediately ready for input: a
+    ``send-keys`` fired before the TUI paints can land in a half-initialised
+    composer where the trailing Enter is swallowed, leaving the prompt typed
+    but never submitted (the session then sits idle forever). We poll
+    ``capture-pane`` until the pane is non-empty. Best-effort: on timeout we
+    return ``False`` and the caller proceeds anyway rather than failing spawn.
+    """
+    for attempt in range(_TUI_READY_ATTEMPTS):
+        argv, cwd = _run_for_alias(
+            alias,
+            ["tmux", "capture-pane", "-p", "-t", record.tmux_session],
+            env,
+        )
+        proc = runner.run(argv, cwd=cwd, env=env, timeout=15)
+        if proc.returncode == 0 and (proc.stdout or "").strip():
+            return True
+        if attempt < _TUI_READY_ATTEMPTS - 1:
+            _sleep(_TUI_READY_INTERVAL)
+    return False
+
+
 def _run_checked(
     runner: CommandRunner,
     alias: DiscordProjectAlias,
@@ -393,14 +435,24 @@ def _needs_input(text: str) -> bool:
     Garbage like \"? for keyboard shortcuts\" is NOT matched.
     """
     lines = [line.rstrip() for line in text.strip().splitlines() if line.strip()]
-    tail = lines[-3:] if len(lines) >= 3 else lines
-    for line in tail:
+    # Prompt-char check stays tight (last 3 lines) to avoid matching a stray
+    # '>' inside code/box-drawing output.
+    for line in lines[-3:]:
         stripped = line.strip()
         # omp prompt: line ending with ❯ or >
         if stripped.endswith("❯") or stripped.endswith(">"):
             return True
         # Claude Code prompt: bare > on its own line
         if stripped == ">":
+            return True
+    # Interactive selection menus (omp Accept/Defer/Reject, Claude option
+    # pickers) don't end in a prompt char — they render an options list with a
+    # navigation footer, sometimes below a trailing separator rule. Scan a
+    # slightly wider tail for those footer hints. The phrases are specific
+    # enough that a broad substring match is safe here.
+    for line in lines[-8:]:
+        low = line.strip().lower()
+        if "enter select" in low or "esc cancel" in low:
             return True
     return False
 
@@ -485,10 +537,22 @@ def start_so_session(
             env,
         )
         prompt = build_initial_prompt(command, sid)
+        # Wait for the TUI to paint, then type the prompt and submit Enter as a
+        # SEPARATE keystroke. Sending prompt + "C-m" in one call races the
+        # booting composer's bracketed-paste and the Enter gets swallowed,
+        # leaving the session stuck with an unsubmitted prompt.
+        _await_tui_ready(runner, alias, record, env)
         _run_checked(
             runner,
             alias,
-            ["tmux", "send-keys", "-t", record.tmux_session, prompt, "C-m"],
+            ["tmux", "send-keys", "-t", record.tmux_session, "-l", prompt],
+            env,
+        )
+        _sleep(_SUBMIT_SETTLE_SECONDS)
+        _run_checked(
+            runner,
+            alias,
+            ["tmux", "send-keys", "-t", record.tmux_session, "Enter"],
             env,
         )
         record.status = "running"
