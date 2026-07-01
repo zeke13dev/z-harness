@@ -4,17 +4,28 @@
 # subagent before running cargo/qtctl on remote.
 #
 # Usage:
-#   remote-sandbox-sync.sh <remote-host> <slug> <task-id> [--no-delete] [--allow-no-exclude]
+#   remote-sandbox-sync.sh <remote-host> <slug> <task-id> [--no-delete] [--allow-no-exclude] [--sandbox-key <slug>/<subpath>]
 #
 # Examples:
 #   remote-sandbox-sync.sh zeke-pc expand-sports-ml T030
 #   remote-sandbox-sync.sh zeke-pc data-overhaul C-001 --no-delete
+#   remote-sandbox-sync.sh zeke-pc expand-sports-ml T030 --sandbox-key expand-sports-ml/level-2
+#
+# --sandbox-key overrides the per-task overlay path (see below) with an explicit
+# "<slug>/<subpath>" key — used by coalesced level-boundary REMOTE_VERIFY dispatch
+# (BFS execution keys the overlay by "<slug>/level-<N>" instead of a single task-id,
+# since one verify_cmd covers multiple tasks in the level). The shared warm base
+# (still keyed by <slug> alone) and the <remote-host>/<slug>/<task-id> positional
+# args are UNCHANGED and still required — <task-id> is only unused for path
+# derivation when --sandbox-key is given. Legacy callers that omit --sandbox-key
+# get byte-identical behavior to before this flag existed.
 #
 # Remote path layout:
 #   <host>:~/dev/qt-bot-sandbox/                     ← CONTAINER (may hold helpers/README)
 #   <host>:~/dev/qt-bot-sandbox/sandbox/             ← all ephemeral slug trees live here
 #   <host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/        ← shared warm base (seeded once per slug)
-#   <host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/   ← per-task overlay via --link-dest
+#   <host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/   ← per-task overlay via --link-dest (default)
+#   <host>:~/dev/qt-bot-sandbox/sandbox/<sandbox-key>/      ← per-level overlay via --link-dest (--sandbox-key override)
 #
 # Everything ephemeral is nested under .../sandbox/ so the container root stays
 # clean: anything that lands directly in qt-bot-sandbox/ (and is not `sandbox/`)
@@ -50,14 +61,36 @@ esac
 
 DELETE_FLAG="--delete"
 ALLOW_NO_EXCLUDE=0
+SANDBOX_KEY="${SANDBOX_KEY:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-delete) DELETE_FLAG="" ;;
     --allow-no-exclude) ALLOW_NO_EXCLUDE=1 ;;
+    --sandbox-key)
+      [[ $# -ge 2 ]] || { echo "remote-sandbox-sync.sh: --sandbox-key requires a value" >&2; exit 2; }
+      SANDBOX_KEY="$2"
+      shift
+      ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# --- Optional sandbox-key override validation (same path-traversal guards as
+#     TASK_ID/SLUG above). Reject anything but "<segment>/<segment>". -------------
+if [[ -n "$SANDBOX_KEY" ]]; then
+  case "$SANDBOX_KEY" in
+    *..*|""|*\'*) echo "remote-sandbox-sync.sh: invalid --sandbox-key '$SANDBOX_KEY'" >&2; exit 2;;
+  esac
+  if [[ "$SANDBOX_KEY" != */* ]] || [[ "$SANDBOX_KEY" == */*/* ]]; then
+    echo "remote-sandbox-sync.sh: --sandbox-key must be exactly '<segment>/<segment>' (got '$SANDBOX_KEY')" >&2
+    exit 2
+  fi
+  case "${SANDBOX_KEY##*/}" in
+    base) echo "remote-sandbox-sync.sh: --sandbox-key subpath may not be 'base' (reserved for warm base)" >&2; exit 2;;
+  esac
+fi
+# -------------------------------------------------------------------------------
 
 # Resolve the local tree to ship. Default: the git work tree of the current cwd,
 # which for a linked worktree is the WORKTREE root (verified: `git rev-parse
@@ -98,7 +131,14 @@ REMOTE_HOME="$(ssh "$REMOTE_HOST" 'printf %s "$HOME"')"
 # Changing this one line cascades to base/overlay/lock/marker paths below.
 REMOTE_SANDBOX_ROOT="$REMOTE_HOME/dev/qt-bot-sandbox/sandbox"
 REMOTE_BASE_ABS="$REMOTE_SANDBOX_ROOT/$SLUG/base"
-REMOTE_TASK_ABS="$REMOTE_SANDBOX_ROOT/$SLUG/$TASK_ID"
+# Per-task overlay path: default is "<slug>/<task-id>"; --sandbox-key overrides
+# the whole suffix (e.g. "<slug>/level-<N>") for coalesced level-boundary verify.
+# The shared warm base above is ALWAYS keyed by SLUG alone, override or not.
+if [[ -n "$SANDBOX_KEY" ]]; then
+  REMOTE_TASK_ABS="$REMOTE_SANDBOX_ROOT/$SANDBOX_KEY"
+else
+  REMOTE_TASK_ABS="$REMOTE_SANDBOX_ROOT/$SLUG/$TASK_ID"
+fi
 REMOTE_LOCK_DIR="$REMOTE_SANDBOX_ROOT/$SLUG/.base.lock"
 REMOTE_READY_MARKER="$REMOTE_BASE_ABS/.base-ready"
 

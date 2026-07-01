@@ -934,17 +934,22 @@ style_path: ${STYLE_PATH}"
     #      (not fall through to Finalize).  Return codes and output vars are below.
     #
     # PARALLELISM GATE (workflow.intent_parallel_levels, default false → sequential):
-    #   - When $INTENT_PARALLEL_LEVELS = "false" (default): the Main loop runs tasks
-    #     in the level sequentially, exactly as in legacy mode (no change to Main loop
-    #     step 1's batch-selection or step 3's parallel-dispatch rules).
-    #   - When $INTENT_PARALLEL_LEVELS = "true": the Main loop MAY dispatch independent
-    #     sibling tasks within the level as parallel Agent() calls in a single message,
-    #     using the same file-overlap dedup rules as the legacy parallel path (step 1's
-    #     Parallelism section).  The Main loop already supports this via its batch logic;
-    #     $INTENT_PARALLEL_LEVELS is passed as context so the batch step knows to allow
-    #     parallel dispatch within the level rather than forcing N=1.
+    #   THE gate lives in the "Parallelism (read first)" section's rule 0 (above the
+    #   Main loop), which is evaluated on every Main loop step-1 pick while
+    #   LEVEL_EXECUTE_ACTIVE=1:
+    #   - When $INTENT_PARALLEL_LEVELS = "false" (default): rule 0 restricts step 1's
+    #     eligibility set to a single (lowest-numbered) task per pick — the level runs
+    #     strictly sequentially, one task at a time.
+    #   - When $INTENT_PARALLEL_LEVELS = "true": rule 0 does not restrict the eligibility
+    #     set; the Main loop dispatches independent sibling tasks within the level as
+    #     parallel Agent() calls in a single message, subject to rules 1-6 (file-overlap
+    #     dedup, workstreams.json DAG) exactly as in the legacy parallel path.
     #   NOTE: $INTENT_PARALLEL_LEVELS controls within-level parallelism only.  Cross-
     #   level parallelism (running two BFS levels at once) is NOT supported in v1.
+    #   `runtime.max_parallel` / `runtime.max_parallel_plans` / `HERMES_MAX_PARALLEL`
+    #   are UNRELATED vestigial knobs (defined, validated, and env-aliased in
+    #   scripts/config.py, but never read by any dispatch path) — do not confuse them
+    #   with this gate.
     LEVEL_EXECUTE_ACTIVE=1
     LEVEL_EXECUTE_SUPPRESS_COMPACTION=1
     # Per-level accumulator file for LEDGER content (replaces eval'd dynamic vars).
@@ -1029,6 +1034,84 @@ style_path: ${STYLE_PATH}"
     LEVEL_DONE_HASH="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" \
       done_set_hash "$LEVEL_TASKS_FILE" 2>/dev/null || echo "")"
     printf '%d %s\n' "$CURRENT_LEVEL" "$LEVEL_DONE_HASH" > "$LEVEL_STATE_FILE" 2>/dev/null || true
+
+    # ── Coalesced remote build (INTENT BFS level boundary) ────────────
+    # Reuses the queue-wide REMOTE_VERIFY inspection precedent (Setup step 6,
+    # `Z_HARNESS_LOCAL_CARGO_CLEAN`) but scoped to just-completed level's tasks
+    # instead of the whole queue. Runs AFTER the LEDGER flush (T011-LEDGER-HOOK
+    # above) and AFTER the done_set_hash checkpoint just persisted, and BEFORE
+    # `intent_bfs_level_complete` below — the same seam documented in "Clear
+    # checkpoint policy" > "INTENT BFS level boundary". This is the ONE build
+    # per level replacing the (now-suppressed) per-task dispatch in Main-loop
+    # step 5: a level with N REMOTE_VERIFY-tagged tasks pays one rsync+build
+    # cycle, not N.
+    LEVEL_REMOTE_VERIFY_CMDS="$(grep -h '^\*\*REMOTE_VERIFY:\*\*' "$LEVEL_TASKS_FILE" 2>/dev/null \
+      | sed 's/^\*\*REMOTE_VERIFY:\*\* *//' | sort -u)"
+    if [ -n "$LEVEL_REMOTE_VERIFY_CMDS" ]; then
+      # Union the level's verify commands into a single &&-chained command so
+      # one remote-runner dispatch covers every crate touched this level.
+      # NOTE: joins with a literal " && " separator (not a single-`&` sentinel
+      # round-trip) so a verify command that itself contains `&&` (e.g.
+      # `cargo build && cargo test`) is preserved verbatim instead of corrupted.
+      LEVEL_VERIFY_UNION="$(printf '%s\n' "$LEVEL_REMOTE_VERIFY_CMDS" \
+        | awk 'NR>1{printf " && "} {printf "%s", $0} END{if(NR)print ""}')"
+      LEVEL_VERIFY_CMD_COUNT="$(printf '%s\n' "$LEVEL_REMOTE_VERIFY_CMDS" | grep -c .)"
+      LEVEL_SANDBOX_KEY="${Z_HARNESS_SLUG:-$(basename "$BASE")}/level-${CURRENT_LEVEL}"
+
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_remote_build \
+        "$(printf '{"base":"%s","level":%d,"cmd_count":%d,"sandbox_key":"%s","status":"start"}' \
+           "$BASE" "$CURRENT_LEVEL" "$LEVEL_VERIFY_CMD_COUNT" "$LEVEL_SANDBOX_KEY")" 2>/dev/null || true
+
+      # CALL: single coalesced remote-runner build for this level.
+      # NOTE: sandbox_key/level are prompt fields consumed by remote-runner —
+      # it uses `sandbox_key` (`<slug>/level-<N>`) as the on-remote overlay path
+      # instead of deriving `<slug>/<task-id>`, and forwards it to
+      # remote-sandbox-sync.sh as `--sandbox-key` (see agents/remote-runner.md).
+      # `level` is optional/informational context for the runner.
+      LEVEL_REMOTE_RETURN="$(Agent(
+        subagent_type="remote-runner",
+        description="Remote verify BFS level ${CURRENT_LEVEL}",
+        prompt="task_id: level-${CURRENT_LEVEL}\nslug: ${Z_HARNESS_SLUG:-$(basename "$BASE")}\nremote_host: zeke-pc\nverify_cmd: ${LEVEL_VERIFY_UNION}\nsandbox_key: ${LEVEL_SANDBOX_KEY}\nlevel: ${CURRENT_LEVEL}\n$BASE: <abs path>"
+      ))"
+
+      # Parse the remote-runner's return (STATUS/EXIT_CODE/BUILD_LOG/ERROR_EXCERPT —
+      # see agents/remote-runner.md "Return shape"), matching the
+      # GENERATOR_RETURN/GENERATOR_STATUS parse idiom used for the
+      # task-tree-generator dispatch above.
+      LEVEL_REMOTE_STATUS="$(printf '%s' "$LEVEL_REMOTE_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
+      LEVEL_REMOTE_EXIT_CODE="$(printf '%s' "$LEVEL_REMOTE_RETURN" | grep '^EXIT_CODE:' | head -1 | awk '{print $2}')"
+      LEVEL_REMOTE_BUILD_LOG="$(printf '%s' "$LEVEL_REMOTE_RETURN" | grep '^BUILD_LOG:' | head -1 | sed 's/^BUILD_LOG: *//')"
+      # Any STATUS other than "ok" is a failure even if EXIT_CODE parsing came up empty
+      # (e.g. `refused` / `rsync_failed` / `deferred` returns have no numeric exit code).
+      if [ "${LEVEL_REMOTE_STATUS:-}" != "ok" ] && [ -z "${LEVEL_REMOTE_EXIT_CODE:-}" ]; then
+        LEVEL_REMOTE_EXIT_CODE=1
+      fi
+      LEVEL_REMOTE_ERROR_EXCERPT="$(printf '%s' "$LEVEL_REMOTE_RETURN" | awk '/^ERROR_EXCERPT:/{flag=1;next}/^[A-Z_]+:/{flag=0}flag' | head -20)"
+
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_remote_build \
+        "$(printf '{"base":"%s","level":%d,"cmd_count":%d,"sandbox_key":"%s","status":"%s","exit_code":%s}' \
+           "$BASE" "$CURRENT_LEVEL" "$LEVEL_VERIFY_CMD_COUNT" "$LEVEL_SANDBOX_KEY" \
+           "${LEVEL_REMOTE_STATUS:-unknown}" "${LEVEL_REMOTE_EXIT_CODE:-null}")" 2>/dev/null || true
+
+      if [ "${LEVEL_REMOTE_EXIT_CODE:-0}" -ne 0 ]; then
+        # A coalesced-build failure halts the WHOLE LEVEL (not a single task) —
+        # per-task attribution was traded away for the coalesce; treat this the
+        # same way the level's other run-ending halts are treated. Surface the
+        # failing verify command + a short error excerpt so the failing crate is
+        # named, not just "see BUILD_LOG".
+        echo "INTENT BFS: coalesced remote build failed at level ${CURRENT_LEVEL} (status ${LEVEL_REMOTE_STATUS:-unknown}, exit ${LEVEL_REMOTE_EXIT_CODE}); verify_cmd: ${LEVEL_VERIFY_UNION}" >&2
+        if [ -n "${LEVEL_REMOTE_ERROR_EXCERPT:-}" ]; then
+          echo "${LEVEL_REMOTE_ERROR_EXCERPT}" >&2
+        fi
+        echo "BUILD_LOG: ${LEVEL_REMOTE_BUILD_LOG:-$BASE/archive/tasks/level-${CURRENT_LEVEL}/remote-build.log}" >&2
+        RB_HALT_REASON="coalesced remote build failed at level ${CURRENT_LEVEL} (exit ${LEVEL_REMOTE_EXIT_CODE}); verify_cmd: ${LEVEL_VERIFY_UNION}${LEVEL_REMOTE_ERROR_EXCERPT:+; error: ${LEVEL_REMOTE_ERROR_EXCERPT}}"
+        # include: _fragments/run-brief-halt-finalize-execute.md
+        FINALIZE_STATUS=aborted
+        python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+          --run-id "$RUN" --status aborted 2>/dev/null || true
+        exit 1
+      fi
+    fi
 
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_complete \
       "$(printf '{"base":"%s","level":%d,"done_set_hash":"%s"}' \
@@ -1602,6 +1685,7 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
+0. **INTENT-BFS serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a BFS level, per the T023-SEAM above) AND `$INTENT_PARALLEL_LEVELS` is not literally `"true"`, restrict rule 1's eligibility set to a **single** task (the lowest-numbered eligible task) — do not batch. This is the only place `workflow.intent_parallel_levels` is consulted; without this gate, rules 1-6 below would already batch-dispatch independent same-level siblings regardless of the knob, since nothing else in this section reads `LEVEL_EXECUTE_ACTIVE` or `INTENT_PARALLEL_LEVELS`. Legacy-mode invocations (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are unaffected by this gate and proceed straight to rule 1.
 1. **Eligibility.** Pick ALL tasks whose deps are all `[x]` and that aren't skip-flagged (see step 2).
 2. **File-overlap dedup.** Two tasks whose "Files:" blocks share a path cannot run concurrently. When two eligible tasks conflict, run the lower-numbered one this batch and defer the other.
 3. **Parallel dispatch (per phase):** within a batch, run the spec-precheck for all batch tasks in a single message with multiple `Agent()` calls. Same for the implementer phase. Same for the reviewer phase.
@@ -2076,6 +2160,11 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
+**Coalesced-path suppression (INTENT BFS).** When `LEVEL_EXECUTE_ACTIVE=1`, this per-task dispatch is SUPPRESSED entirely — do NOT call `remote-runner` here. The BFS orchestrator instead collects the union of the level's `**REMOTE_VERIFY:**` lines and dispatches exactly ONE `remote-runner` build at the level boundary (see "Coalesced remote build (INTENT BFS level boundary)" below). Per-task `cargo check` early feedback is intentionally dropped under the coalesced path — this is the full-coalesce option from the INTENT ("Consider for this" decision (a): recommended as the biggest win with the simplest failure-attribution story). Legacy/non-BFS callers (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are UNCHANGED and still dispatch per-task below.
+
+```bash
+if [ "${LEVEL_EXECUTE_ACTIVE:-0}" -eq 0 ]; then
+```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The remote-runner verifies the build on the remote host; drivers that skip it should treat REMOTE_VERIFY tasks as unable_to_complete. -->
 ```
 Agent(
@@ -2083,6 +2172,9 @@ Agent(
   description="Remote verify <task-id>",
   prompt="task_id: <id>\nslug: <Z_HARNESS_SLUG>\nremote_host: zeke-pc\nverify_cmd: <REMOTE_VERIFY line content>\n$BASE: <abs path>"
 )
+```
+```bash
+fi   # LEVEL_EXECUTE_ACTIVE — per-task dispatch is legacy-mode only
 ```
 
 Parse the implementer's return per the `STATUS:` block. Branches:

@@ -160,6 +160,27 @@ EOS
   [[ "$output" == *"$SPACED"* ]]
 }
 
+@test "execdir does not exist: mkdir -p creates it before cd, no refusal" {
+  MISSING="$(mktemp -d)/nested/execdir"
+  FAKE_PASSTHROUGH=1 FAKE_MEMMAX=10737418240 \
+    run bash "$SCRIPT" zeke-pc "$MISSING" "pwd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$MISSING"* ]]
+  [[ "$output" != *"cannot cd"* ]]
+}
+
+@test "execdir cannot be created: mkdir fails, fail-closed refusal still fires" {
+  # A path whose parent is a file (not a dir) can never be mkdir -p'd into.
+  PARENT_FILE="$(mktemp)"
+  UNMAKEABLE="$PARENT_FILE/execdir"
+  FAKE_PASSTHROUGH=1 FAKE_MEMMAX=10737418240 \
+    run bash "$SCRIPT" zeke-pc "$UNMAKEABLE" "echo should-not-run"
+  rm -f "$PARENT_FILE"
+  [ "$status" -eq 97 ]
+  [[ "$output" == *"cannot cd $UNMAKEABLE"* ]]
+  [[ "$output" != *"should-not-run"* ]]
+}
+
 @test "command with shell metacharacters survives transport intact" {
   # base64 transport must preserve quotes, $ and spaces in <cmd> verbatim.
   FAKE_PASSTHROUGH=1 FAKE_MEMMAX=10737418240 \

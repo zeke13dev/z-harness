@@ -79,6 +79,11 @@ DEFAULTS: dict = {
         "pre_run_cost_gate": "ask",       # ask | auto_proceed | halt
         "planning_mode": "intent",        # intent | full
         "intent_level": "auto",           # auto | quick | standard | deep
+        # LIVE within-level concurrency lever for /z-execute INTENT mode (contrast with
+        # the vestigial runtime.max_parallel / runtime.max_parallel_plans above). Gated
+        # in skills/z-execute/SKILL.md's "Parallelism (read first)" rule 0: false
+        # (default) forces one task at a time per BFS level; true allows independent
+        # same-level siblings to dispatch concurrently per workstreams.json.
         "intent_parallel_levels": False,  # bool: execute same-level tasks in parallel
         "hermes_enabled": False,          # bool: gate all old Hermes machinery
         "max_explore": 3,                 # int>0: max Explore subagent dispatches per /z-plan run
@@ -155,6 +160,12 @@ DEFAULTS: dict = {
         "explain_resolution": False,  # bool: print resolver decision tree to stderr
         # Parallelism knobs. Exported as Z_HARNESS_RUNTIME_MAX_PARALLEL / Z_HARNESS_MAX_PARALLEL_PLANS.
         # (Ingress also accepts legacy HERMES_MAX_PARALLEL via _INGRESS_LEGACY_ALIASES.)
+        # VESTIGIAL: defined/validated/env-aliased here but not consulted by any dispatch
+        # path in scripts/, skills/, or runtime/ — setting these has no effect on
+        # concurrency. The live within-level lever is workflow.intent_parallel_levels
+        # (see workflow.intent_parallel_levels below), gated in
+        # skills/z-execute/SKILL.md's "Parallelism (read first)" rule 0. See
+        # docs/human/config.md and docs/human/hermes-orchestration.md.
         "max_parallel": 1,            # int>0: max concurrent workstream sessions (within-plan)
         "max_parallel_plans": 1,      # int>0: max concurrent plan runs (cross-plan)
         # Per-task attempt / wall-clock caps. Exported as Z_HARNESS_MAX_ATTEMPTS / Z_HARNESS_MAX_TASK_WALL_MS.

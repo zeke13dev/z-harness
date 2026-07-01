@@ -66,6 +66,11 @@ export Z_HARNESS_MAX_ATTEMPTS=3
 # max_attempts = 3
 ```
 
+> **`runtime.max_parallel` is vestigial** (see the note under the alias table below and
+> under `workflow.intent_parallel_levels`) — the example above is retained only to show
+> the env→TOML migration shape; setting `max_parallel` has no effect on concurrency.
+> `runtime.max_attempts` is unaffected and still live.
+
 Run `scripts/config.sh ensure-defaults` once to create your user-global config file with defaults and inline comments. Then migrate each preference from env to TOML.
 
 ### Deprecation enforcement: `runtime.env_strict`
@@ -177,8 +182,8 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `runtime.auto_wait_budget_secs` | `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` (alias — legacy name) |
 | `runtime.pause_at_pct` | `Z_HARNESS_PAUSE_AT_PCT` (alias — legacy name; mechanical: `Z_HARNESS_RUNTIME_PAUSE_AT_PCT`) |
 | `runtime.explain_resolution` | `Z_HARNESS_EXPLAIN_RESOLUTION` (alias — legacy name) |
-| `runtime.max_parallel` | `HERMES_MAX_PARALLEL` (alias — uses `HERMES_` prefix, not `Z_HARNESS_RUNTIME_`) |
-| `runtime.max_parallel_plans` | `Z_HARNESS_MAX_PARALLEL_PLANS` (alias — no `RUNTIME_` infix) |
+| `runtime.max_parallel` | `HERMES_MAX_PARALLEL` (alias — uses `HERMES_` prefix, not `Z_HARNESS_RUNTIME_`) — **vestigial, no effect** (see note below the alias table) |
+| `runtime.max_parallel_plans` | `Z_HARNESS_MAX_PARALLEL_PLANS` (alias — no `RUNTIME_` infix) — **vestigial, no effect** (see note below the alias table) |
 | `runtime.max_attempts` | `Z_HARNESS_MAX_ATTEMPTS` (alias — no `RUNTIME_` infix) |
 | `runtime.max_task_wall_ms` | `Z_HARNESS_MAX_TASK_WALL_MS` (alias — no `RUNTIME_` infix) |
 | `runtime.env_strict` | `Z_HARNESS_RUNTIME_ENV_STRICT` (mechanical — **not user-settable via env**; use config.toml only) |
@@ -193,6 +198,16 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOM_EXTRACT` (alias — completely different legacy name) |
 | `export.hosts` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array string) |
 | `export.strategy` | `Z_HARNESS_EXPORT_STRATEGY` |
+
+> **`runtime.max_parallel` / `runtime.max_parallel_plans` / `HERMES_MAX_PARALLEL` are vestigial.**
+> They are defined, TOML-validated, and env-aliased in `scripts/config.py`, but no
+> dispatch path in `scripts/`, `skills/`, or `runtime/` ever reads them — setting either key
+> (or the `HERMES_MAX_PARALLEL` / `Z_HARNESS_MAX_PARALLEL_PLANS` env aliases) has **no effect**
+> on run concurrency. The real within-level concurrency lever is
+> `workflow.intent_parallel_levels` (see below) plus the `workstreams.json` DAG; see
+> [`docs/human/hermes-orchestration.md`](hermes-orchestration.md) for the separate,
+> `workflow.hermes_enabled`-gated Hermes cross-worktree concurrency machinery, which uses
+> its own unrelated `hermes-config.yaml` `[concurrency]` keys.
 
 For followup and experiment keys, the rule applies identically (no alias exceptions).
 
@@ -393,7 +408,7 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-uplift, z-plan-split, z-plan). `ask` prompts. `auto_proceed` skips the AskUser prompt after a helper-approved estimate. For hard gates, `pre-run-cost-gate.sh` delegates to `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard`; in interactive mode (`Z_HARNESS_NO_ASK` not `halt`) the helper returns `ask`, while unattended mode applies `workflow.pre_run_cost_gate`/allowlist resolution first and then `cost.token_budget` if still unresolved. |
 | `workflow.planning_mode` | string | `intent` | `intent` \| `full` | Default planner paradigm for `/z-plan`. `intent` = Adaptive INTENT mode: thin frozen INTENT.md contract + emergent BFS task-tree. `full` = legacy SDD mode: SPEC/PLAN/TASKS up-front. Env: `Z_HARNESS_WORKFLOW_PLANNING_MODE`. |
 | `workflow.intent_level` | string | `auto` | `auto` \| `quick` \| `standard` \| `deep` | Forced INTENT level. `auto` = the scope-classifier picks the level. `quick` / `standard` / `deep` force that level unconditionally. Env: `Z_HARNESS_WORKFLOW_INTENT_LEVEL`. |
-| `workflow.intent_parallel_levels` | bool | `false` | `true` \| `false` | Execute independent same-level tasks in parallel when running in INTENT mode. Default sequential. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
+| `workflow.intent_parallel_levels` | bool | `false` | `true` \| `false` | **The real within-level concurrency lever** for `/z-execute` INTENT mode (not `runtime.max_parallel*` / `HERMES_MAX_PARALLEL`, which are vestigial — see the Loader API alias-table note above). Gated in `skills/z-execute/SKILL.md`'s "Parallelism (read first)" rule 0: when `false` (default), each INTENT-BFS level runs its tasks strictly one at a time; when `true`, independent same-level siblings dispatch as concurrent `Agent()` calls, using `$BASE/workstreams.json` (the DAG generated from each task's `**Files:**` line) plus inline file-overlap dedup to decide what can run together. No effect in legacy (non-INTENT) mode. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
 | `workflow.hermes_enabled` | bool | `false` | `true` \| `false` | Gates ALL old Hermes parallelism machinery (generate-workstreams.py, cross-cluster dispatch, handoff). Default OFF. Env: `Z_HARNESS_WORKFLOW_HERMES_ENABLED`. |
 
 ## CLI reference (Workflow Resolver)

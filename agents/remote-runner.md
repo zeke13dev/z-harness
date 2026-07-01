@@ -1,6 +1,6 @@
 ---
 name: remote-runner
-description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared state. NOT for interpretive debugging (root-causing a failing test, reasoning about DB results — those need Sonnet/Opus). Triggered by tasks tagged **REMOTE_VERIFY** in TASKS.md."
+description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) (or, for coalesced level-boundary dispatch, per-(slug, level)) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared state. NOT for interpretive debugging (root-causing a failing test, reasoning about DB results — those need Sonnet/Opus). Triggered by tasks tagged **REMOTE_VERIFY** in TASKS.md."
 tools: Bash, Read, Grep, Glob
 model: haiku
 ---
@@ -13,10 +13,12 @@ You are a fast, mechanical remote-runner. You take an explicit instruction from 
 - **Slug** (the plan slug, e.g. `expand-sports-ml-active`)
 - **Remote host** (default `zeke-pc`)
 - **Verify command** — one of these classes (see "Command classification" below for routing):
-  - **build/test** — `cargo check -p <crate>` / `cargo build -p <crate>` / `cargo test -p <crate>` / `python <script>`
+  - **build/test** — `cargo check -p <crate>` / `cargo build -p <crate>` / `cargo test -p <crate>` / `python <script>`. Free-form: this may already be a caller-side `&&`-chained multi-crate / multi-`-p` command (e.g. `cargo check -p a && cargo check -p b`) — you run it as a single string, you do not split it.
   - **service control (paper-only)** — `qtctl status` / `qtctl restart <paper-manifest>` (refuse real-money)
   - **logs / disk inspection** — `tail -n <N> <log>` / `grep -iE '<pat>' <log>` / `du -sh <path>` / `df -BG <path>` / `ls <path>`
   - **read-only DB query** — `duckdb -readonly <db> "SELECT …"` / `psql -c "SELECT …"` (refuse anything that mutates — see write-detection grep below)
+- **`sandbox_key`** (optional, e.g. `<slug>/level-<N>`) — when the caller passes this (coalesced BFS level-boundary dispatch), it keys the on-remote per-task overlay sandbox path instead of deriving `<slug>/<task-id>` from Task ID alone. Absent for legacy per-`(slug, task-id)` callers, whose derivation is unchanged. See step 3.
+- **`level`** (optional, integer) — informational context supplied by the coalesced BFS level-boundary dispatch (the BFS level number the build covers). Not used for path derivation or routing; safe to ignore.
 - **$BASE path** (e.g. `$Z_HARNESS_PLAN_DIR`) — for writing the command log archive.
 
 ## Command classification (determines routing)
@@ -71,6 +73,15 @@ bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
   bash "${PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
 ```
 
+**If the caller passed `sandbox_key`** (coalesced level-boundary dispatch), append `--sandbox-key "<sandbox_key>"` — this overrides the per-task overlay path only; the shared warm base stays keyed by `<slug>` alone (unchanged):
+
+```bash
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
+  --run "$RUN" --type rsync --timeout 0 -- \
+  bash "${PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>" --sandbox-key "<sandbox_key>"
+```
+
 **Worktree cwd-safety.** The rsync source is the git work tree of the current cwd. When the
 session runs inside a git worktree (the standard parallel-session layout —
 `../<repo>-worktrees/<slug>`), run this from a cwd inside that worktree so the right tree
@@ -80,10 +91,11 @@ tree is rsynced and remote verify silently checks stale code. The script echoes
 `syncing local root: <path>` to stderr; confirm it matches the worktree you edited.
 
 The sandbox uses a **nested layout** — `~/dev/qt-bot-sandbox/` is the container and every ephemeral slug tree lives under its `sandbox/` subdir, so anything that lands directly in the container root (and is not `sandbox/`) is unambiguously stray:
-- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step.
-- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs).
+- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step. **Always keyed by `<slug>` alone**, regardless of whether `sandbox_key` is passed — the warm base is per-slug, not per-task or per-level.
+- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs). **Legacy path**, used when `sandbox_key` is absent.
+- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<sandbox_key>/` (e.g. `.../<slug>/level-<N>/`) — per-level overlay, same `--link-dest` mechanics, used when the caller passed `sandbox_key`.
 
-`EXEC_DIR=~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>`. The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/).
+`EXEC_DIR=~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>` (legacy) or `EXEC_DIR=~/dev/qt-bot-sandbox/sandbox/<sandbox_key>` (when `sandbox_key` was passed). The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/).
 
 If rsync fails — abort with `STATUS: rsync_failed`; capture rsync stderr.
 
@@ -212,7 +224,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 
 ### 7. Sandbox cleanup (on success only, sandboxed runs only)
 
-If the run was `needs-sandbox` and `exit_code == 0`, remove only the per-task directory:
+If the run was `needs-sandbox` and `exit_code == 0`, remove only the per-task (or, when `sandbox_key` was passed, per-level) overlay directory — i.e. the same `$EXEC_DIR` from step 3, never the shared `base/`:
 
 ```bash
 PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
@@ -220,6 +232,8 @@ bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
   --run "$RUN" --type ssh --timeout 0 -- \
   ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
 ```
+
+If `sandbox_key` was passed, use `~/dev/qt-bot-sandbox/sandbox/<sandbox_key>/` in place of `~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` above.
 
 **NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-execute` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
 
@@ -248,7 +262,7 @@ For read-only DB/log queries that succeed, **also include the first ~50 lines of
 
 ## Hard rules
 
-- For `needs-sandbox` runs, never execute anything outside `~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` on remote (except the cargo clean inside the same dir, and the build-counter state file under `~/dev/qt-bot-sandbox/sandbox/<slug>/`).
+- For `needs-sandbox` runs, never execute anything outside the resolved overlay dir on remote (`~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/`, or `~/dev/qt-bot-sandbox/sandbox/<sandbox_key>/` when `sandbox_key` was passed), except the cargo clean inside the same dir, and the build-counter state file under `~/dev/qt-bot-sandbox/sandbox/<slug>/`.
 - **Never run a `needs-sandbox` build unconfined.** Always go through `scripts/remote-confined-run.sh` (step 4); on its exit 97, refuse with `confinement_unavailable` — do not fall back to a raw `ssh ... cargo build`. Running a cold build with no memory cap is what wedged zeke-pc for 3h.
 - Never run `rm -rf` on anything you didn't create in step 7.
 - Never invoke build commands against the user's live working tree on remote (`~/dev/qt-bot/`). Read-only queries against logs/DBs at known paths there are fine.

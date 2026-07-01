@@ -210,3 +210,109 @@ EOS
   [[ -n "$REMOTE_UNIT" ]]
   [[ "$REMOTE_UNIT" == z-harness-build-* ]]
 }
+
+# ---------------------------------------------------------------------------
+# 6. remote-sandbox-sync.sh --sandbox-key override (T002 — per-level sandbox
+#    keying for coalesced BFS level-boundary REMOTE_VERIFY dispatch).
+#
+#    All network calls are stubbed: `ssh` logs the remote command it was asked
+#    to run and returns canned answers; `rsync` logs its argv and no-ops. This
+#    lets us assert on the REMOTE_TASK_ABS / REMOTE_BASE_ABS paths the script
+#    computes without touching a real host.
+# ---------------------------------------------------------------------------
+SYNC_SCRIPT_REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+SYNC_SCRIPT="$SYNC_SCRIPT_REPO_ROOT/scripts/remote-sandbox-sync.sh"
+
+setup_sync_stubs() {
+  SYNC_STUBS="$(mktemp -d)"
+  SSH_LOG="$SYNC_STUBS/ssh.log"
+  RSYNC_LOG="$SYNC_STUBS/rsync.log"
+  : > "$SSH_LOG"
+  : > "$RSYNC_LOG"
+
+  cat > "$SYNC_STUBS/ssh" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SSH_LOG"
+case "\$*" in
+  *'printf %s "\$HOME"'*) printf '%s' "/home/tester" ;;
+  *'.base-ready'*'[ -f'*) exit 0 ;;   # base already ready; skip seed step
+  *) exit 0 ;;
+esac
+EOS
+  chmod +x "$SYNC_STUBS/ssh"
+
+  cat > "$SYNC_STUBS/rsync" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$RSYNC_LOG"
+exit 0
+EOS
+  chmod +x "$SYNC_STUBS/rsync"
+}
+
+teardown_sync_stubs() {
+  rm -rf "$SYNC_STUBS"
+}
+
+@test "remote-sandbox-sync.sh legacy path derives <slug>/<task-id> when --sandbox-key omitted" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude
+  [ "$status" -eq 0 ]
+
+  mkdir_line="$(grep 'mkdir -p --' "$SSH_LOG" | head -1)"
+  [[ "$mkdir_line" == *"/dev/qt-bot-sandbox/sandbox/test-slug/T099"* ]]
+
+  overlay_line="$(tail -1 "$RSYNC_LOG")"
+  [[ "$overlay_line" == *"test-host:/home/tester/dev/qt-bot-sandbox/sandbox/test-slug/T099/"* ]]
+  teardown_sync_stubs
+}
+
+@test "remote-sandbox-sync.sh --sandbox-key overrides the per-task overlay path" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key test-slug/level-2
+  [ "$status" -eq 0 ]
+
+  mkdir_line="$(grep 'mkdir -p --' "$SSH_LOG" | head -1)"
+  [[ "$mkdir_line" == *"/dev/qt-bot-sandbox/sandbox/test-slug/level-2"* ]]
+  [[ "$mkdir_line" != *"/T099"* ]]
+
+  overlay_line="$(tail -1 "$RSYNC_LOG")"
+  [[ "$overlay_line" == *"test-host:/home/tester/dev/qt-bot-sandbox/sandbox/test-slug/level-2/"* ]]
+  teardown_sync_stubs
+}
+
+@test "remote-sandbox-sync.sh --sandbox-key still keys the warm base by slug alone" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key test-slug/level-2
+  [ "$status" -eq 0 ]
+
+  ready_check_line="$(grep '.base-ready' "$SSH_LOG" | head -1)"
+  [[ "$ready_check_line" == *"/dev/qt-bot-sandbox/sandbox/test-slug/base/.base-ready"* ]]
+}
+
+@test "remote-sandbox-sync.sh rejects a --sandbox-key with path traversal" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key '../etc'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid --sandbox-key"* ]]
+  teardown_sync_stubs
+}
+
+@test "remote-sandbox-sync.sh rejects a --sandbox-key without exactly one path segment" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key 'noslash'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must be exactly"* ]]
+
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key 'a/b/c'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must be exactly"* ]]
+  teardown_sync_stubs
+}
+
+@test "remote-sandbox-sync.sh rejects --sandbox-key ending in the reserved 'base' segment" {
+  setup_sync_stubs
+  PATH="$SYNC_STUBS:$PATH" run bash "$SYNC_SCRIPT" test-host test-slug T099 --allow-no-exclude --sandbox-key 'test-slug/base'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"reserved for warm base"* ]]
+  teardown_sync_stubs
+}

@@ -63,6 +63,7 @@ if [ "$mm" = max ] || [ "$mm" = missing ]; then
   echo "REFUSED confinement_unavailable: memory.max=$mm (cgroup=$cg)" >&2
   exit 97
 fi
+mkdir -p "$Z_EXECDIR" 2>/dev/null
 cd "$Z_EXECDIR" || { echo "REFUSED confinement_unavailable: cannot cd $Z_EXECDIR" >&2; exit 97; }
 exec sh -c "$(printf %s "$Z_CMD_B64" | base64 -d)"
 EOS
