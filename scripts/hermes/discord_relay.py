@@ -11,6 +11,8 @@ Gracefully degrades if discord.py is not installed.
 
 from __future__ import annotations
 import asyncio
+import functools
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -44,6 +46,11 @@ class InFlightQuestion:
 # In-memory store (single process, single user)
 _inflight: dict[str, InFlightQuestion] = {}  # keyed by dedup key
 
+# In-memory store for so-session feed messages awaiting a reaction (T004)
+_so_inflight: dict[int, str] = {}  # message_id -> session_id
+
+_SO_OPTION_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+
 
 def _dedup_key(reason: str, description: str) -> str:
     """Generate dedup key from halt reason + description."""
@@ -65,6 +72,36 @@ def so_entry_prompt(raw_message: str) -> str:
 
 def _id_allowed(value: str, allowed_values: set[str]) -> bool:
     return not allowed_values or value in allowed_values
+
+
+def _so_reaction_index(emoji: str) -> Optional[int]:
+    """Map a reaction emoji to its 0-based option index, or None if unmapped."""
+    try:
+        return _SO_OPTION_EMOJIS.index(emoji)
+    except ValueError:
+        return None
+
+
+def _render_so_feed(session_id: str, text: str, options: list[str]) -> dict:
+    """Build a discord-free description of the so-session feed message.
+
+    Returns a plain dict: {"body": str, "reaction_emojis": list[str], "overflow": bool}.
+    """
+    text = (text or "").strip()
+    if not options:
+        return {"body": text, "reaction_emojis": [], "overflow": False}
+
+    lines = [text, ""] if text else []
+    lines.extend(f"{i + 1}. {opt}" for i, opt in enumerate(options))
+    overflow = len(options) > 4
+    if overflow:
+        lines.append("")
+        lines.append("React 1–4 or reply with the option number.")
+    return {
+        "body": "\n".join(lines),
+        "reaction_emojis": _SO_OPTION_EMOJIS[: min(len(options), 4)],
+        "overflow": overflow,
+    }
 
 
 
@@ -136,15 +173,22 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
         text = str(event.get("text", "")).strip()
         if len(text) > 1800:
             text = text[-1800:]
-        await channel.send(
-            f"Hermes MCP session `{session_id}` needs attention.\n\n{text}"
+        options = event.get("options") or []
+        feed = _render_so_feed(session_id, text, options)
+        embed = discord.Embed(
+            title="Hermes session needs input",
+            description=feed["body"],
         )
-    
+        message = await channel.send(embed=embed)
+        for emoji in feed["reaction_emojis"]:
+            await message.add_reaction(emoji)
+        _so_inflight[message.id] = session_id
+
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         """Handle reaction-based answers."""
         if user.bot:
             return
-        
+
         msg_id = reaction.message.id
         for key, q in _inflight.items():
             if q.message_id == msg_id and q.answer is None:
@@ -155,6 +199,22 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
                     q.answer = str(idx + 1)  # 1-indexed options
                     q.answered.set()
                     print(f"  Discord: answer received for {key}: option {q.answer}")
+
+        if msg_id in _so_inflight:
+            try:
+                idx = _so_reaction_index(str(reaction.emoji))
+                if idx is not None:
+                    session_id = _so_inflight[msg_id]
+                    from hermes.mcp_hermes_orchestrator import navigate_so_session
+                    from hermes.config import load_config
+
+                    config = getattr(self, "config", None) or load_config(os.getcwd())
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        functools.partial(navigate_so_session, session_id, idx, config),
+                    )
+            except Exception as exc:
+                print(f"  Discord: WARNING — so navigation failed: {exc}")
     
     async def _route_so_entry(self, message: discord.Message, prompt: str):
         """Hook for the Hermes gateway to receive raw `so` text as an LLM prompt."""

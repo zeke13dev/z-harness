@@ -251,7 +251,12 @@ class SoSignalStore:
         return events
 
 
-def _signal_payload(record: SoSessionRecord, event: str, text: str) -> dict[str, Any]:
+def _signal_payload(
+    record: SoSessionRecord,
+    event: str,
+    text: str,
+    options: Optional[list[str]] = None,
+) -> dict[str, Any]:
     return {
         "event": event,
         "session_id": record.session_id,
@@ -263,6 +268,7 @@ def _signal_payload(record: SoSessionRecord, event: str, text: str) -> dict[str,
         "discord_channel_id": record.discord_channel_id,
         "discord_thread_id": record.discord_thread_id,
         "text": text,
+        "options": options if options is not None else [],
         "created_at": utc_now(),
     }
 
@@ -274,6 +280,7 @@ def _emit_signal(
     text: str,
     *,
     store: Optional[SoSignalStore] = None,
+    options: Optional[list[str]] = None,
 ) -> bool:
     """Emit a signal event, debounced by state-stable digest.
 
@@ -284,7 +291,7 @@ def _emit_signal(
     if record.last_signal_digest == digest:
         return False
     (store or SoSignalStore.from_config(config)).append(
-        _signal_payload(record, event, text)
+        _signal_payload(record, event, text, options)
     )
     record.last_signal_at = utc_now()
     record.last_signal_digest = digest
@@ -499,6 +506,38 @@ def _extract_needs_input_context(text: str, *, limit: int = 1600) -> str:
     return summary[-limit:]
 
 
+def _extract_menu_options(text: str) -> list[str]:
+    """Pull the ordered option labels out of a box-drawn selection menu.
+
+    Each option is a ``│ Label │`` row; some options carry an indented
+    ``│    description │`` row directly below them. Only the flush label rows
+    are option text — indented rows, separator rules, the nav footer, and any
+    question prose above the box are not options. Returns ``[]`` when the pane
+    has no box-drawn menu (e.g. a bare ``❯`` prompt).
+    """
+    options: list[str] = []
+    for raw in text.strip("\n").splitlines():
+        stripped = raw.strip()
+        if not stripped or _is_rule(stripped):
+            continue
+        low = stripped.lower()
+        if any(hint in low for hint in _MENU_FOOTER_HINTS):
+            continue
+        if len(stripped) < 2 or not (stripped.startswith("│") and stripped.endswith("│")):
+            continue
+        inner = stripped[1:-1]
+        # Strip the single mandatory padding space; anything left starting
+        # with whitespace is an indented description row, not a label.
+        if inner.startswith(" "):
+            inner = inner[1:]
+        if inner.strip() and inner[:1].isspace():
+            continue
+        label = inner.strip()
+        if label:
+            options.append(label)
+    return options
+
+
 def _payload(record: SoSessionRecord) -> dict[str, Any]:
     data = asdict(record)
     data["needs_input"] = _needs_input(record.last_output)
@@ -639,6 +678,60 @@ def send_to_so_session(
     return record
 
 
+def navigate_so_session(
+    session_id: str,
+    option_index: int,
+    config: HermesConfig,
+    *,
+    runner: Optional[CommandRunner] = None,
+    store: Optional[SoSessionStore] = None,
+) -> SoSessionRecord:
+    """Drive a reaction-index selection into the session's tmux pane.
+
+    Re-reads the pane and only sends keystrokes if it is CURRENTLY at a menu
+    (``_extract_menu_options`` non-empty) and ``option_index`` is in range.
+    Otherwise this is a benign no-op — the reaction may have landed after the
+    menu moved on, and stray keystrokes into a non-menu pane would be worse
+    than doing nothing.
+    """
+    runner = runner or SubprocessCommandRunner()
+    store = store or SoSessionStore.from_config(config)
+    record = store.get(session_id)
+    if record is None:
+        raise SoMcpError(f"session not found: {session_id}")
+    alias = _alias_for_record(config, record)
+    if alias is None:
+        raise SoMcpError(f"project alias not configured: {record.project}")
+    env = _env(record)
+    proc = _run_checked(
+        runner,
+        alias,
+        ["tmux", "capture-pane", "-p", "-t", record.tmux_session],
+        env,
+    )
+    options = _extract_menu_options(proc.stdout or "")
+    if not options or not (0 <= option_index < len(options)):
+        # Fail-safe: not a menu right now, or index no longer valid — send
+        # nothing and leave the record untouched.
+        return record
+    for _ in range(option_index):
+        _run_checked(
+            runner,
+            alias,
+            ["tmux", "send-keys", "-t", record.tmux_session, "Down"],
+            env,
+        )
+    _run_checked(
+        runner,
+        alias,
+        ["tmux", "send-keys", "-t", record.tmux_session, "Enter"],
+        env,
+    )
+    record.updated_at = utc_now()
+    store.save(record)
+    return record
+
+
 def read_so_session(
     session_id: str,
     config: HermesConfig,
@@ -706,6 +799,7 @@ def read_so_session(
                 config,
                 "so_needs_input",
                 _extract_needs_input_context(record.last_output),
+                options=_extract_menu_options(record.last_output),
             )
     record.updated_at = utc_now()
     store.save(record)

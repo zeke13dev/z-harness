@@ -14,10 +14,12 @@ from hermes.config import DiscordProjectAlias, HermesConfig  # noqa: E402
 from hermes.mcp_hermes_orchestrator import (  # noqa: E402
     SoMcpError,
     SoSessionStore,
+    SoSignalStore,
     SoStartRequest,
     drain_signal_events,
     authorize_so_start,
     build_initial_prompt,
+    navigate_so_session,
     read_so_session,
     poll_so_sessions,
     reap_so_sessions,
@@ -186,6 +188,60 @@ def test_read_detects_omp_selection_menu(tmp_path):
     events = drain_signal_events(cfg)
     assert events[0]["event"] == "so_needs_input"
     assert events[0]["session_id"] == "so-test"
+    assert events[0]["options"] == ["Defer", "Reject"]
+
+
+def test_read_bare_prompt_signal_has_empty_options(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯"))
+
+    events = drain_signal_events(cfg)
+    assert events[0]["options"] == []
+
+
+def test_navigate_sends_down_then_enter_for_option_index(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+    menu = (
+        "│ Accept                                             │\n"
+        "│ Defer                                              │\n"
+        "│ Reject                                             │\n"
+        "──────────────────────────────────────────────────────\n"
+        " up/down navigate  enter select  esc cancel\n"
+        "──────────────────────────────────────────────────────"
+    )
+    runner = FakeRunner(capture=menu)
+
+    record = navigate_so_session("so-test", 2, cfg, runner=runner)
+
+    assert runner.calls[0]["argv"][:2] == ["tmux", "capture-pane"]
+    tmux = tmux_session_name("so-test")
+    assert runner.calls[1]["argv"] == ["tmux", "send-keys", "-t", tmux, "Down"]
+    assert runner.calls[2]["argv"] == ["tmux", "send-keys", "-t", tmux, "Down"]
+    assert runner.calls[3]["argv"] == ["tmux", "send-keys", "-t", tmux, "Enter"]
+    assert len(runner.calls) == 4
+    assert record.session_id == "so-test"
+
+
+def test_navigate_no_op_when_pane_is_not_a_menu(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+    runner = FakeRunner(capture="just running, no menu\n❯")
+
+    navigate_so_session("so-test", 0, cfg, runner=runner)
+
+    assert runner.calls[0]["argv"][:2] == ["tmux", "capture-pane"]
+    assert len(runner.calls) == 1
+    sent = [call["argv"] for call in runner.calls if "send-keys" in call["argv"]]
+    assert sent == []
 
 
 def test_extract_needs_input_context_cleans_menu():
@@ -221,6 +277,69 @@ def test_extract_needs_input_context_falls_back_on_unknown_shape():
     # No box rows, no footer — nothing structured to pull, so keep the raw tail.
     raw = "some freeform prompt asking a question ❯"
     assert _extract_needs_input_context(raw) == raw.strip()
+
+
+def test_extract_menu_options_returns_ordered_labels():
+    from hermes.mcp_hermes_orchestrator import _extract_menu_options
+
+    pane = (
+        " Proposal 1: add structured degraded-consult provenance. Decision?\n"
+        "\n"
+        "────────────────────────────────────────────────────────────────\n"
+        "│ Accept (Recommended)                                          │\n"
+        "│    Apply edits to the agent instructions now.                 │\n"
+        "│ Refine                                                        │\n"
+        "│    Ask a follow-up question before deciding.                  │\n"
+        "│ Defer                                                         │\n"
+        "│    Keep it in the retro, no edits now.                        │\n"
+        "│ Reject                                                        │\n"
+        "│    Drop the proposal entirely.                                │\n"
+        "│ Other (type your own)                                         │\n"
+        "────────────────────────────────────────────────────────────────\n"
+        " up/down navigate  enter select  esc cancel\n"
+        "────────────────────────────────────────────────────────────────"
+    )
+
+    assert _extract_menu_options(pane) == [
+        "Accept (Recommended)",
+        "Refine",
+        "Defer",
+        "Reject",
+        "Other (type your own)",
+    ]
+
+
+def test_extract_menu_options_empty_for_bare_prompt():
+    from hermes.mcp_hermes_orchestrator import _extract_menu_options
+
+    assert _extract_menu_options("Proceed?\n❯") == []
+
+
+def test_drain_tolerates_legacy_signal_without_options_key(tmp_path):
+    # Simulate a signal line written before `options` existed: no such key at
+    # all. drain() must not choke, and downstream consumers reading via
+    # dict.get("options", []) must still get a sane default.
+    cfg, _alias = _config(tmp_path)
+    store = SoSignalStore.from_config(cfg)
+    legacy_event = {
+        "event": "so_needs_input",
+        "session_id": "so-legacy",
+        "job_id": "so-legacy",
+        "status": "needs_input",
+        "project": "qt-bot",
+        "task": None,
+        "requester_user_id": "user-1",
+        "discord_channel_id": "chan-1",
+        "discord_thread_id": "thread-1",
+        "text": "Proceed?",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    store.append(legacy_event)
+
+    events = store.drain()
+
+    assert events == [legacy_event]
+    assert events[0].get("options", []) == []
 
 
 def test_read_deduplicates_needs_input_signals(tmp_path):
@@ -348,3 +467,51 @@ def test_poll_so_sessions_reads_active_sessions_and_reaps(tmp_path):
     assert result["needs_input"] == ["so-test"]
     assert result["errors"] == {}
     assert drain_signal_events(cfg)[0]["event"] == "so_needs_input"
+
+
+def test_so_reaction_index_maps_known_emojis_and_rejects_others():
+    from hermes.discord_relay import _so_reaction_index
+
+    assert _so_reaction_index("1️⃣") == 0
+    assert _so_reaction_index("2️⃣") == 1
+    assert _so_reaction_index("3️⃣") == 2
+    assert _so_reaction_index("4️⃣") == 3
+    assert _so_reaction_index("🎉") is None
+    assert _so_reaction_index("") is None
+
+
+def test_render_so_feed_with_three_options():
+    from hermes.discord_relay import _render_so_feed
+
+    result = _render_so_feed("s1", "Pick a branch", ["main", "dev", "release"])
+
+    assert result["reaction_emojis"] == ["1️⃣", "2️⃣", "3️⃣"]
+    assert result["overflow"] is False
+    for label in ("main", "dev", "release"):
+        assert label in result["body"]
+    assert "1." in result["body"]
+    assert "2." in result["body"]
+    assert "3." in result["body"]
+
+
+def test_render_so_feed_with_six_options_overflows_and_caps_reactions():
+    from hermes.discord_relay import _render_so_feed
+
+    options = ["one", "two", "three", "four", "five", "six"]
+    result = _render_so_feed("s1", "Pick a number", options)
+
+    assert len(result["reaction_emojis"]) == 4
+    assert result["overflow"] is True
+    for label in options:
+        assert label in result["body"]
+    assert "reply with the option number" in result["body"]
+
+
+def test_render_so_feed_with_no_options_is_plain_text():
+    from hermes.discord_relay import _render_so_feed
+
+    result = _render_so_feed("s1", "What should I do next?", [])
+
+    assert result["reaction_emojis"] == []
+    assert result["overflow"] is False
+    assert result["body"] == "What should I do next?"

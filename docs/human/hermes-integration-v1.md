@@ -656,3 +656,54 @@ Schema evolution rules:
 | `session-status.json` | Machine | Per-session liveness signal for orchestrator monitoring |
 | `hermes-resolve.json` | Machine | Answer channel for halted sessions |
 | `SPEC.md` / `PLAN.md` | Both | Design documents; read by implementer subagents, not by orchestrator |
+
+---
+
+## Answerable `so` session feed
+
+A spawned `so` MCP session (`scripts/hermes/mcp_hermes_orchestrator.py`) that parks at an
+interactive prompt is surfaced to the user through the Discord **feed**, and the user answers
+by tapping a reaction — no need to attach to the tmux pane.
+
+### Flow
+
+1. The 5-minute `so-watcher` poll (`so_watcher.py` → `poll_so_sessions`) captures the session's
+   tmux pane. When `_needs_input` detects a prompt or a selection menu (footer
+   `up/down navigate  enter select  esc cancel`), the session transitions
+   `running → needs_input` and emits one `so_needs_input` signal (debounced by
+   `event + status`, so it fires once per park).
+2. The signal payload carries a cleaned, answerable question:
+   - `text` — `_extract_needs_input_context` strips box-drawing rules and the nav footer,
+     leaving the prompt prose and option labels.
+   - `options` — `_extract_menu_options` returns the ordered selection-menu labels (empty for a
+     bare prompt). Backward-compatible: older signals without the field are tolerated.
+3. The Discord relay (`discord_relay.py::_route_so_signal`, drained every 10s by
+   `_poll_so_signals`) renders an embed with the question and a numbered option list, and adds
+   1️⃣–4️⃣ reactions (capped at 4; for >4 options the full list is shown with a
+   "reply with the option number" hint). The sent message is tracked in `_so_inflight`
+   (message_id → session_id).
+4. When the user taps a reaction, `on_reaction_add` maps the emoji to a 0-based index
+   (`_so_reaction_index`: 1️⃣→0 …) and calls `navigate_so_session(session_id, index, config)`,
+   which re-reads the pane and — **only if it is still a menu** — sends `Down`×index then
+   `Enter` to drive the selection in the live tmux pane. A reaction that lands after the menu
+   has moved on is a safe no-op (fail-safe: no stray keystrokes).
+
+### Gateway reload (required to activate relay changes)
+
+The Discord bot runs inside the **external Hermes gateway** (`~/.hermes/hermes-agent`), not in
+this repo. Changes to `discord_relay.py` are inert until the gateway reloads. After deploying a
+relay change, reload the gateway (e.g. restart the `ai.hermes.gateway` service) so the new
+`_route_so_signal` / `on_reaction_add` code is live. The orchestrator-side changes
+(`mcp_hermes_orchestrator.py`) go live automatically because each 5-minute `so-watcher.sh` tick
+is a fresh subprocess that re-imports the module.
+
+### Live smoke checklist (one session, end-to-end)
+
+1. Spawn an `so` session that will hit an interactive selection menu (e.g. a `/z-improve` retro).
+2. Wait for the 5-minute poll; confirm the session shows `status: needs_input` in
+   `~/.hermes/so-mcp-sessions.json`.
+3. Confirm the Discord feed message is an **embed** with the question + a numbered option list
+   and 1️⃣–4️⃣ reactions (not a raw text dump).
+4. Tap the reaction for a non-default option; confirm the tmux pane advances the highlight and
+   submits that selection.
+5. Confirm `python3 -m pytest tests/test_hermes_so_mcp.py tests/test_hermes_so_e2e.py` is green.

@@ -15,12 +15,29 @@ from hermes.discord_relay import (  # noqa: E402
 )
 
 
+class FakeMessage:
+    _next_id = 1000
+
+    def __init__(self):
+        FakeMessage._next_id += 1
+        self.id = FakeMessage._next_id
+        self.reactions = []
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+
 class FakeChannel:
     def __init__(self):
         self.sent = []
+        self.embeds = []
 
-    async def send(self, message):
-        self.sent.append(message)
+    async def send(self, message=None, *, embed=None):
+        if embed is not None:
+            self.embeds.append(embed)
+        else:
+            self.sent.append(message)
+        return FakeMessage()
 
 
 async def _fake_fetch_channel(channel_id):
@@ -122,8 +139,25 @@ def test_on_message_rejects_unauthorized_so():
     assert channel.sent == ["Not authorized to use Hermes `so` here."]
 
 
-def test_route_so_signal_sends_to_discord_thread(monkeypatch):
+def _stub_discord_embed(monkeypatch):
+    """Provide a minimal discord.Embed so _route_so_signal runs without the lib."""
+    import hermes.discord_relay as relay
+    from types import SimpleNamespace
+
+    class _Embed:
+        def __init__(self, *, title=None, description=None, color=None):
+            self.title = title
+            self.description = description
+
+    monkeypatch.setattr(relay, "discord", SimpleNamespace(Embed=_Embed), raising=False)
+
+
+def test_route_so_signal_sends_embed_with_options_and_reactions(monkeypatch):
     import asyncio
+    import hermes.discord_relay as relay
+
+    _stub_discord_embed(monkeypatch)
+    relay._so_inflight.clear()
 
     client = object.__new__(HermesDiscordClient)
     channel = FakeChannel()
@@ -140,10 +174,46 @@ def test_route_so_signal_sends_to_discord_thread(monkeypatch):
                 "session_id": "so-test",
                 "discord_thread_id": "123",
                 "text": "Proceed?",
+                "options": ["Accept", "Defer", "Reject"],
             }
         )
     )
 
-    assert channel.sent == [
-        "Hermes MCP session `so-test` needs attention.\n\nProceed?"
-    ]
+    # An embed (not a plain text dump) carries the question + numbered options.
+    assert len(channel.embeds) == 1
+    body = channel.embeds[0].description
+    assert "Proceed?" in body
+    assert "1. Accept" in body and "2. Defer" in body and "3. Reject" in body
+    # The sent message is tracked so a later reaction can drive the pane.
+    assert list(relay._so_inflight.values()) == ["so-test"]
+
+
+def test_route_so_signal_bare_prompt_has_no_reactions(monkeypatch):
+    import asyncio
+    import hermes.discord_relay as relay
+
+    _stub_discord_embed(monkeypatch)
+    relay._so_inflight.clear()
+
+    client = object.__new__(HermesDiscordClient)
+    channel = FakeChannel()
+
+    async def fetch_channel(channel_id):
+        return channel
+
+    client.fetch_channel = fetch_channel
+
+    asyncio.run(
+        client._route_so_signal(
+            {
+                "session_id": "so-bare",
+                "discord_thread_id": "123",
+                "text": "Continue?",
+                "options": [],
+            }
+        )
+    )
+
+    assert channel.embeds[0].description == "Continue?"
+    # Still tracked, but no option reactions were requested.
+    assert relay._so_inflight and list(relay._so_inflight.values()) == ["so-bare"]
