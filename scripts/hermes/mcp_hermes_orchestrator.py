@@ -457,6 +457,48 @@ def _needs_input(text: str) -> bool:
     return False
 
 
+#: Navigation-footer phrases that mark a selection menu but carry no answer
+#: value themselves — dropped from the extracted context.
+_MENU_FOOTER_HINTS = ("up/down", "enter select", "esc cancel", "tab ")
+
+
+def _is_rule(stripped: str) -> bool:
+    """True for a pure box-drawing separator rule (─, —, -, =, _)."""
+    return bool(stripped) and all(ch in "─—-=_" for ch in stripped)
+
+
+def _extract_needs_input_context(text: str, *, limit: int = 1600) -> str:
+    """Turn a raw needs_input pane into an answerable question+options summary.
+
+    The captured tmux pane is dominated by box-drawing rules and a navigation
+    footer, and a blind ``[-N:]`` tail slice can cut the actual question off the
+    top (exactly what happened when a 9h-parked retro menu reached Discord as a
+    header-less box dump). This strips separator rules, unwraps ``│ … │`` box
+    rows to their inner text, and drops the ``up/down … enter select`` footer,
+    leaving the prompt prose and option labels. Best-effort: if nothing
+    survives (unknown TUI shape), fall back to the raw tail so no signal is
+    ever emitted empty.
+    """
+    cleaned: list[str] = []
+    for raw in text.strip().splitlines():
+        stripped = raw.strip()
+        if not stripped or _is_rule(stripped):
+            continue
+        low = stripped.lower()
+        if any(hint in low for hint in _MENU_FOOTER_HINTS):
+            continue
+        # Unwrap box rows: strip leading/trailing vertical borders + padding.
+        inner = stripped.strip("│|").strip()
+        if inner:
+            cleaned.append(inner)
+    summary = "\n".join(cleaned).strip()
+    if not summary:
+        return text.strip()[-limit:]
+    # Keep the TAIL of the cleaned block: the live question/options sit at the
+    # bottom of the pane, above the footer we already dropped.
+    return summary[-limit:]
+
+
 def _payload(record: SoSessionRecord) -> dict[str, Any]:
     data = asdict(record)
     data["needs_input"] = _needs_input(record.last_output)
@@ -663,7 +705,7 @@ def read_so_session(
                 record,
                 config,
                 "so_needs_input",
-                record.last_output[-2000:],
+                _extract_needs_input_context(record.last_output),
             )
     record.updated_at = utc_now()
     store.save(record)

@@ -188,6 +188,41 @@ def test_read_detects_omp_selection_menu(tmp_path):
     assert events[0]["session_id"] == "so-test"
 
 
+def test_extract_needs_input_context_cleans_menu():
+    from hermes.mcp_hermes_orchestrator import _extract_needs_input_context
+
+    pane = (
+        " Proposal 1: add structured degraded-consult provenance. Decision?\n"
+        "\n"
+        "────────────────────────────────────────────────────────────────\n"
+        "│ Accept (Recommended)                                          │\n"
+        "│    Apply edits to the agent instructions now.                 │\n"
+        "│ Defer                                                         │\n"
+        "│    Keep it in the retro, no edits now.                        │\n"
+        "────────────────────────────────────────────────────────────────\n"
+        " up/down navigate  enter select  esc cancel\n"
+        "────────────────────────────────────────────────────────────────"
+    )
+    out = _extract_needs_input_context(pane)
+
+    # Question survives; box-drawing rules and nav footer are stripped.
+    assert "Proposal 1: add structured degraded-consult provenance. Decision?" in out
+    assert "Accept (Recommended)" in out
+    assert "Apply edits to the agent instructions now." in out
+    assert "─" not in out
+    assert "│" not in out
+    assert "enter select" not in out
+    assert "esc cancel" not in out
+
+
+def test_extract_needs_input_context_falls_back_on_unknown_shape():
+    from hermes.mcp_hermes_orchestrator import _extract_needs_input_context
+
+    # No box rows, no footer — nothing structured to pull, so keep the raw tail.
+    raw = "some freeform prompt asking a question ❯"
+    assert _extract_needs_input_context(raw) == raw.strip()
+
+
 def test_read_deduplicates_needs_input_signals(tmp_path):
     cfg, alias = _config(tmp_path)
     start_so_session(
