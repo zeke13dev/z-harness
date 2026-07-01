@@ -727,6 +727,13 @@ def navigate_so_session(
         ["tmux", "send-keys", "-t", record.tmux_session, "Enter"],
         env,
     )
+    # Re-arm the session the same way send_to_so_session does: the selection was
+    # submitted, so the session is running again and the needs_input signal must
+    # be cleared. Without resetting last_signal_digest the debounce (event+status
+    # keyed) would suppress the NEXT needs_input, breaking multi-turn autonomy.
+    record.status = "running"
+    record.last_signal_digest = ""
+    record.turn_count += 1
     record.updated_at = utc_now()
     store.save(record)
     return record

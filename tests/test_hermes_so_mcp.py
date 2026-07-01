@@ -229,6 +229,32 @@ def test_navigate_sends_down_then_enter_for_option_index(tmp_path):
     assert record.session_id == "so-test"
 
 
+def test_navigate_rearms_session_for_next_needs_input(tmp_path):
+    # After a selection is submitted the session is running again and the
+    # needs_input debounce must be cleared, or the NEXT question is suppressed
+    # (breaks multi-turn autonomy).
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+    # First needs_input stamps last_signal_digest.
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯"))
+    assert SoSessionStore.from_config(cfg).get("so-test").last_signal_digest
+
+    menu = (
+        "│ Accept                                             │\n"
+        "│ Defer                                              │\n"
+        "──────────────────────────────────────────────────────\n"
+        " up/down navigate  enter select  esc cancel\n"
+        "──────────────────────────────────────────────────────"
+    )
+    navigate_so_session("so-test", 1, cfg, runner=FakeRunner(capture=menu))
+
+    saved = SoSessionStore.from_config(cfg).get("so-test")
+    assert saved.status == "running"
+    assert saved.last_signal_digest == ""
+
+
 def test_navigate_no_op_when_pane_is_not_a_menu(tmp_path):
     cfg, alias = _config(tmp_path)
     start_so_session(
