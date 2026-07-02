@@ -230,6 +230,41 @@ When in a plan, the resume consumers (`/z-attend`, the `/z-execute` compaction f
 
 `SESSION_CONTEXT.md` is the required live handoff brief for `/z-handoff`. `SESSION.md` remains the bounded curated execution log produced by `context-curator`; do not rely on it for live conversational state. If both exist, include both in `context_files` with `SESSION_CONTEXT.md` before `SESSION.md`.
 
+## Phase 3b — Hermes handoff_continue marker (managed-session consumption)
+
+If `HERMES_MARKER_FILE` is set, the session is Hermes-managed: emit a `handoff_continue`
+marker so the Hermes watcher consumes this **user-triggered** handoff and performs the
+announced `/clear` + resume (the same marker the automatic `scripts/write-clear-checkpoint.sh`
+path emits — this is what makes `/z-handoff` Hermes-consumable at every trigger, not just the
+auto-checkpoint ones). The marker's `handoff_text` carries the resume command (`next_step`) so
+the watcher can drive `/clear` then that command.
+
+**Reliability requirement:** when `HERMES_MARKER_FILE` is set, this emission MUST NOT silently
+no-op. If it fails, surface the error and exit non-zero — a Hermes-managed handoff that writes
+`handoff.json` but drops the marker would leave the watcher unaware and the session stranded.
+(When `HERMES_MARKER_FILE` is unset — non-Hermes runs — `emit-hermes-marker.sh` is a strict
+no-op, so this block is invisible to pi/Claude-Code/Codex runs.)
+
+```bash
+if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
+  _HCC_NEXT="$(python3 -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("next_step") or "")
+except Exception:
+    print("")
+' "$HANDOFF_PATH" 2>/dev/null || true)"
+  _HCC_TEXT="${_HCC_NEXT:-${NEXT_STEP:-}}"
+  _HCC_TASK="${Z_HARNESS_SLUG:-${RUN_ID:-orchestration}}"
+  _HCC_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"handoff_text": sys.argv[1]}))' "$_HCC_TEXT")"
+  if ! bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/emit-hermes-marker.sh" \
+        "handoff_continue" "$_HCC_TASK" "$_HCC_PAYLOAD"; then
+    echo "handoff: FAILED to emit handoff_continue marker — Hermes will not consume this handoff" >&2
+    exit 1
+  fi
+fi
+```
+
 ## Phase 4 — Emit telemetry
 
 If z-harness telemetry is available (`scripts/log-event.sh` exists):
