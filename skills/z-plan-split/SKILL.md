@@ -641,6 +641,23 @@ Recommended next:
 
 For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-execute` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
 
+If Hermes fanout is requested or a `handoff_fanout` marker will be emitted,
+Phase 5 MUST also ensure `workstreams.json` exists via
+`scripts/generate-workstreams.py --source z-plan-split --plan-dir "$Z_HARNESS_PLAN_DIR"`.
+The fanout payload fields are:
+- `slug`: the root split-plan slug.
+- `workstreams_path`: repo-relative path to `$Z_HARNESS_PLAN_DIR/workstreams.json`.
+- `handoff_paths`: at least the parent `HANDOFF.md` when present.
+- `shared_concerns_path`: repo-relative path to `SHARED-CONCERNS.md`.
+- `ack_required`: true when shared concerns require acknowledgement.
+- `partial_tree`: true when any cluster failed.
+
+Hermes consumes this through MCP `so_start_fanout`. Ready clusters become child
+`so` sessions. Failed clusters stay visible in the manifest but are not spawned
+unless the operator explicitly requests partial/forced execution. Child
+sessions run against the cluster's intent-mode plan directory; the fanout path
+must not assume `<workstream.path>/TASKS.md` exists.
+
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 7): normal completion deregisters with `complete`.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \

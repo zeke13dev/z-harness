@@ -1,11 +1,11 @@
 # Hermes Orchestration
 
-> Last updated: 2026-06-26
+> Last updated: 2026-07-03
 > Covers source: scripts/hermes-execute.py, scripts/hermes/config.py, scripts/hermes/cross_plan.py, scripts/generate-workstreams.py, scripts/hermes/merge.py, scripts/hermes/schema.py, scripts/hermes/worktree.py, scripts/hermes/session.py, scripts/hermes/discord_relay.py, scripts/hermes/so_mcp.py, scripts/so-mcp-server.py, docs/human/hermes-integration-v1.md
 
 ## Overview
 
-Hermes is the z-harness parallelism layer: a Python asyncio orchestrator that executes plan workstreams across isolated git worktrees. It reads `workstreams.json`, spawns per-workstream `pi z-execute` sessions, monitors their status, and merges completed branches through a single merge lock.
+Hermes is the z-harness parallelism layer. Legacy plan execution is a Python asyncio orchestrator that reads `workstreams.json`, runs workstreams across isolated git worktrees, monitors status, and merges completed branches through a single merge lock. The newer Discord `so` path is MCP-managed tmux session control and is the fanout bridge for `/z-plan-split` child clusters.
 
 **Dormant by default.** Hermes entry points are behind `workflow.hermes_enabled=false` unless explicitly enabled. The files remain in-tree to prevent bit-rot; the ordinary single-session path remains the default.
 
@@ -20,7 +20,8 @@ z-harness CLI.
 Accepted commands call the MCP-backed
 `scripts/hermes/mcp-hermes-orchestrator.py` server. The server owns tmux
 session lifecycle internally and exposes structured tools:
-`so_start_session`, `so_send`, `so_read`, and `so_list_sessions`. The Discord
+`so_start_session`, `so_start_fanout`, `so_send`, `so_read`,
+`so_list_sessions`, and `so_list_fanout_group`. The Discord
 layer remains a thin parse/authorize/relay path.
 
 The orchestrator persists lightweight MCP session metadata in
@@ -29,6 +30,19 @@ tracks Discord ids, requester, host/project, execution host, transport/SSH
 target, workdir, task, z-command, tmux session name, turn count, status, and
 latest on-demand read output. It is not the old job-registry/supervisor
 backend and it does not consume watchdog webhooks.
+
+`so_start_fanout` is the split-plan fanout bridge. It validates a
+`handoff_fanout` payload, loads `workstreams.json`, skips failed workstreams by
+default, and starts one child `so` session per ready workstream. Child session
+records carry `fanout_group_id`, `fanout_slug`, `parent_session_id`,
+`workstream_id`, and `workstream_path`; signal payloads include the same
+metadata so a parent report can group children and route a user answer to one
+blocked child.
+
+For `/z-plan-split`, the child prompt targets the intent-mode cluster plan
+directory from `workstreams.json`. It does not require
+`<workstream.path>/TASKS.md`. Legacy `scripts/hermes/session.py` and
+`scripts/hermes-execute.py` remain separate from the MCP `so` fanout path.
 
 Remote aliases use the recorded alias transport. For the `qt-bot` alias this
 means the MCP server runs tmux commands through SSH on `zeke-pc` in
@@ -69,6 +83,7 @@ remains for legacy Hermes `pi z-execute` lifecycle helpers, not Discord `so`.
 - `scripts/hermes/merge.py:28` — `merge_workstream` — synchronous `git merge --no-ff` for Hermes branch.
 - `scripts/hermes/config.py:90` — `load_config` — reads `hermes-config.yaml`; only Discord credentials have env overrides.
 - `scripts/hermes/schema.py:54` — `parse_workstreams_json` — typed manifest parse and schema validation.
+- `scripts/hermes/mcp_hermes_orchestrator.py` — `start_fanout_sessions` — validates fanout payloads and starts grouped MCP `so` children.
 - `scripts/hermes/worktree.py:58` — `create_worktree` — safe-ref git worktree creation and recovery.
 - `scripts/hermes/session.py:25` — `spawn_session` — detached `pi z-execute --tasks=<path>` process.
 <!-- AUTO-END: entry-points -->
@@ -80,6 +95,8 @@ remains for legacy Hermes `pi z-execute` lifecycle helpers, not Discord `so`.
 - File-conflict modeling does not cover non-file shared state such as databases, ports, remotes, or caches.
 - `scope_unknown=true` is intentionally conservative and serializes the plan.
 - `GIT_OPTIONAL_LOCKS=0` is set during runs to avoid object-store contention.
+- `/z-plan-split` fanout children are intent-mode cluster plans. Do not route them through code that assumes per-workstream `TASKS.md`.
+- Join-time reconcile must compare actual files touched on child branches against `workstreams.json` and cluster `MANIFEST.json`; plan-time file scope is predictive, not proof of success.
 
 ## Memories
 

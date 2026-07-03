@@ -6,7 +6,7 @@
 > (default `false`). To revive, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
 > Deletion of `scripts/hermes/` is a **deferred cleanup** — files are kept to prevent bit-rot until
 > a deliberate removal task is planned.
-> **Version:** 1.4.0
+> **Version:** 1.5.0
 >
 > This document defines the contract between z-harness (the planning layer)
 > and any orchestrator (the execution layer) that wants to execute z-harness
@@ -17,6 +17,7 @@
 > **v1.2** (amended 2026-06-08): 5-rule DAG derivation, per-workstream `status` field, V1 parallelism constraint, crash-resumption, sanitization, severity alignment with z-plan-split.
 > **v1.3** (amended 2026-06-12): `parallel_group` is now populated as a derived `level-{depth}` label; new `scope_unknown` manifest boolean; concurrency execution contract (depends_on-driven level scheduler, HIGH-severity file-conflict serialization, `max_parallel_workstreams` cap, semaphore-for-lifetime); cross-plan `--slugs` mode contract; non-file shared-state limitation documented.
 > **v1.4** (amended 2026-06-16): Hermes gated OFF by default (`workflow.hermes_enabled=false`). All concurrency/retry/timeout knobs moved from `HERMES_*` env vars to `workflow.*` file config. File deletion deferred.
+> **v1.5** (amended 2026-07-03): `/z-plan-split` fanout uses MCP `so` sessions and intent-mode cluster directories; `workstream.path/TASKS.md` is no longer a universal invariant.
 
 ---
 
@@ -50,8 +51,10 @@ tasks. Each plan type derives workstreams differently:
   command.
 
 **Lifecycle:** Generated once per plan run. The orchestrator SHOULD read
-`workstreams.json` once at start. Not updated during execution — progress
-lives in TASKS.md and `session-status.json`. Modifications to the file
+`workstreams.json` once at start. Not updated during execution. Progress lives
+in the execution mode's durable state: legacy flat-plan workstreams use
+`TASKS.md` and `session-status.json`, while MCP `so` fanout uses grouped
+`SoSessionRecord` state and signal events. Modifications to the manifest
 mid-execution are not supported.
 
 ### Schema
@@ -101,8 +104,8 @@ mid-execution are not supported.
 | `id` | string | yes | Stable workstream identifier (`"ws-1"`, `"ws-2"`, …). Referenced by `depends_on`, `merge_order`, and `file_conflicts`. |
 | `status` | string | yes | `"ready"` (plan complete, executable) or `"failed"` (planning failed, must not execute). Set during generation. See `partial_tree`. |
 | `name` | string | yes | Human-readable one-line description. For dashboards and user-facing messages. Untrusted — orchestrator MUST sanitize before UI rendering. |
-| `path` | string | yes | Repo-relative path to the workstream's plan directory. This IS the BASE — `TASKS.md` lives at `<path>/TASKS.md`. |
-| `tasks` | array | yes | Ordered task IDs belonging to this workstream. Mirrors TASKS.md. Informational — the orchestrator passes the whole `TASKS.md` to `z-execute`, not individual tasks. |
+| `path` | string | yes | Repo-relative path to the workstream's plan directory. For `/z-plan-split`, this is an intent-mode cluster directory containing `INTENT.md` and `MANIFEST.json`. For flat `/z-plan` workstream generation, it may be a legacy workstream directory containing `TASKS.md`. |
+| `tasks` | array | yes | Ordered task IDs belonging to this workstream when the source is a flat `/z-plan`. For `/z-plan-split`, this may be empty or informational because the child cluster directory is the execution contract. |
 | `depends_on` | array | yes | Workstream IDs that must reach `"done"` before this workstream starts. Empty array means no dependencies. |
 | `parallel_group` | string or null | yes | Derived label `"level-{depth}"` where `depth` is the longest path from a root in the workstream `depends_on` graph. All workstreams sharing a label are at the same dependency depth and are mutually independent — by construction they can run concurrently (Rule 7 passes). `null` only in legacy manifests that predate v1.3. |
 
@@ -251,9 +254,10 @@ shared). Before spawning, the orchestrator sets `gc.auto=0` and
 `GIT_OPTIONAL_LOCKS=0` to prevent concurrent auto-gc against the shared
 object store.
 
-### 3. Spawn pi sessions
+### 3. Spawn sessions
 
-Each session runs in its own worktree:
+Flat `/z-plan` workstreams may still run through the legacy `pi z-execute`
+path, where each session runs in its own worktree:
 
 ```bash
 pi z-execute --tasks=<workstream.path>/TASKS.md
@@ -270,6 +274,14 @@ mark done. It commits changes to its own branch.
 > sessions. See `/z-execute` SKILL.md Setup step 1 (`--tasks`
 > fast path) for details.
 
+For `/z-plan-split`, the fanout control plane is MCP `so`, not
+`scripts/hermes/session.py` or `scripts/hermes-execute.py`. The orchestrator
+validates the `handoff_fanout` payload, reads `workstreams.json`, skips failed
+workstreams by default, and starts one `so` child per ready workstream. The
+child prompt points at the cluster plan directory and runs the requested
+z-harness command in intent mode; it must not assume
+`<workstream.path>/TASKS.md` exists.
+
 > **Non-file shared-state limitation:** Worktree isolation covers the
 > git working tree only. It does NOT cover ports, databases, remote
 > sandboxes, in-memory caches, or other process-level resources.
@@ -280,8 +292,10 @@ mark done. It commits changes to its own branch.
 
 ### 4. Monitor all sessions
 
-Each session writes `z-harness/<slug>/<id>/session-status.json`.
-The orchestrator polls these files to track progress.
+Legacy flat-plan sessions write `z-harness/<slug>/<id>/session-status.json`.
+The orchestrator polls these files to track progress. MCP `so` fanout sessions
+track progress in `so-mcp-sessions.json` and emit signal JSONL entries for
+state changes such as `needs_input`, `dead`, and `expired`.
 
 > **Resumption after orchestrator crash:** If the orchestrator process
 > itself restarts, it recovers state by re-reading `workstreams.json`
@@ -291,7 +305,10 @@ The orchestrator polls these files to track progress.
 > `"done"`, `"running"`, `"halted"`, or `"paused"`. Workstreams
 > without a corresponding branch are not started. Workstreams with
 > `"running"` or `"paused"` status are re-spawned (re-running
-> `/z-execute --tasks=<path>/TASKS.md` in the existing worktree).
+> the mode-specific command in the existing worktree: legacy flat-plan
+> workstreams may re-run `/z-execute --tasks=<path>/TASKS.md`; MCP `so`
+> fanout children resume through the recorded session metadata and child
+> prompt.
 > Merged branches (no longer present on disk) are treated as done.
 
 ```json
@@ -310,7 +327,7 @@ The orchestrator polls these files to track progress.
 - `"running"` → continue polling.
 - `"done"` → workstream complete. Unlock dependents.
 - `"halted"` → blocked on user input. Relay `halt_reason` + `halt_description` to user.
-- `"paused"` → compaction breakpoint. Re-spawn same invocation (resumes from TASKS.md).
+- `"paused"` → compaction breakpoint. Re-spawn the same mode-specific invocation.
 - Session exits without updating status → treat as crash. Retry once.
 
 **Question relay with dedup:**
@@ -534,7 +551,7 @@ A valid `workstreams.json` MUST satisfy:
 3. `merge_order` is a permutation of `workstreams[].id`
 4. `file_conflicts[].workstreams` entries reference valid workstream IDs
 5. Every path is repo-relative (no `../`, no absolute, no `//`, no trailing `/`)
-6. `workstreams[].path + "/TASKS.md"` resolves to an existing file
+6. For `/z-plan-split`, every ready `workstreams[].path` resolves to an intent-mode cluster plan directory. For flat `/z-plan`, legacy executors may additionally require `workstreams[].path + "/TASKS.md"`.
 7. No workstream in a `parallel_group` may appear in the transitive `depends_on` of any other workstream in the same group, and vice versa (parallel-grouped workstreams must be mutually independent)
 8. (v1.3) `scope_unknown` is a boolean (`true` or `false`); if `scope_unknown` is `true`, `file_conflicts` MUST be `[]`
 
@@ -642,6 +659,7 @@ Schema evolution rules:
 | v1.2 | 5-rule DAG derivation, `status` field, crash-resumption, sanitization |
 | v1.3 | `parallel_group` populated (`level-{depth}`); `scope_unknown`; concurrency execution contract; cross-plan `--slugs` mode; non-file shared-state limitation |
 | v1.4 | Hermes gated OFF by default (`workflow.hermes_enabled=false`); `HERMES_*` env vars removed; all knobs via `workflow.*` file config; file deletion deferred |
+| v1.5 | `/z-plan-split` fanout uses MCP `so` grouped child sessions and intent-mode cluster directories |
 
 ---
 
@@ -652,7 +670,7 @@ Schema evolution rules:
 | `MANIFEST.md` | Human | Readable plan overview, clusters table, decisions log |
 | `SHARED-CONCERNS.md` | Human | File-overlap narrative with ack-gate |
 | `workstreams.json` | Machine | Decomposition for orchestrator consumption |
-| `TASKS.md` (per workstream) | Both | Durable task list; consumed by `z-execute` |
+| `TASKS.md` (per flat-plan workstream) | Both | Durable task list; consumed by legacy `z-execute --tasks` paths |
 | `session-status.json` | Machine | Per-session liveness signal for orchestrator monitoring |
 | `hermes-resolve.json` | Machine | Answer channel for halted sessions |
 | `SPEC.md` / `PLAN.md` | Both | Design documents; read by implementer subagents, not by orchestrator |

@@ -10,7 +10,7 @@
 # When HERMES_MARKER_FILE is set: appends ONE JSON line to the file:
 #   {"v": 1, "ts": "<ISO8601 UTC>", "kind": "<kind>", "task": "<task>", "payload": {...}}
 #
-# Valid kinds: status, heartbeat, needs_input, handoff_continue, handoff_decision, done
+# Valid kinds: status, heartbeat, needs_input, handoff_continue, handoff_decision, handoff_fanout, done
 # Unknown kind: no-op (exit 0). Best-effort: always exits 0.
 #
 # The marker file is created (and its parent dir) if needed.
@@ -32,7 +32,7 @@ PAYLOAD_JSON="$3"
 
 # Validate kind — unknown kind is a no-op
 case "$KIND" in
-  status|heartbeat|needs_input|handoff_continue|handoff_decision|done) ;;
+  status|heartbeat|needs_input|handoff_continue|handoff_decision|handoff_fanout|done) ;;
   *) exit 0 ;;
 esac
 

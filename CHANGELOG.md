@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-03
+
+- _(auto)_ Add split plan fanout so sessions _(hermes)_
+
 ## 2026-06-28
 
 - _(auto)_ Percentage-based adaptive context compaction at natural workflow seams
