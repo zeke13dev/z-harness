@@ -329,3 +329,10 @@ fi
 printf 'STATUS: clear_checkpoint handoff=%s session=%s status=%s resume=%q bytes=%s phase_id=%s state=%s\n' \
   "$HANDOFF_FILE" "${SESSION_PATH:-none}" "$STATUS_VALUE" "$RESUME_COMMAND" "$HANDOFF_BYTES" \
   "${PHASE_ID:-none}" "${STATE_FILE:-none}"
+
+# Human copy-paste resume block — printed AFTER the STATUS line so prefix
+# parsers (`case "$CHECKPOINT_OUT" in STATUS:\ clear_checkpoint*)` and the
+# startswith() test assertions) are unaffected. Hermes ignores stdout (it
+# consumes the marker file); this is for a human operator driving the
+# /clear + resume by hand.
+printf '\nResume after /clear — copy-paste:\n\n```\n%s\n```\n' "$RESUME_COMMAND"

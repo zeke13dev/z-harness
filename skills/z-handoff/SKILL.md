@@ -297,10 +297,23 @@ After writing `handoff.json`:
      Status: <status>
      Slug: <slug or "none (ad-hoc)">
      Context files: <n>
-     Next step: <first 80 chars of next_step>...
      Session log: <path to SESSION.md if written>
    ```
-2. Exit the agent session. A watcher detects `handoff.json` and spawns the next session.
+2. Print the copy-paste resume block — the FULL `next_step`, untruncated, in its own fenced
+   block so a human operator (no Hermes watcher) can `/clear` and paste it as the next prompt:
+
+   ````markdown
+   Resume after /clear — copy-paste:
+
+   ```
+   <full next_step verbatim>
+   ```
+   ````
+
+   Emit this block even when Hermes is managing the session (`HERMES_MARKER_FILE` set) — the
+   watcher consumes the marker, not chat output, so the block is harmless there and essential
+   everywhere else.
+3. Exit the agent session. A watcher detects `handoff.json` and spawns the next session.
 
 ## Examples
 
