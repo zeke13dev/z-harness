@@ -360,6 +360,22 @@ def test_intent_readthrough_flags_precede_final_approval() -> None:
     assert "intent-readthrough-flags.md" in block
     assert "ask whether to fold in an audit-plan scan" in block
     assert "not an automatic `/z-audit-plan` handoff" in block
+    assert "single prose plan brief" in block
+    assert "Read-through flags" in block
+    assert "Do not leave these only on disk" in block
+    assert "Grill the draft" in block
+    assert "post-draft grill loop" in block
+    assert "post-draft-grill.md" in block
+    assert "must not create a separate popup per shortcut" in block
+    assert "category=shortcut" in block
+    assert "Reject shortcut(s); use robust alternative(s)" in block
+    assert "do not spawn a separate popup per shortcut" in block
+    assert "surface each post-draft grill question" in block
+    assert 'source: "intent-readthrough-flags"' in block
+    assert "transcript_path" in block
+    assert "Use `AskUserQuestion` for explicit approval on each major design decision" not in block
+    assert "surface this shortcut approval question" not in block
+    assert "Block until all design decisions and all shortcut records are answered" not in block
 
 
 def test_execution_strategy_and_pre_execute_checkpoint_are_documented() -> None:

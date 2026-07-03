@@ -38,7 +38,7 @@ Canonical intent-compiler flow:
 5. **Watcher checkpoint seam** — after sharpen/optional-brainstorm artifacts are stable, evaluate the shared `check-compaction.sh` / `write-clear-checkpoint.sh` seam before entering high-context planning.
 6. **Conversational plan + `INTENT.md` iterations** — restate the sharpened problem/framing, ground only the missing source facts, draft `INTENT.md`, and iterate with the user 1–2 times.
 7. **LLM concern flags + optional audit-plan ask** — before final read-through, flag concerns/decisions/assumptions, then ask whether to fold in a `/z-audit-plan` scan.
-8. **Final user approval** — user reads final `INTENT.md` plus flags/audit notes and chooses approve, amend, route back to sharpen/brainstorm, or stop.
+8. **Final user approval** — the orchestrator renders the full plan brief in prose (problem, approach, decisions with tradeoffs, shortcuts, readthrough flags inline, acceptance criteria), then the user chooses approve, amend, grill the draft, route back to sharpen/brainstorm, or stop — at a single gate.
 9. **Execution strategy generation** — produce `TASKS.md`, task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and workstream/handoff metadata.
 10. **Watcher checkpoint seam** — after execution strategy and handoff artifacts are stable, evaluate the shared checkpoint seam before `/z-execute`.
 11. **Fast reviewed `/z-execute`** — execute fresh from `INTENT.md`, flags, audit notes, task-to-intent mapping, and execution strategy; keep review gates and stop for new intent decisions.
@@ -1708,7 +1708,7 @@ A decision is **obvious (skip consult)** if:
 
 ## Phase 2.5 — User gate
 
-Show `decisions.md` to the user. They are the gate:
+Present `decisions.md` to the user **in prose — a synthesis, not a raw file dump and not a popup volley**. For each decision, state in plain language: what is being decided, your tentative call, why, the strongest rejected alternative, and what would flip it. Then the user is the gate:
 - Can flip any decision's consult flag
 - Can override your tentative call
 - Can kill scope
@@ -1991,23 +1991,27 @@ After the iteration loop and before final approval, run an **LLM concern/decisio
 
 Then ask whether to fold in an audit-plan scan before the final read-through. Recommend **run audit** for medium/large/risky plans and **skip audit** for narrow obvious plans. This is an ask, not an automatic `/z-audit-plan` handoff. When the user chooses audit, run the audit-plan review inline or as the existing `/z-audit-plan` machinery permits, and append findings to `intent-readthrough-flags.md`. When the user skips, record the skip in the same file.
 
-Final read-through input for intent mode is: final `INTENT.md` draft + `intent-readthrough-flags.md` + optional audit findings. The user chooses approve, amend, route back to sharpen/brainstorm, or stop.
+Final read-through input for intent mode is: final `INTENT.md` draft + `intent-readthrough-flags.md` + optional audit findings. The user chooses approve, amend, run a post-draft grill, route back to sharpen/brainstorm, or stop.
 
 ```bash
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && <PushNotification: "Decisions ready for review.">
 ```
 
-Present a **concise** decisions summary: one bullet per decision (what, why, what was rejected). Separate **Shortcuts** section: what's being skipped, robust alternative, cost of the shortcut.
+Render the final read-through as a **single prose plan brief**, not a raw artifact dump and not a per-decision popup sequence. The brief must contain, in this order:
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface each approval
-     question (design decisions, shortcuts) via their native channel and await
-     a response before proceeding. Silent omission is forbidden. -->
-Use `AskUserQuestion` for explicit approval on each major design decision.
+1. **Intent in plain language** — the sharpened problem, selected brainstorm framing if any, non-goals, constraints, and the outcome the user is asking for.
+2. **Approach** — the chosen approach, why it fits, and the strongest rejected approach with the reason it lost.
+3. **High-impact decisions** — each decision with the actual tradeoff, tentative call, strongest rejected alternative, and what would flip the call. Do not include boring implementation defaults.
+4. **Shortcuts** — each shortcut as one record: the looser path being taken, the robust alternative it bypasses, and the cost or risk. If there are no shortcuts, say "none".
+5. **Read-through flags** — render the contents of `intent-readthrough-flags.md` inline as the investigation agenda: concerns, risky assumptions, unresolved decisions, possible scope creep, non-observable acceptance criteria, irreversible/public API/schema choices, and audit findings if present. Do not leave these only on disk.
+6. **Acceptance criteria** — the observable checklist the plan must satisfy.
 
-**Surface each proposed shortcut individually.** The **Shortcuts** section presented above is a list, one record per shortcut, each with three fields: the path being taken (what's being skipped), the robust alternative, and the cost. The orchestrator iterates that list and calls `surface-shortcut.sh` **once per shortcut record**, binding `chosen` = the path the shortcut takes (the thing being skipped/the looser route) and `declined` = the named robust alternative that shortcut bypasses. Loop over the actual records — there is no fixed count:
+Keep the brief dense and decision-oriented. It should give the user everything needed to approve or challenge the plan before any gate appears.
+
+**Shortcut telemetry before the single gate.** The **Shortcuts** section presented above is a list, one record per shortcut, each with three fields: the path being taken (what's being skipped), the robust alternative, and the cost. The orchestrator iterates that list and calls `surface-shortcut.sh` **once per shortcut record**, binding `chosen` = the path the shortcut takes (the thing being skipped/the looser route) and `declined` = the named robust alternative that shortcut bypasses. Loop over the actual records — there is no fixed count. This call is telemetry and final-gate preparation; it must not create a separate popup per shortcut.
 
 ```bash
-# Callsite 2 — Phase-5 shortcut approval: one surface-shortcut.sh call per record.
+# Callsite 2 — Phase-5 shortcut surface: one surface-shortcut.sh call per record.
 # RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
 # env var to attribute the shortcut_proposed event, so export it here.
 export RUN="$RUN"
@@ -2022,45 +2026,50 @@ for_each_shortcut_record() {  # conceptual loop body — run once per Shortcuts 
     --chosen "$SHORTCUT_CHOSEN" \
     --declined "$SHORTCUT_DECLINED" \
     --why "$SHORTCUT_WHY" || SURFACE_RC=$?
-  # ... handle SURFACE_RC per the three cases below ...
+  # ... append this record to FINAL_GATE_SHORTCUTS if SURFACE_RC indicates it needs approval ...
 }
 ```
 
-<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this shortcut approval question via their native channel and await a response before proceeding. Silent omission is forbidden. -->
 For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
-- **`SURFACE_RC -eq 1`** — surface the approval ask: use `AskUserQuestion` to ask "Shortcut proposed: `<SHORTCUT_CHOSEN>`. The robust alternative is: `<SHORTCUT_DECLINED>`. Approve this shortcut?" with options `["Approve shortcut", "Reject — use robust alternative instead"]`. On reject: remove the shortcut from PLAN.md and use the robust path.
+- **`SURFACE_RC -eq 1`** — record this shortcut in the final approval gate. It is not approved until the user approves the full brief.
 - **`SURFACE_RC -eq 0`** — no-op (`--declined` was empty, so this record names no robust alternative and is not a shortcut): proceed without an ask for this record.
-- **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, `--chosen` empty, or telemetry lost). Surface a diagnostic ("shortcut telemetry failed for this record — asking for approval anyway"), then **fall back to surfacing the same approval `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK rather than silently approve the shortcut).
+- **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, `--chosen` empty, or telemetry lost). Surface a diagnostic in the final brief ("shortcut telemetry failed for this record — approval is required before proceeding"), then record this shortcut in the final approval gate. Fail-safe: ask in the single final gate rather than silently approve the shortcut.
 
-Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
+Default to the robust alternative if the user does not approve the final brief. A shortcut is approved only when the final gate answer explicitly approves the brief that includes that shortcut record.
 
-```bash
-# Callsite 2 — Phase-5 shortcut approval: one surface-shortcut.sh call per record.
-# RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
-# env var to attribute the shortcut_proposed event, so export it here.
-export RUN="$RUN"
-# Drive this loop from the Shortcuts section the orchestrator just presented:
-# for each record, SHORTCUT_CHOSEN = the looser path this shortcut takes,
-# SHORTCUT_DECLINED = the robust alternative it bypasses, SHORTCUT_WHY = its cost note.
-# (The orchestrator extracts these three fields per record from the Shortcuts list;
-#  iterate over every record — do not assume a single shortcut.)
-for_each_shortcut_record() {  # conceptual loop body — run once per Shortcuts record
-  SURFACE_RC=0
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
-    --chosen "$SHORTCUT_CHOSEN" \
-    --declined "$SHORTCUT_DECLINED" \
-    --why "$SHORTCUT_WHY" || SURFACE_RC=$?
-  # ... handle SURFACE_RC per the three cases below ...
-}
+<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this final plan-brief approval gate via their native channel and await a response before proceeding. This single gate covers high-impact decisions and any listed shortcuts; category=shortcut is intentional because approving the brief may approve a looser path over a robust alternative. Silent omission is forbidden. -->
+After presenting the full prose brief, ask once:
+
+```text
+Choose how to handle this plan brief:
+- Approve as written
+- Reject shortcut(s); use robust alternative(s)
+- Amend the brief
+- Grill the draft
+- Return to sharpen/brainstorm
+- Stop
 ```
 
-<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this shortcut approval question via their native channel and await a response before proceeding. Silent omission is forbidden. -->
-For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
-- **`SURFACE_RC -eq 1`** — surface the approval ask: use `AskUserQuestion` to ask "Shortcut proposed: `<SHORTCUT_CHOSEN>`. The robust alternative is: `<SHORTCUT_DECLINED>`. Approve this shortcut?" with options `["Approve shortcut", "Reject — use robust alternative instead"]`. On reject: remove the shortcut from PLAN.md and use the robust path.
-- **`SURFACE_RC -eq 0`** — no-op (`--declined` was empty, so this record names no robust alternative and is not a shortcut): proceed without an ask for this record.
-- **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, `--chosen` empty, or telemetry lost). Surface a diagnostic ("shortcut telemetry failed for this record — asking for approval anyway"), then **fall back to surfacing the same approval `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK rather than silently approve the shortcut).
+Branch on the answer:
+- **Approve as written** — treat the high-impact decisions and listed shortcuts as approved; proceed to Phase 6.
+- **Reject shortcut(s); use robust alternative(s)** — replace each rejected shortcut with its named robust alternative, update the draft `INTENT.md` and `intent-readthrough-flags.md` as needed, then re-render the full prose brief and ask this same gate again. If multiple shortcuts exist and the user wants to reject only some, capture the selected shortcut IDs in prose before revising; do not spawn a separate popup per shortcut.
+- **Amend the brief** — collect the requested edits, update the draft `INTENT.md` and `intent-readthrough-flags.md` as needed, then re-render the full prose brief and ask this same gate again.
+- **Grill the draft** — run the post-draft grill loop below, fold accepted answers back into the draft `INTENT.md` / flags, then re-render the full prose brief and ask this same gate again.
+- **Return to sharpen/brainstorm** — route back to Phase 0 or Phase 0.5 according to what changed; do not proceed to Phase 6.
+- **Stop** — halt cleanly through the Run Brief halt-finalize path.
 
-Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
+**Post-draft grill loop.** This is an inline `/z-grill`-style interrogation of the drafted plan, not an automatic handoff to the `/z-grill` command. Use `intent-readthrough-flags.md` as the primary question queue:
+
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface each post-draft grill question via their native channel and await a response before continuing the grill loop. Silent omission is forbidden. -->
+- Ask one highest-signal question at a time.
+- State the recommended answer before asking.
+- Self-serve codebase-answerable questions with existing grounding or Explore before asking the user.
+- Prefer questions that would change intent, scope, acceptance criteria, public API/schema choices, or execution ordering.
+- Stop when no remaining question would materially change the plan, or when the user says the draft is sufficiently clear.
+
+Write the loop transcript to `$Z_HARNESS_PLAN_DIR/archive/$RUN/post-draft-grill.md`, emit `post_draft_grill` with `question_count`, `source: "intent-readthrough-flags"`, and `transcript_path`, append any accepted corrections to `intent-readthrough-flags.md`, and update the draft `INTENT.md` before returning to the final prose brief.
+
+Block here until the final plan brief is approved or the user chooses a non-approval exit.
 
 ## Phase 6 — Write SPEC.md / PLAN.md / TASKS.md (legacy) / INTENT.md (intent-mode)
 
@@ -3229,6 +3238,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `intent_level_chosen` | Mode detection resolved the planning depth level (via classifier, config-forced, flag, cost-gate reduction, or fallback) | `level`, `source` (`classifier` / `config-forced` / `flag` / `user-cost-reduction` / `user-override` / `fallback`), `reason` |
 | `intent_level_override` | User overrode the classifier's chosen level via the inline announce gate | `level` (new), `prior_level`, `source` (`user-override`) |
 | `consult_skipped` | Phase-3 or Phase-7 consult skipped; `reason` distinguishes `Z_HARNESS_CONSULT=off` / `intent_level_L1_quick` / `intent_level_L2_user_skipped` | `phase`, `reason`, optionally `intent_level` |
+| `post_draft_grill` | Phase 5 inline post-draft grill ran before final approval | `question_count`, `source` (`intent-readthrough-flags`), `transcript_path` |
 | `legacy_spec_detected` | Backward-compat guard: SPEC.md found in slug dir; `PLANNING_MODE` forced to `full` (Invariant 4) | `slug`, `spec_path`, `original_planning_mode` |
 | `legacy_mode_active` | `PLANNING_MODE=full` branch entered (from --full flag, config, or SPEC detection) | `slug`, `reason` |
 | `legacy_plan_exists` | Finished legacy plan (SPEC.md + TASKS.md) detected; user prompted to amend/implement/overwrite/abort | `slug`, `has_spec`, `has_tasks` |
@@ -3240,7 +3250,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 - **Premise first.** Challenge the request before planning around it.
 - **Push back is structural** — every accepted recommendation needs an articulated "reason it might be wrong" before you accept it.
 - **Always ask** when unclear.
-- **Shortcuts only with explicit approval.**
+- **Shortcuts only with explicit approval** in the final plan-brief gate.
 - **DRY / KISS / SOLID** are non-negotiable.
 - **Log everything.** Every consultation, approval, pushback, error — via `scripts/log-event.sh`.
 
@@ -3251,7 +3261,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls or fixed 5-panel Agent() calls; Phase 7 pre-dispatch task-tree-generator guard when intent TASKS.md is absent; Phase 7 same consultant panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Pre-subagent hard cost gate** (guarded by `workflow.pre_run_cost_gate`, before `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, and task-tree generation); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Pre-subagent hard cost gate** (guarded by `workflow.pre_run_cost_gate`, before `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, and task-tree generation); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (single final plan-brief approval gate, covering high-impact decisions, shortcuts, amend, post-draft grill, route back, or stop); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
