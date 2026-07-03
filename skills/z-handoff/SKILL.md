@@ -240,10 +240,13 @@ auto-checkpoint ones). The marker's `handoff_text` carries the resume command (`
 the watcher can drive `/clear` then that command.
 
 **Reliability requirement:** when `HERMES_MARKER_FILE` is set, this emission MUST NOT silently
-no-op. If it fails, surface the error and exit non-zero — a Hermes-managed handoff that writes
-`handoff.json` but drops the marker would leave the watcher unaware and the session stranded.
-(When `HERMES_MARKER_FILE` is unset — non-Hermes runs — `emit-hermes-marker.sh` is a strict
-no-op, so this block is invisible to pi/Claude-Code/Codex runs.)
+no-op. Invoke `emit-hermes-marker.sh` with `--strict` so a genuine write failure (unwritable marker
+path, full disk, envelope build error) returns non-zero — then surface the error and exit non-zero.
+A Hermes-managed handoff that writes `handoff.json` but drops the marker would leave the watcher
+unaware and the session stranded. Without `--strict` the script is best-effort (always exits 0), so
+the flag is what makes the guard below actually fire. (When `HERMES_MARKER_FILE` is unset — non-Hermes
+runs — `emit-hermes-marker.sh` is a strict no-op regardless of `--strict`, so this block is invisible
+to pi/Claude-Code/Codex runs.)
 
 ```bash
 if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
@@ -257,7 +260,7 @@ except Exception:
   _HCC_TEXT="${_HCC_NEXT:-${NEXT_STEP:-}}"
   _HCC_TASK="${Z_HARNESS_SLUG:-${RUN_ID:-orchestration}}"
   _HCC_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"handoff_text": sys.argv[1]}))' "$_HCC_TEXT")"
-  if ! bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/emit-hermes-marker.sh" \
+  if ! bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/emit-hermes-marker.sh" --strict \
         "handoff_continue" "$_HCC_TASK" "$_HCC_PAYLOAD"; then
     echo "handoff: FAILED to emit handoff_continue marker — Hermes will not consume this handoff" >&2
     exit 1

@@ -186,3 +186,86 @@ PY
   [ "$status" -eq 0 ]
   [ "$output" = "ok" ]
 }
+
+# ---------------------------------------------------------------------------
+# (d) --strict happy path: writes a valid line and exits 0
+# ---------------------------------------------------------------------------
+@test "(d) --strict happy path appends a valid line and exits 0" {
+  run bash -c "
+    HERMES_MARKER_FILE='$MARKER_FILE' \
+      bash '$SCRIPT' --strict handoff_continue my-slug '{\"handoff_text\":\"resume x\"}'
+    echo \"exit:\$?\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exit:0"* ]]
+  run python3 - "$MARKER_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text().strip())
+assert obj["kind"] == "handoff_continue"
+assert obj["payload"]["handoff_text"] == "resume x"
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+# ---------------------------------------------------------------------------
+# (d) --strict with HERMES_MARKER_FILE unset stays a non-Hermes no-op (exit 0)
+# ---------------------------------------------------------------------------
+@test "(d) --strict no-op exit 0 when HERMES_MARKER_FILE unset" {
+  run bash -c "
+    unset HERMES_MARKER_FILE
+    bash '$SCRIPT' --strict handoff_continue my-slug '{}'
+    echo \"exit:\$?\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exit:0"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# (d) --strict returns non-zero on a genuine append failure (unwritable path).
+#     A regular file blocks parent-dir creation, so mkdir -p + append both fail.
+# ---------------------------------------------------------------------------
+@test "(d) --strict fails loud (exit 1) when the marker path is unwritable" {
+  BLOCKER="$TMPDIR_TEST/blocker"
+  : > "$BLOCKER"                        # regular file, not a directory
+  BAD_MARKER="$BLOCKER/sub/markers.jsonl"
+  run bash -c "
+    HERMES_MARKER_FILE='$BAD_MARKER' \
+      bash '$SCRIPT' --strict handoff_continue my-slug '{}'
+    echo \"exit:\$?\"
+  "
+  [[ "$output" == *"exit:1"* ]]
+  [[ "$output" == *"append to HERMES_MARKER_FILE failed"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# (d) --strict returns non-zero on an invalid kind (cannot be emitted)
+# ---------------------------------------------------------------------------
+@test "(d) --strict fails loud (exit 1) on invalid kind" {
+  run bash -c "
+    HERMES_MARKER_FILE='$MARKER_FILE' \
+      bash '$SCRIPT' --strict bogus_kind my-slug '{}'
+    echo \"exit:\$?\"
+  "
+  [[ "$output" == *"exit:1"* ]]
+  [[ "$output" == *"invalid kind"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# (d) Regression: WITHOUT --strict, the same unwritable path stays best-effort
+#     (exit 0). Guards that the default contract is byte-identical to before.
+# ---------------------------------------------------------------------------
+@test "(d) non-strict stays best-effort exit 0 on an unwritable marker path" {
+  BLOCKER="$TMPDIR_TEST/blocker2"
+  : > "$BLOCKER"
+  BAD_MARKER="$BLOCKER/sub/markers.jsonl"
+  run bash -c "
+    HERMES_MARKER_FILE='$BAD_MARKER' \
+      bash '$SCRIPT' handoff_continue my-slug '{}' 2>/dev/null
+    echo \"exit:\$?\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exit:0"* ]]
+}

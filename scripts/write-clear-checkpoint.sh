@@ -301,6 +301,12 @@ bash "$_PLUGIN_ROOT/scripts/log-event.sh" "$RUN_ID" clear_checkpoint_written "$P
 # Hermes handoff_continue marker — emitted only when HERMES_MARKER_FILE is set.
 # Signals the autonomous-resume watcher that the run has yielded at a durable
 # clear-checkpoint (compaction_pause / resumable yield) and is NOT finished.
+#
+# Intentionally best-effort (`|| true`), NOT --strict — unlike /z-handoff's
+# Phase 3b which fails loud. This runs mid-/z-execute on the yield path, and a
+# fatal marker emit here would abort the checkpoint/STATUS contract the caller
+# depends on. Making this path strict (a dropped marker here also strands the
+# session) is a deliberate follow-up, out of scope for the strict-mode fix.
 if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
   _HCC_NEXT="$(python3 -c '
 import json, sys
