@@ -29,6 +29,24 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-03
+
+- _(auto)_ Unlock safe intent parallelism _(z-execute)_
+- _(auto)_ Add split plan fanout so sessions _(hermes)_
+
+## 2026-07-02
+
+- _(auto)_ Emit handoff_continue marker so Hermes consumes user-triggered handoffs _(z-handoff)_
+- _(auto)_ Make emit-hermes-marker strict so Phase 3b guard actually fires _(z-handoff)_
+- _(auto)_ Print copy-paste resume block at handoff/clear-checkpoint _(z-handoff)_
+
+## 2026-07-01
+
+- _(auto)_ Detect selection menus + fix spawn submit-race in so poller _(hermes-so)_
+- _(auto)_ Extract answerable question+options for needs_input signals _(hermes-so)_
+- _(auto)_ Answerable needs_input feed with reaction-driven navigation _(hermes-so)_
+- _(auto)_ Re-arm session after navigate so multi-turn needs_input notifies _(hermes-so)_
+
 ## 2026-06-28
 
 - _(auto)_ Percentage-based adaptive context compaction at natural workflow seams

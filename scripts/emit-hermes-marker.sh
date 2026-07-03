@@ -10,7 +10,7 @@
 # When HERMES_MARKER_FILE is set: appends ONE JSON line to the file:
 #   {"v": 1, "ts": "<ISO8601 UTC>", "kind": "<kind>", "task": "<task>", "payload": {...}}
 #
-# Valid kinds: status, heartbeat, needs_input, handoff_continue, handoff_decision, done
+# Valid kinds: status, heartbeat, needs_input, handoff_continue, handoff_decision, handoff_fanout, done
 # Unknown kind: no-op (exit 0). Best-effort by default: always exits 0.
 #
 # Strict mode: pass --strict as the FIRST argument. When --strict is given AND
@@ -57,7 +57,7 @@ PAYLOAD_JSON="$3"
 
 # Validate kind — unknown kind cannot be emitted.
 case "$KIND" in
-  status|heartbeat|needs_input|handoff_continue|handoff_decision|done) ;;
+  status|heartbeat|needs_input|handoff_continue|handoff_decision|handoff_fanout|done) ;;
   *) _die "invalid kind: $KIND" ;;
 esac
 

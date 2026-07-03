@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -20,6 +20,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from hermes.config import DiscordProjectAlias, HermesConfig, load_config
+from hermes.schema import parse_workstreams_json, validate_manifest, validate_slug
 
 STATE_FILENAME = "so-mcp-sessions.json"
 SIGNAL_FILENAME = "so-mcp-signals.jsonl"
@@ -76,6 +77,33 @@ class SoStartRequest:
     discord_channel_id: str = ""
     discord_message_id: str = ""
     discord_thread_id: str = ""
+    fanout_group_id: str = ""
+    fanout_slug: str = ""
+    parent_session_id: str = ""
+    workstream_id: str = ""
+    workstream_path: str = ""
+    workstreams_path: str = ""
+    shared_concerns_path: str = ""
+
+
+@dataclass(frozen=True)
+class SoFanoutRequest:
+    host: str
+    project: str
+    project_alias: DiscordProjectAlias
+    slug: str
+    workstreams_path: str
+    task: str = ""
+    z_command: Optional[str] = "z-execute"
+    group_id: str = ""
+    parent_session_id: str = ""
+    shared_concerns_path: str = ""
+    handoff_paths: tuple[str, ...] = ()
+    include_failed: bool = False
+    requester_user_id: str = ""
+    discord_channel_id: str = ""
+    discord_message_id: str = ""
+    discord_thread_id: str = ""
 
 @dataclass
 class SoSessionRecord:
@@ -88,6 +116,13 @@ class SoSessionRecord:
     discord_channel_id: str = ""
     discord_message_id: str = ""
     discord_thread_id: str = ""
+    fanout_group_id: str = ""
+    fanout_slug: str = ""
+    parent_session_id: str = ""
+    workstream_id: str = ""
+    workstream_path: str = ""
+    workstreams_path: str = ""
+    shared_concerns_path: str = ""
     repo_root: str = ""
     execution_host: str = "local"
     transport: str = "local"
@@ -119,6 +154,12 @@ def utc_now() -> str:
 def new_session_id(now: Optional[datetime] = None) -> str:
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
     return f"so-{stamp}-{uuid4().hex[:8]}"
+
+
+def new_fanout_group_id(slug: str, now: Optional[datetime] = None) -> str:
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^a-z0-9-]+", "-", slug.lower()).strip("-") or "fanout"
+    return f"fanout-{safe}-{stamp}-{uuid4().hex[:8]}"
 
 
 def tmux_session_name(session_id: str) -> str:
@@ -257,7 +298,7 @@ def _signal_payload(
     text: str,
     options: Optional[list[str]] = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "event": event,
         "session_id": record.session_id,
         "job_id": record.session_id,
@@ -271,6 +312,17 @@ def _signal_payload(
         "options": options if options is not None else [],
         "created_at": utc_now(),
     }
+    if record.fanout_group_id:
+        payload.update(
+            {
+                "fanout_group_id": record.fanout_group_id,
+                "fanout_slug": record.fanout_slug,
+                "parent_session_id": record.parent_session_id,
+                "workstream_id": record.workstream_id,
+                "workstream_path": record.workstream_path,
+            }
+        )
+    return payload
 
 
 def _emit_signal(
@@ -304,11 +356,54 @@ def build_initial_prompt(command: Any, session_id: str) -> str:
         if command.z_command
         else "Use the appropriate z-harness command for this task."
     )
+    fanout_group_id = getattr(command, "fanout_group_id", "")
+    if fanout_group_id:
+        shared_concerns = getattr(command, "shared_concerns_path", "") or "not provided"
+        workstreams_path = getattr(command, "workstreams_path", "") or "not provided"
+        return (
+            "You are running in a Hermes `so` MCP-managed tmux session. "
+            f"Hermes MCP session id: {session_id}. {z_part} "
+            f"Fanout group: {fanout_group_id}. "
+            f"Parent session: {getattr(command, 'parent_session_id', '') or 'none'}. "
+            f"Parent slug: {getattr(command, 'fanout_slug', '')}. "
+            f"Assigned workstream: {getattr(command, 'workstream_id', '')} "
+            f"at `{getattr(command, 'workstream_path', '')}`. "
+            f"Workstreams manifest: `{workstreams_path}`. "
+            f"Shared concerns: `{shared_concerns}`. "
+            "Stay scoped to this assigned workstream except for explicitly documented "
+            "shared-file ownership, and report any scope drift back to the parent. "
+            f"User task: {command.task}"
+        )
     return (
         "You are running in a Hermes `so` MCP-managed tmux session. "
         f"Hermes MCP session id: {session_id}. {z_part} "
         f"User task: {command.task}"
     )
+
+
+def _safe_repo_relative_path(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SoMcpError(f"{field_name} is required")
+    normalized = value.strip().replace("\\", "/")
+    if normalized.startswith("/") or normalized.endswith("/") or "//" in normalized:
+        raise SoMcpError(f"{field_name} must be a repo-relative path")
+    path = PurePosixPath(normalized)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise SoMcpError(f"{field_name} must not contain empty, '.', or '..' parts")
+    return path.as_posix()
+
+
+def _default_shared_concerns_path(workstreams_path: str) -> str:
+    parent = PurePosixPath(workstreams_path).parent
+    if parent.as_posix() == ".":
+        return "SHARED-CONCERNS.md"
+    return (parent / "SHARED-CONCERNS.md").as_posix()
+
+
+def _manifest_path(alias: DiscordProjectAlias, repo_relative_path: str) -> Path:
+    if not alias.workdir:
+        raise SoMcpError("project alias workdir is required for fanout manifest loading")
+    return Path(alias.workdir).expanduser() / repo_relative_path
 
 
 def _shell_join(argv: list[str]) -> str:
@@ -429,6 +524,10 @@ def _env(record: SoSessionRecord) -> dict[str, str]:
     env["HERMES_SO_TMUX_SESSION"] = record.tmux_session
     env["HERMES_SO_PROJECT"] = record.project
     env["HERMES_SO_HOST"] = record.host
+    if record.fanout_group_id:
+        env["HERMES_SO_FANOUT_GROUP_ID"] = record.fanout_group_id
+        env["HERMES_SO_WORKSTREAM_ID"] = record.workstream_id
+        env["HERMES_SO_WORKSTREAM_PATH"] = record.workstream_path
     return env
 
 
@@ -544,6 +643,59 @@ def _payload(record: SoSessionRecord) -> dict[str, Any]:
     data["job_id"] = record.session_id
     return data
 
+
+def list_so_sessions(
+    config: HermesConfig,
+    *,
+    store: Optional[SoSessionStore] = None,
+    fanout_group_id: str = "",
+) -> list[SoSessionRecord]:
+    records = (store or SoSessionStore.from_config(config)).list()
+    if fanout_group_id:
+        records = [
+            record for record in records
+            if record.fanout_group_id == fanout_group_id
+        ]
+    return records
+
+
+def fanout_group_summary(
+    group_id: str,
+    config: HermesConfig,
+    *,
+    store: Optional[SoSessionStore] = None,
+) -> dict[str, Any]:
+    records = list_so_sessions(config, store=store, fanout_group_id=group_id)
+    counts = {
+        "running": 0,
+        "done": 0,
+        "failed": 0,
+        "needs_input": 0,
+        "expired": 0,
+        "dead": 0,
+        "closed": 0,
+        "other": 0,
+    }
+    for record in records:
+        if record.status in counts:
+            counts[record.status] += 1
+        else:
+            counts["other"] += 1
+    terminal_count = (
+        counts["done"]
+        + counts["failed"]
+        + counts["expired"]
+        + counts["dead"]
+        + counts["closed"]
+    )
+    return {
+        "fanout_group_id": group_id,
+        "count": len(records),
+        "counts": counts,
+        "complete": len(records) > 0 and terminal_count == len(records),
+        "sessions": [_payload(record) for record in records],
+    }
+
 def _allowed(value: str, allowed_values: set[str]) -> bool:
     return not allowed_values or value in allowed_values
 
@@ -583,6 +735,13 @@ def _record_from_command(
         discord_channel_id=command.discord_channel_id,
         discord_message_id=command.discord_message_id,
         discord_thread_id=command.discord_thread_id or command.discord_channel_id,
+        fanout_group_id=getattr(command, "fanout_group_id", ""),
+        fanout_slug=getattr(command, "fanout_slug", ""),
+        parent_session_id=getattr(command, "parent_session_id", ""),
+        workstream_id=getattr(command, "workstream_id", ""),
+        workstream_path=getattr(command, "workstream_path", ""),
+        workstreams_path=getattr(command, "workstreams_path", ""),
+        shared_concerns_path=getattr(command, "shared_concerns_path", ""),
         repo_root=alias.repo_root,
         execution_host=alias.execution_host,
         transport=alias.transport,
@@ -646,6 +805,131 @@ def start_so_session(
         raise
     store.save(record)
     return record
+
+
+def _fanout_child_task(
+    request: SoFanoutRequest,
+    *,
+    group_id: str,
+    workstream_id: str,
+    workstream_name: str,
+    workstream_path: str,
+    shared_concerns_path: str,
+) -> str:
+    base = request.task.strip() or f"Execute workstream {workstream_id}: {workstream_name}"
+    handoff_paths = ", ".join(request.handoff_paths) if request.handoff_paths else "none"
+    return (
+        f"{base}\n\n"
+        f"Fanout parent slug: {request.slug}\n"
+        f"Fanout group id: {group_id}\n"
+        f"Assigned workstream id: {workstream_id}\n"
+        f"Assigned workstream path: {workstream_path}\n"
+        f"Workstreams manifest: {request.workstreams_path}\n"
+        f"Shared concerns path: {shared_concerns_path}\n"
+        f"Handoff paths: {handoff_paths}\n\n"
+        "Run the requested z-harness command for this assigned cluster plan in intent mode. "
+        "Do not assume the workstream directory contains TASKS.md. Stay inside the assigned "
+        "scope except for explicitly documented shared files, and report any actual-file "
+        "drift for parent reconciliation."
+    )
+
+
+def start_fanout_sessions(
+    request: SoFanoutRequest,
+    config: HermesConfig,
+    *,
+    runner: Optional[CommandRunner] = None,
+    store: Optional[SoSessionStore] = None,
+    group_id: Optional[str] = None,
+    session_id_factory: Optional[Any] = None,
+) -> dict[str, Any]:
+    if not validate_slug(request.slug):
+        raise SoMcpError(f"invalid fanout slug: {request.slug}")
+    workstreams_path = _safe_repo_relative_path(
+        request.workstreams_path, "workstreams_path"
+    )
+    handoff_paths = tuple(
+        _safe_repo_relative_path(path, "handoff_paths")
+        for path in request.handoff_paths
+    )
+    shared_concerns_path = _safe_repo_relative_path(
+        request.shared_concerns_path or _default_shared_concerns_path(workstreams_path),
+        "shared_concerns_path",
+    )
+    manifest_file = _manifest_path(request.project_alias, workstreams_path)
+    try:
+        manifest = parse_workstreams_json(str(manifest_file))
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise SoMcpError(f"cannot load workstreams manifest: {exc}") from exc
+    if manifest.slug != request.slug:
+        raise SoMcpError(
+            f"workstreams slug mismatch: expected {request.slug}, got {manifest.slug}"
+        )
+    errors = validate_manifest(manifest)
+    if errors:
+        raise SoMcpError("invalid workstreams manifest: " + "; ".join(errors))
+
+    gid = group_id or request.group_id or new_fanout_group_id(request.slug)
+    children: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+
+    for workstream in manifest.workstreams:
+        workstream_path = _safe_repo_relative_path(
+            workstream.path, f"workstream {workstream.id} path"
+        )
+        if workstream.status != "ready" and not request.include_failed:
+            skipped.append(
+                {
+                    "workstream_id": workstream.id,
+                    "status": workstream.status,
+                    "reason": "not_ready",
+                }
+            )
+            continue
+        child_command = SoStartRequest(
+            host=request.host,
+            project=request.project,
+            project_alias=request.project_alias,
+            task=_fanout_child_task(
+                request,
+                group_id=gid,
+                workstream_id=workstream.id,
+                workstream_name=workstream.name,
+                workstream_path=workstream_path,
+                shared_concerns_path=shared_concerns_path,
+            ),
+            z_command=request.z_command,
+            requester_user_id=request.requester_user_id,
+            discord_channel_id=request.discord_channel_id,
+            discord_message_id=request.discord_message_id,
+            discord_thread_id=request.discord_thread_id,
+            fanout_group_id=gid,
+            fanout_slug=request.slug,
+            parent_session_id=request.parent_session_id,
+            workstream_id=workstream.id,
+            workstream_path=workstream_path,
+            workstreams_path=workstreams_path,
+            shared_concerns_path=shared_concerns_path,
+        )
+        sid = session_id_factory(workstream) if session_id_factory else None
+        record = start_so_session(
+            child_command,
+            config,
+            runner=runner,
+            store=store,
+            session_id=sid,
+        )
+        children.append(_payload(record))
+
+    return {
+        "ok": True,
+        "fanout_group_id": gid,
+        "children": children,
+        "skipped": skipped,
+        "summary": fanout_group_summary(
+            gid, config, store=store or SoSessionStore.from_config(config)
+        ),
+    }
 
 
 def send_to_so_session(
@@ -970,6 +1254,58 @@ if mcp is not None:
         return {"ok": True, "session_id": record.session_id, **_payload(record)}
 
     @mcp.tool()
+    def so_start_fanout(
+        host: str,
+        project: str,
+        slug: str,
+        workstreams_path: str,
+        task: str = "",
+        z_command: Optional[str] = "z-execute",
+        group_id: str = "",
+        parent_session_id: str = "",
+        shared_concerns_path: str = "",
+        handoff_paths: Optional[list[str]] = None,
+        include_failed: bool = False,
+        requester_user_id: str = "",
+        discord_channel_id: str = "",
+        discord_message_id: str = "",
+        discord_thread_id: str = "",
+    ) -> dict[str, Any]:
+        """Start one MCP-managed child session per ready workstream."""
+        config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
+        try:
+            authorize_so_start(
+                config,
+                host=host,
+                requester_user_id=requester_user_id,
+                discord_channel_id=discord_channel_id,
+            )
+            alias = config.discord.so.project_aliases.get(project)
+            if alias is None:
+                return {"ok": False, "error": f"unknown project: {project}"}
+            request = SoFanoutRequest(
+                host=host,
+                project=project,
+                project_alias=alias,
+                slug=slug,
+                workstreams_path=workstreams_path,
+                task=task,
+                z_command=z_command,
+                group_id=group_id,
+                parent_session_id=parent_session_id,
+                shared_concerns_path=shared_concerns_path,
+                handoff_paths=tuple(handoff_paths or ()),
+                include_failed=include_failed,
+                requester_user_id=requester_user_id,
+                discord_channel_id=discord_channel_id,
+                discord_message_id=discord_message_id,
+                discord_thread_id=discord_thread_id,
+            )
+            return start_fanout_sessions(request, config)
+        except SoMcpError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
     def so_send(session_id: str, message: str) -> dict[str, Any]:
         """Send a message to an MCP-managed tmux session."""
         config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
@@ -1006,11 +1342,17 @@ if mcp is not None:
     def so_list_sessions() -> dict[str, Any]:
         """List all MCP-managed ``so`` sessions."""
         config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
-        records = SoSessionStore.from_config(config).list()
+        records = list_so_sessions(config)
         return {
             "sessions": [_payload(record) for record in records],
             "count": len(records),
         }
+
+    @mcp.tool()
+    def so_list_fanout_group(fanout_group_id: str) -> dict[str, Any]:
+        """Summarize MCP-managed ``so`` sessions in one fanout group."""
+        config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
+        return {"ok": True, **fanout_group_summary(fanout_group_id, config)}
 
 
 def main(argv: list[str] | None = None) -> int:

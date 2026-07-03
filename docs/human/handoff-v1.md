@@ -1,6 +1,6 @@
 # handoff-v1 — Machine-readable agent handoff protocol
 
-> Last updated: 2026-06-08
+> Last updated: 2026-07-03
 > Schema: `docs/schemas/handoff.schema.json`
 > Command: `skills/z-handoff/SKILL.md`
 
@@ -98,6 +98,34 @@ Minimum consumer behavior:
 
 When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SLUG` and `Z_HARNESS_PLAN_DIR` in the new session's environment to enable z-harness command continuity.
 
+### Hermes fanout marker
+
+Hermes-managed z-harness sessions may also emit marker JSONL through
+`scripts/emit-hermes-marker.sh`. The `handoff_fanout` marker is a request to
+turn one split-plan parent into grouped child `so` sessions. It uses the same
+best-effort marker envelope as existing status markers:
+
+```json
+{
+  "v": 1,
+  "kind": "handoff_fanout",
+  "task": "split-session-fanout",
+  "payload": {
+    "slug": "split-session-fanout",
+    "group_id": "optional-stable-group-id",
+    "workstreams_path": "z-harness/split-session-fanout/workstreams.json",
+    "handoff_paths": ["z-harness/split-session-fanout/HANDOFF.md"],
+    "shared_concerns_path": "z-harness/split-session-fanout/SHARED-CONCERNS.md",
+    "ack_required": true,
+    "partial_tree": false
+  }
+}
+```
+
+`group_id` is optional; the MCP `so` fanout bridge can derive one. Consumers
+must validate `slug` and repo-relative paths before starting sessions. Failed
+workstreams in `workstreams.json` are non-executable by default.
+
 ## Examples
 
 ### Context pressure mid-plan
@@ -174,7 +202,6 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
 ## Future (not v1)
 
 - Auto-trigger when context crosses a configurable token threshold
-- Multi-workstream handoff coordination (one handoff per workstream in workstreams.json)
 - Orchestrator-side context window estimation to pre-emptively spawn new sessions before pressure
 
 ## Out of scope (v1)

@@ -79,17 +79,17 @@ PY
 }
 
 # ---------------------------------------------------------------------------
-# (b) All 6 valid kinds are accepted
+# (b) All valid kinds are accepted
 # ---------------------------------------------------------------------------
-@test "(b) all 6 valid kinds produce output" {
+@test "(b) all valid kinds produce output" {
   MARKER="$TMPDIR_TEST/kinds.jsonl"
-  for kind in status heartbeat needs_input handoff_continue handoff_decision done; do
+  for kind in status heartbeat needs_input handoff_continue handoff_decision handoff_fanout done; do
     HERMES_MARKER_FILE="$MARKER" \
       bash "$SCRIPT" "$kind" "slug" '{}' 2>/dev/null
   done
 
   LINE_COUNT="$(wc -l < "$MARKER" | tr -d ' ')"
-  [ "$LINE_COUNT" -eq 6 ]
+  [ "$LINE_COUNT" -eq 7 ]
 
   # Every line must be valid JSON with the expected kind
   run python3 - "$MARKER" <<'PY'
@@ -97,12 +97,54 @@ import json, sys
 from pathlib import Path
 
 lines = [l.strip() for l in Path(sys.argv[1]).read_text().splitlines() if l.strip()]
-valid_kinds = {"status","heartbeat","needs_input","handoff_continue","handoff_decision","done"}
+valid_kinds = {"status","heartbeat","needs_input","handoff_continue","handoff_decision","handoff_fanout","done"}
 for line in lines:
     obj = json.loads(line)
     assert obj["v"] == 1 and isinstance(obj["v"], int)
     assert obj["kind"] in valid_kinds
     assert isinstance(obj["payload"], dict)
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+# ---------------------------------------------------------------------------
+# (b) handoff_fanout kind with payload
+# ---------------------------------------------------------------------------
+@test "(b) handoff_fanout marker round-trips via json.loads" {
+  HERMES_MARKER_FILE="$MARKER_FILE" \
+    bash "$SCRIPT" "handoff_fanout" "split-session-fanout" '{"slug":"split-session-fanout","workstreams_path":"z-harness/split-session-fanout/workstreams.json","handoff_paths":["z-harness/split-session-fanout/HANDOFF.md"],"shared_concerns_path":"z-harness/split-session-fanout/SHARED-CONCERNS.md","ack_required":true,"partial_tree":false}' 2>/dev/null
+
+  run python3 - "$MARKER_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text().strip())
+assert obj["v"] == 1
+assert obj["kind"] == "handoff_fanout"
+assert obj["task"] == "split-session-fanout"
+payload = obj["payload"]
+assert payload["slug"] == "split-session-fanout"
+assert payload["workstreams_path"].endswith("workstreams.json")
+assert payload["handoff_paths"] == ["z-harness/split-session-fanout/HANDOFF.md"]
+assert payload["ack_required"] is True
+assert payload["partial_tree"] is False
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "(b) malformed handoff_fanout payload falls back to empty dict" {
+  HERMES_MARKER_FILE="$MARKER_FILE" \
+    bash "$SCRIPT" "handoff_fanout" "split-session-fanout" '{not-json' 2>/dev/null
+
+  run python3 - "$MARKER_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text().strip())
+assert obj["kind"] == "handoff_fanout"
+assert obj["payload"] == {}
 print("ok")
 PY
   [ "$status" -eq 0 ]
