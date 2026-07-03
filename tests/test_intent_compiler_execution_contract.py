@@ -75,6 +75,50 @@ def test_execute_bfs_generator_receives_intent_artifacts() -> None:
         assert prompt_line in dispatch
 
 
+def test_execute_intent_parallel_unknown_scope_serializes() -> None:
+    skill = text(Z_EXECUTE_SKILL)
+    parallelism = skill.split("## Parallelism (read first)", 1)[1]
+    rule_zero = parallelism.split("1. **Eligibility.**", 1)[0]
+
+    assert "same-level batching is default-on only after these safety checks pass" in rule_zero
+    assert "Every sibling task block in the current level has a parseable precise `**Files:**` scope" in rule_zero
+    assert "Missing or unparseable scope serializes the affected INTENT level" in rule_zero
+    assert "`scope_unknown: true` serializes the affected INTENT level" in rule_zero
+    assert "restrict rule 1's eligibility set to a **single** task" in rule_zero
+    assert "Serialized fallback paths, including unknown-scope serialization" in rule_zero
+    assert "INTENT_RULE0_SAFETY_PASSED=0" in rule_zero
+    assert "INTENT_PARALLEL_BATCH_ACTIVE=0" in rule_zero
+
+
+def test_execute_intent_parallel_fanout_is_bounded() -> None:
+    skill = text(Z_EXECUTE_SKILL)
+
+    assert "INTENT_PARALLEL_FANOUT_LIMIT=3" in skill
+    assert "partition them into chunks of at most this many task tracks" in skill
+    assert "The dispatch set is capped or partitioned by `$INTENT_PARALLEL_FANOUT_LIMIT`" in skill
+    assert "do not launch an unbounded same-level batch" in skill
+
+
+def test_execute_intent_parallel_review_diff_isolation() -> None:
+    skill = text(Z_EXECUTE_SKILL)
+    diff_capture = skill.split("### 6. Capture diff and spawn reviewer", 1)[1]
+    diff_capture = diff_capture.split("**Skip-rereview on clean cycle-1.**", 1)[0]
+
+    assert "INTENT parallel review-diff isolation" in diff_capture
+    assert "never capture a combined dirty-tree diff" in diff_capture
+    assert 'if [ "${INTENT_RULE0_SAFETY_PASSED:-0}" -eq 1 ] && [ "${INTENT_PARALLEL_BATCH_ACTIVE:-0}" -eq 1 ]; then' in diff_capture
+    assert 'if [ "${LEVEL_EXECUTE_ACTIVE:-0}" -eq 1 ] && [ "${INTENT_PARALLEL_LEVELS:-false}" = "true" ]; then' not in diff_capture
+    assert "actual INTENT parallel" in diff_capture
+    assert "TASK_DIFF_PATHS=(<paths parsed from this task block's **Files:** line>)" in diff_capture
+    assert 'git diff -- "${TASK_DIFF_PATHS[@]}"' in diff_capture
+    assert "Serialized review/full diff capture" in diff_capture
+    assert "unknown-scope serialization" in diff_capture
+    assert "per-task path-filtered diff capture" in diff_capture
+    assert "INTENT_RULE0_SAFETY_PASSED=1" in diff_capture
+    assert "INTENT_PARALLEL_BATCH_ACTIVE=1" in diff_capture
+    assert "serialize review capture inside the parallel level" in diff_capture
+
+
 def test_implementer_and_reviewer_respect_intent_artifacts() -> None:
     implementer = text(IMPLEMENTER)
     reviewer = text(REVIEWER)
@@ -100,6 +144,33 @@ def test_task_tree_generator_emits_execution_strategy_metadata() -> None:
     assert "**Execution strategy:**" in generator
     assert "**Review gates:**" in generator
     assert "**Workstreams:**" in generator
+
+
+def test_task_tree_generator_pipelined_scheduler_requires_precise_bounded_tracks() -> None:
+    generator = text(TASK_TREE_GENERATOR)
+    size_rule = generator.split("### Size rule", 1)[1]
+    size_rule = size_rule.split("### Deferral rule", 1)[0]
+
+    assert "Default healthy level batch is 3–8 tasks" in size_rule
+    assert "Wider same-level batches are allowed only for pipelined task-track scheduling" in size_rule
+    assert "every sibling has a precise, parseable `**Files:**` scope" in size_rule
+    assert "every sibling's `**Files:**` set is disjoint from every other sibling's `**Files:**` set" in size_rule
+    assert "partitioned into bounded task tracks/workstreams" in size_rule
+    assert "append-only/non-conflicting overlap exception is not enough for wider pipelined batches" in size_rule
+    assert "MUST NOT mean the executor launches every sibling at once" in size_rule
+    assert "actual dispatch remains capped by the executor's fan-out window" in size_rule
+    assert "If dependencies are uncertain" in size_rule
+    assert "missing `**Files:**`" in size_rule
+    assert "any sibling `**Files:**` entries overlap" in size_rule
+    assert "unbounded fan-out" in size_rule
+    assert "Defer dependent or overlapping work to the next level" in size_rule
+    assert "partition it into a smaller bounded level with disjoint file scopes" in size_rule
+    assert "serialize the risky work" in size_rule
+    assert "More than 10 tasks in one level is acceptable only under the proven safe wider-batch conditions above" in size_rule
+    assert "independent from every other sibling under the Independence rule" not in size_rule
+    assert "sibling overlap is not provably append-only/non-conflicting" not in size_rule
+    assert "10-20" not in generator
+    assert "10–20" not in generator
 
 
 def test_execute_aggregate_review_gate_contract_is_conditional() -> None:

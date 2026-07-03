@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-06-28
+> Last updated: 2026-07-03
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -408,7 +408,7 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-uplift, z-plan-split, z-plan). `ask` prompts. `auto_proceed` skips the AskUser prompt after a helper-approved estimate. For hard gates, `pre-run-cost-gate.sh` delegates to `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard`; in interactive mode (`Z_HARNESS_NO_ASK` not `halt`) the helper returns `ask`, while unattended mode applies `workflow.pre_run_cost_gate`/allowlist resolution first and then `cost.token_budget` if still unresolved. |
 | `workflow.planning_mode` | string | `intent` | `intent` \| `full` | Default planner paradigm for `/z-plan`. `intent` = Adaptive INTENT mode: thin frozen INTENT.md contract + emergent BFS task-tree. `full` = legacy SDD mode: SPEC/PLAN/TASKS up-front. Env: `Z_HARNESS_WORKFLOW_PLANNING_MODE`. |
 | `workflow.intent_level` | string | `auto` | `auto` \| `quick` \| `standard` \| `deep` | Forced INTENT level. `auto` = the scope-classifier picks the level. `quick` / `standard` / `deep` force that level unconditionally. Env: `Z_HARNESS_WORKFLOW_INTENT_LEVEL`. |
-| `workflow.intent_parallel_levels` | bool | `false` | `true` \| `false` | **The real within-level concurrency lever** for `/z-execute` INTENT mode (not `runtime.max_parallel*` / `HERMES_MAX_PARALLEL`, which are vestigial — see the Loader API alias-table note above). Gated in `skills/z-execute/SKILL.md`'s "Parallelism (read first)" rule 0: when `false` (default), each INTENT-BFS level runs its tasks strictly one at a time; when `true`, independent same-level siblings dispatch as concurrent `Agent()` calls, using `$BASE/workstreams.json` (the DAG generated from each task's `**Files:**` line) plus inline file-overlap dedup to decide what can run together. No effect in legacy (non-INTENT) mode. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
+| `workflow.intent_parallel_levels` | bool | `true` | `true` \| `false` | **The real within-level concurrency lever** for `/z-execute` INTENT mode (not `runtime.max_parallel*` / `HERMES_MAX_PARALLEL`, which are vestigial — see the Loader API alias-table note above). Default-on means "attempt same-level INTENT BFS parallelism only when the `/z-execute` safety preconditions pass": every same-level sibling has precise parseable `**Files:**` scope, no sibling has `scope_unknown=true`, fan-out is bounded or partitioned, and review uses per-task diff isolation or serialized review capture. Missing/unparseable scope, unknown scope, file overlap, or unsafe review capture serializes the affected level/task. Set `false` to opt out and run each INTENT-BFS level strictly one task at a time. No effect in legacy (non-INTENT) mode. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
 | `workflow.hermes_enabled` | bool | `false` | `true` \| `false` | Gates ALL old Hermes parallelism machinery (generate-workstreams.py, cross-cluster dispatch, handoff). Default OFF. Env: `Z_HARNESS_WORKFLOW_HERMES_ENABLED`. |
 
 ## CLI reference (Workflow Resolver)
@@ -722,7 +722,7 @@ spec_retro_discovery = "defer_to_sink_p2"
 pre_run_cost_gate = "auto_proceed"
 planning_mode = "intent"        # intent (default) | full (legacy SDD)
 intent_level = "auto"           # auto | quick | standard | deep
-intent_parallel_levels = false  # true to parallelize same-level tasks
+intent_parallel_levels = false  # opt out; default true attempts safe same-level INTENT BFS parallelism
 hermes_enabled = false          # true to re-enable old Hermes machinery
 ```
 

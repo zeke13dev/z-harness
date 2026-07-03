@@ -81,10 +81,10 @@ DEFAULTS: dict = {
         "intent_level": "auto",           # auto | quick | standard | deep
         # LIVE within-level concurrency lever for /z-execute INTENT mode (contrast with
         # the vestigial runtime.max_parallel / runtime.max_parallel_plans above). Gated
-        # in skills/z-execute/SKILL.md's "Parallelism (read first)" rule 0: false
-        # (default) forces one task at a time per BFS level; true allows independent
-        # same-level siblings to dispatch concurrently per workstreams.json.
-        "intent_parallel_levels": False,  # bool: execute same-level tasks in parallel
+        # in skills/z-execute/SKILL.md's "Parallelism (read first)" rule 0: true
+        # allows independent same-level siblings to dispatch concurrently per
+        # workstreams.json; explicit false serializes each BFS level.
+        "intent_parallel_levels": True,   # bool: execute same-level tasks in parallel
         "hermes_enabled": False,          # bool: gate all old Hermes machinery
         "max_explore": 3,                 # int>0: max Explore subagent dispatches per /z-plan run
         "parallel": 3,                    # int>0: parallel batch size for z-maintain-docs and similar batch ops

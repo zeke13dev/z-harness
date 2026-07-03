@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,9 @@ from runtime.dispatch.dispatcher import Dispatcher, _compose_argv
 from runtime.dispatch.env import build_env
 from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError, TimeoutReaper
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ZEXECUTE_SKILL_PATH = REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +122,40 @@ def test_context_ignoring_driver_does_not_error():
     driver = _ContextIgnoringDriver()
     # Must not raise regardless of what context keys are present.
     driver.init({"args_template": []}, context={"some_key": "x"})
+
+
+# ---------------------------------------------------------------------------
+# Future pipelined scheduler contract (T005 structural guard)
+# ---------------------------------------------------------------------------
+
+
+def test_future_pipelined_scheduler_requires_durable_background_handles():
+    """The docs-only scheduler contract requires durable handles, not sync Agent() only."""
+    text = ZEXECUTE_SKILL_PATH.read_text(encoding="utf-8")
+    start = text.index("FUTURE PIPELINED TRACK CONTRACT")
+    contract = text[start:start + 4500]
+
+    assert "Background-handle expectation" in contract
+    assert "durable background handle" in contract
+    assert "poll/cancel/result semantics" in contract
+    assert "synchronous Agent()" in contract
+    assert "stores no durable handle/state does not satisfy this contract" in contract
+
+
+def test_current_dispatcher_has_no_runtime_pipelined_refill_surface():
+    """T005 must not ship a live pipelined refill scheduler in runtime dispatch."""
+    dispatcher_text = (REPO_ROOT / "runtime" / "dispatch" / "dispatcher.py").read_text(
+        encoding="utf-8"
+    )
+
+    for forbidden in (
+        "pipelined_refill",
+        "PipelinedTrack",
+        "background_handle_id",
+        "refill_cursor",
+        "track_state_table",
+    ):
+        assert forbidden not in dispatcher_text
 
 
 # ---------------------------------------------------------------------------

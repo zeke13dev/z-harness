@@ -1,6 +1,6 @@
 # Adaptive INTENT — Lighter-than-SDD Operating Model
 
-> Last updated: 2026-06-26
+> Last updated: 2026-07-03
 > Covers source: scripts/intent-schema.py, scripts/config.py, agents/intent-classifier.md, agents/task-tree-generator.md, skills/z-plan/SKILL.md, skills/z-execute/SKILL.md, skills/z-amend/SKILL.md, skills/z-review-all/SKILL.md, agents/implementer.md, agents/reviewer.md, docs/human/adaptive-intent.md
 
 ## Overview
@@ -44,16 +44,22 @@ The design is thin-but-frozen, not mutable. `/z-plan` now makes the planning mod
 
 1. Detect mode after `BASE` is bound: `SPEC.md` -> legacy; else `INTENT.md` -> intent; else halt.
 2. In intent mode, freeze INTENT and persist the freeze commit in the archive.
-3. Generate a BFS level with `task-tree-generator`, passing unmet checklist items, prior LEDGER outcomes, level cap, budget, and task id start.
-4. Execute that level via the existing per-task engine; no new task engine exists.
+3. Generate a BFS level with `task-tree-generator`, passing unmet checklist items, prior LEDGER outcomes, level cap, budget, and task id start. The generator may emit wider same-level batches when siblings have precise, disjoint `**Files:**` scope; if independence cannot be proven, it must defer, serialize, or mark the blocker instead of inventing parallel work.
+4. Execute that level via the existing per-task engine; no new task engine exists. Same-level INTENT BFS parallelism is default-on only under the `/z-execute` safety preconditions: precise parseable file scope for every sibling, no `scope_unknown`, bounded or partitioned fan-out, and per-task review diff isolation or serialized review capture.
 5. Inject `intent_snapshot:` and `ledger_path:` into every implementer/reviewer/retry prompt. Optional durable-tier paths (`kernel_path`, `invariants_path`, `style_path`) are forwarded when present.
 6. Flush pending LEDGER content at level end, checkpoint done-set hash, evaluate acceptance, then either stop or increment level.
+
+## Pipelined Track Boundary
+
+`/z-execute` now documents a future pipelined track contract, but the current runtime is still phase-lockstep at the BFS level boundary. This bundle does not enable runtime pipelined refill, does not run the next BFS level before the current level's LEDGER flush, `.bfs_level_state` write, coalesced remote verify, checkpoint check, and acceptance evaluation, and does not change `handoff.json` schema or resume state.
+
+Any future pipelined scheduler must persist durable per-track state (`queued`, `prechecking`, `implementing`, `reviewing`, `retrying`, `halted`, `done`) plus a durable background handle for each subagent track. Synchronous `Agent()` calls and `[~]` task markers are not enough to represent refill, pause, cancellation, retry, halt-drain, or resume semantics.
 
 ## Config surface
 
 - `workflow.planning_mode`: `intent` (default recommendation) or `full`; the visible mode gate records the actual per-run choice unless unattended/no-ask uses the recommendation.
 - `workflow.intent_level`: `auto`, `quick`, `standard`, or `deep`; level flags override this and bypass the classifier.
-- `workflow.intent_parallel_levels`: default `false`; allows parallel siblings within a BFS level only.
+- `workflow.intent_parallel_levels`: default `true`; attempts same-level INTENT BFS sibling parallelism only when `/z-execute` can prove precise file scope, no `scope_unknown`, bounded/partitioned fan-out, and isolated or serialized review capture. Set `false` to opt out and serialize each level.
 - `workflow.intent_bfs_level_cap`: runtime-read guard; absent from DEFAULTS, so empty/None falls back to 6.
 - `workflow.hermes_enabled`: gates old Hermes cross-cluster/parallel machinery; does not by itself enable intent parallelism.
 
@@ -64,7 +70,9 @@ The design is thin-but-frozen, not mutable. `/z-plan` now makes the planning mod
 - `stale_reason: amended-intent` in TASKS frontmatter means regenerate on next execute.
 - `.bfs_level_state` stores the last completed level and done-set hash; hash mismatch restarts from level 0.
 - `evaluate_acceptance` treats unknown as unmet. A LEDGER citation without a cumulative diff is not enough.
-- Cross-level parallelism is not supported; `intent_parallel_levels` is within-level only.
+- Cross-level parallelism is not supported; `intent_parallel_levels` is within-level only, and unsafe same-level batches serialize rather than falling back to arbitrary fan-out.
+- Future pipelined refill is a contract only, not live behavior. Clear checkpoints remain BFS-level boundaries and `handoff.json` remains the existing protocol shape.
+- The task-tree generator should widen a BFS level only for siblings with precise disjoint file scope and an executor fan-out that can be capped or partitioned; missing, unparseable, overlapping, or unknown scope is a serialization signal.
 - `/z-plan` route checks and final gate options are non-auto-dispatch surfaces: they write route/handoff artifacts and ask the user, but they never invoke `/z-sharpen`, `/z-brainstorm`, `/z-audit-plan`, `/z-execute`, or `/z-amend` themselves.
 - `HANDOFF.md` is produced after `TASKS.md`; it is an index and summary for the next session, not a replacement contract.
 

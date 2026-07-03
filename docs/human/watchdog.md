@@ -12,6 +12,8 @@ Watchdog protection has two layers:
 
 Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check can only detect and notify; the enforcement wrapper is the only layer that can recover by killing a subprocess.
 
+For the documented future `/z-execute` pipelined track model, watchdog/liveness support depends on durable background handles rather than synchronous `Agent()` calls. A live pipelined scheduler must expose poll/cancel/result state and durable per-track heartbeats; this bundle does not implement that runtime refill path or change current phase-lockstep BFS checkpoint semantics.
+
 ## Layer 1 — supervised-run
 
 `supervised-run.sh --run R --type T --timeout N -- cmd ...` emits `dispatch_start` / `dispatch_end` lease events around the child. `--timeout 0` resolves `watchdog.timeout_secs.<type>` from config, falling back to 600. It prefers `timeout`/`gtimeout`, then falls back to a Bash process-group deadline. Diagnostics go to stderr so child stdout can be captured byte-for-byte.
@@ -58,6 +60,7 @@ paths and are deprecated for Discord `so`.
 - Notify-once markers prevent repeated alerts for the same run/reason.
 - `watchdog.timeout_secs.*` is config-file-only and read via `config.py get`, not env-exported.
 - Discord `so` does not require watchdog `job_id` routing; MCP session ids are owned by `mcp-hermes-orchestrator.py`.
+- Future pipelined tracks must report durable background-handle liveness; `[~]` status and a blocked synchronous `Agent()` call are not sufficient watchdog state.
 
 ## Gotchas
 

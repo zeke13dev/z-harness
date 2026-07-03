@@ -1,6 +1,6 @@
 {
   "concept": "config",
-  "last_updated": "2026-06-24",
+  "last_updated": "2026-07-03",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
     "scripts/config.py",
@@ -290,6 +290,8 @@
     "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
     "[Workflow Resolver] workflow.plan_decisions_approval valid values: ask | approve | halt; default ask",
     "[Workflow Resolver] workflow.pre_run_cost_gate valid values: ask | auto_proceed | halt; default ask; hard pre-run gates delegate to check-no-ask, where interactive mode returns ask and Z_HARNESS_NO_ASK=halt applies workflow/allowlist then cost.token_budget",
+    "[Workflow Resolver] workflow.intent_parallel_levels valid values: true | false; default true; opt out with false. It enables same-level INTENT BFS sibling dispatch only when /z-execute proves precise Files scope for every sibling, no scope_unknown, bounded/partitioned fan-out, and per-task review diff isolation or serialized review capture.",
+    "[Parallelism] runtime.max_parallel, runtime.max_parallel_plans, HERMES_MAX_PARALLEL, and Z_HARNESS_MAX_PARALLEL_PLANS are vestigial for /z-execute INTENT concurrency; the live plain /z-execute knob is workflow.intent_parallel_levels.",
     "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
     "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id; exit 4 = I/O error; exit 5 = config conflict (ASK_ALL=1 + NO_ASK=halt)",
@@ -337,6 +339,8 @@
     "[Workflow Resolver] workflow.slug_confirm value domain (ask/auto_accept/recommend_derived) is NOT the same as the resolver result domain; RESULT_MAP translates between them",
     "[Workflow Resolver] workflow.audit_to_amend behavior is SOURCE-KEYED: source==none (no stored preference) -> auto_split even when the stored value would say 'ask'; setting 'ask' in config.toml opts back into the 3-way popup",
     "[Workflow Resolver] workflow.pre_run_cost_gate is a registered question_id; overnight allowlist can auto-decide it via Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
+    "[Workflow Resolver] workflow.intent_parallel_levels=true is not arbitrary fan-out: missing/unparseable Files scope, scope_unknown=true, file overlap, unsafe review capture, or unbounded fan-out serializes the affected INTENT BFS level/task",
+    "[Parallelism] Do not use runtime.max_parallel* or HERMES_MAX_PARALLEL to tune plain /z-execute INTENT BFS concurrency; those aliases are vestigial and Hermes has separate hermes-config.yaml concurrency keys.",
     "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt both set causes exit 5 from resolve-question — not a soft error",
     "[defer-to-sink] result==defer-to-sink must NOT be treated as skip — orchestrator must explicitly call scripts/sink-add.sh",
     "[followup] Array-typed followup keys (path_allowlist, path_denylist, audit_evidence_required_artifacts) are not in VALIDATORS; no enum validation",
@@ -427,6 +431,26 @@
           "skills/z-plan/SKILL.md"
         ],
         "description": "Controls pre-run cost gates for z-research/z-uplift/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
+      },
+      "workflow.intent_parallel_levels": {
+        "type": "bool",
+        "default": true,
+        "valid_values": [
+          true,
+          false
+        ],
+        "env": "Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS",
+        "description": "Live plain /z-execute INTENT-mode same-level BFS concurrency knob. Default true attempts sibling parallelism only when every same-level task has precise parseable Files scope, scope_unknown is false, fan-out is bounded or partitioned, and review diffs are isolated per task or review capture is serialized. Explicit false opts out and serializes each level. This is unrelated to vestigial runtime.max_parallel* / HERMES_MAX_PARALLEL and unrelated to Hermes hermes-config.yaml concurrency."
+      },
+      "workflow.hermes_enabled": {
+        "type": "bool",
+        "default": false,
+        "valid_values": [
+          true,
+          false
+        ],
+        "env": "Z_HARNESS_WORKFLOW_HERMES_ENABLED",
+        "description": "Master gate for dormant Hermes cross-worktree/cross-plan orchestration. It does not control plain /z-execute INTENT same-level BFS concurrency; use workflow.intent_parallel_levels for that."
       }
     }
   },

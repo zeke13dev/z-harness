@@ -208,6 +208,12 @@ Under `Z_HARNESS_NO_ASK=halt`, a `wait-for exit 10` causes the orchestrator to *
 
 `release` is called on **each task's clean success** — not when the branch merges. A waiter unblocks within one poll interval of the senior finishing its edits to the contended file. "Wait for plan X" means "wait for X's current task to stop editing the file," unless `Z_HARNESS_WAIT_REQUIRE_MERGE=1` (reserved/deferred — see below) opts into the branch-ancestor cleared signal.
 
+### Future pipelined tracks
+
+The registry lease lifecycle remains per task. The current `/z-execute` implementation does not enable runtime pipelined refill and does not add pipelined fields to active-plan records or handoff state. A future pipelined scheduler must persist its own durable track table with task id, BFS level, phase, attempt, claimed paths, background handle id, heartbeat, reviewer diff capture mode, and terminal result, then use the existing `claim`, `wait-for`, and `release` lifecycle for each track.
+
+Pipelined refill must re-check active leases before dispatching another ready task. A user-blocking halt must stop refill, drain or durably pause already-started sibling tracks, persist track records, and surface halts only after lease state is coherent.
+
 ### merge-verify (`Z_HARNESS_WAIT_REQUIRE_MERGE`) — reserved/deferred
 
 `Z_HARNESS_WAIT_REQUIRE_MERGE=1` would make a target "cleared" only when its branch is an ancestor of HEAD (`git merge-base --is-ancestor <peer_branch> HEAD`). This knob is present in the code with a `_DEFAULT_WAIT_REQUIRE_MERGE = 0` constant for discoverability but **its branch-ancestor cleared logic is not yet wired** (deferred to a later plan). Leave it unset. The default deregister-only cleared signal is the operative behavior.

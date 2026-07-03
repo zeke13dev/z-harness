@@ -32,6 +32,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_PATH = REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
+ADAPTIVE_INTENT_DOC = REPO_ROOT / "docs" / "human" / "adaptive-intent.md"
+ACTIVE_PLAN_REGISTRY_DOC = REPO_ROOT / "docs" / "human" / "active-plan-registry.md"
+WATCHDOG_DOC = REPO_ROOT / "docs" / "human" / "watchdog.md"
 
 
 def _read_skill_text() -> str:
@@ -199,6 +202,87 @@ class TestExactlyOneCoalescedDispatchAtLevelBoundary(unittest.TestCase):
         self.assertIn("sort -u", region)
         # The join must use a literal " && " separator (not corrupt embedded &&).
         self.assertIn('printf " && "', region)
+
+
+class TestFuturePipelinedTrackContract(unittest.TestCase):
+    """T005 docs-only contract for future pipelined refill safety boundaries."""
+
+    def setUp(self):
+        self.text = _read_skill_text()
+        start = self.text.index("FUTURE PIPELINED TRACK CONTRACT")
+        self.contract = self.text[start:start + 4500]
+
+    def test_contract_covers_required_scheduler_boundaries(self):
+        required = [
+            "docs-only boundary",
+            "DOES NOT enable runtime pipelined refill",
+            "DOES NOT change",
+            "handoff schema/state",
+            "phase-lockstep",
+            "queued -> prechecking -> implementing -> reviewing -> retrying",
+            "halted | done",
+            "Refill loop",
+            "Checkpoint boundary",
+            "Halt-drain behavior",
+            "Lease lifecycle",
+            "Background-handle expectation",
+            "Diff-isolation rule",
+        ]
+        for token in required:
+            self.assertIn(token, self.contract)
+
+    def test_refill_cannot_cross_current_bfs_level_boundary(self):
+        contract = self.contract
+        for token in (
+            "LEDGER flush",
+            ".bfs_level_state write",
+            "coalesced remote verify",
+            "checkpoint check",
+            "acceptance evaluation",
+        ):
+            self.assertIn(token, contract)
+        self.assertIn("Refill across BFS levels is forbidden", contract)
+
+    def test_current_level_boundary_order_remains_checkpoint_then_remote_then_checkpoint_check(self):
+        done_hash_idx = self.text.index(
+            'printf \'%d %s\\n\' "$CURRENT_LEVEL" "$LEVEL_DONE_HASH" > "$LEVEL_STATE_FILE"'
+        )
+        coalesce_idx = self.text.index(
+            "Coalesced remote build (INTENT BFS level boundary)"
+        )
+        complete_event_idx = self.text.index(
+            '"orchestration" intent_bfs_level_complete'
+        )
+        checkpoint_idx = self.text.index(
+            "BFS boundary clear-checkpoint threshold check"
+        )
+
+        self.assertLess(done_hash_idx, coalesce_idx)
+        self.assertLess(coalesce_idx, complete_event_idx)
+        self.assertLess(complete_event_idx, checkpoint_idx)
+
+    def test_future_background_handles_cannot_be_synchronous_agent_only(self):
+        self.assertIn("durable background handle", self.contract)
+        self.assertIn("poll/cancel/result semantics", self.contract)
+        self.assertIn("synchronous Agent()", self.contract)
+        self.assertIn("does not satisfy this contract", self.contract)
+
+    def test_human_docs_describe_docs_only_runtime_boundary(self):
+        adaptive = ADAPTIVE_INTENT_DOC.read_text(encoding="utf-8")
+        registry = ACTIVE_PLAN_REGISTRY_DOC.read_text(encoding="utf-8")
+        watchdog = WATCHDOG_DOC.read_text(encoding="utf-8")
+
+        self.assertIn("does not enable runtime pipelined refill", adaptive)
+        self.assertIn("does not change `handoff.json` schema", adaptive)
+        self.assertIn("Clear checkpoints remain BFS-level boundaries", adaptive)
+
+        self.assertIn("does not enable runtime pipelined refill", registry)
+        self.assertIn("does not add pipelined fields", registry)
+        self.assertIn("durable track table", registry)
+
+        self.assertIn("durable background handles", watchdog)
+        self.assertIn("does not implement that runtime refill path", watchdog)
+        self.assertIn("phase-lockstep BFS checkpoint semantics", watchdog)
 
 
 # ---------------------------------------------------------------------------

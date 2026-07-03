@@ -187,6 +187,15 @@ class TestWorkflowKnobsFromFile(unittest.TestCase):
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         self.assertEqual(r.stdout.strip(), "true")
 
+    def test_intent_parallel_levels_false_resolved_from_file(self):
+        """Explicit repo TOML false overrides the default-on parallelism setting."""
+        r = self._run(
+            "workflow.intent_parallel_levels",
+            '[workflow]\nintent_parallel_levels = false\n',
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertEqual(r.stdout.strip(), "false")
+
     def test_hermes_enabled_resolved_from_file(self):
         """workflow.hermes_enabled can be set to true via TOML file."""
         r = self._run("workflow.hermes_enabled", '[workflow]\nhermes_enabled = true\n')
@@ -199,7 +208,7 @@ class TestWorkflowKnobsFromFile(unittest.TestCase):
         for key, expected in [
             ("workflow.planning_mode", "intent"),
             ("workflow.intent_level", "auto"),
-            ("workflow.intent_parallel_levels", "false"),
+            ("workflow.intent_parallel_levels", "true"),
             ("workflow.hermes_enabled", "false"),
         ]:
             with self.subTest(key=key):
@@ -303,6 +312,13 @@ class TestBoolCoercion(unittest.TestCase):
             "[workflow]\nintent_parallel_levels = true\n",
         )
         self.assertEqual(val, "true")
+
+    def test_intent_parallel_levels_toml_false_prints_false(self):
+        val = self._run_key(
+            "workflow.intent_parallel_levels",
+            "[workflow]\nintent_parallel_levels = false\n",
+        )
+        self.assertEqual(val, "false")
 
     def test_env_var_true_coerces_hermes_enabled(self):
         """Z_HARNESS_WORKFLOW_HERMES_ENABLED=true in env → 'true'."""

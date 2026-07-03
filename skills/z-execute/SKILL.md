@@ -864,13 +864,17 @@ p = os.path.join(sys.argv[1], 'STYLE.md')
 print(p if os.path.isfile(p) else '')
 " "${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}" 2>/dev/null || echo "")"
 
-    # Read the intent_parallel_levels config knob (default false → sequential).
+    # Read the intent_parallel_levels config knob. Explicit false serializes; true
+    # is honored only after the INTENT safety gates in "Parallelism (read first)" pass.
     INTENT_PARALLEL_LEVELS="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
       get workflow.intent_parallel_levels 2>/dev/null || echo false)"
+    # Documented INTENT same-level fan-out limit. If more siblings are eligible,
+    # partition them into chunks of at most this many task tracks.
+    INTENT_PARALLEL_FANOUT_LIMIT=3
 
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_execute_start \
-      "$(printf '{"base":"%s","level":%d,"tasks_file":"%s","parallel":"%s"}' \
-         "$BASE" "$CURRENT_LEVEL" "$LEVEL_TASKS_FILE" "${INTENT_PARALLEL_LEVELS:-false}")" 2>/dev/null || true
+      "$(printf '{"base":"%s","level":%d,"tasks_file":"%s","parallel":"%s","fanout_limit":%d}' \
+         "$BASE" "$CURRENT_LEVEL" "$LEVEL_TASKS_FILE" "${INTENT_PARALLEL_LEVELS:-false}" "$INTENT_PARALLEL_FANOUT_LIMIT")" 2>/dev/null || true
 
     # ── Execute the level's tasks via the existing per-task implementer→reviewer loop ──
     #
@@ -933,23 +937,86 @@ style_path: ${STYLE_PATH}"
     #   d) When LEVEL_EXECUTE_ACTIVE=1, the Main loop MUST return to this caller
     #      (not fall through to Finalize).  Return codes and output vars are below.
     #
-    # PARALLELISM GATE (workflow.intent_parallel_levels, default false → sequential):
+    # PARALLELISM GATE (workflow.intent_parallel_levels):
     #   THE gate lives in the "Parallelism (read first)" section's rule 0 (above the
     #   Main loop), which is evaluated on every Main loop step-1 pick while
-    #   LEVEL_EXECUTE_ACTIVE=1:
-    #   - When $INTENT_PARALLEL_LEVELS = "false" (default): rule 0 restricts step 1's
-    #     eligibility set to a single (lowest-numbered) task per pick — the level runs
-    #     strictly sequentially, one task at a time.
-    #   - When $INTENT_PARALLEL_LEVELS = "true": rule 0 does not restrict the eligibility
-    #     set; the Main loop dispatches independent sibling tasks within the level as
-    #     parallel Agent() calls in a single message, subject to rules 1-6 (file-overlap
-    #     dedup, workstreams.json DAG) exactly as in the legacy parallel path.
+    #   LEVEL_EXECUTE_ACTIVE=1.
+    #   - When $INTENT_PARALLEL_LEVELS is not literally "true" (including explicit
+    #     false user/repo overrides): rule 0 restricts step 1's eligibility set to a
+    #     single (lowest-numbered) task per pick, so the level runs strictly sequentially.
+    #   - Default-on INTENT same-level batching is allowed only when all safety gates
+    #     pass: every sibling in $LEVEL_TASKS_FILE has a parseable precise `**Files:**`
+    #     scope; `workstreams.json` exists when available and reports
+    #     `scope_unknown: false`; eligible siblings have disjoint file scope and no
+    #     workstream dependency/conflict edge; the batch is capped/partitioned by
+    #     $INTENT_PARALLEL_FANOUT_LIMIT; and reviewer diff capture is isolated per task.
+    #   - If any sibling in the level has missing or unparseable `**Files:**` scope, or
+    #     workstreams reports `scope_unknown: true`, rule 0 serializes the whole affected
+    #     INTENT level. Unknown scope is not discretionary in default-on INTENT mode.
+    #   - When the safety gates pass and $INTENT_PARALLEL_LEVELS = "true": the Main loop
+    #     dispatches independent sibling tasks within the level as parallel Agent() calls
+    #     in a single message, subject to rules 1-6 plus the INTENT fan-out cap, and marks
+    #     those tracks with INTENT_RULE0_SAFETY_PASSED=1 and INTENT_PARALLEL_BATCH_ACTIVE=1.
+    #     Serialized fallbacks, including unknown-scope serialization and one-task picks,
+    #     leave those track flags unset/0 so review diff capture uses the serialized path.
     #   NOTE: $INTENT_PARALLEL_LEVELS controls within-level parallelism only.  Cross-
     #   level parallelism (running two BFS levels at once) is NOT supported in v1.
     #   `runtime.max_parallel` / `runtime.max_parallel_plans` / `HERMES_MAX_PARALLEL`
     #   are UNRELATED vestigial knobs (defined, validated, and env-aliased in
     #   scripts/config.py, but never read by any dispatch path) — do not confuse them
     #   with this gate.
+    #
+    # FUTURE PIPELINED TRACK CONTRACT (docs-only boundary):
+    #   This bundle DOES NOT enable runtime pipelined refill and DOES NOT change
+    #   handoff schema/state.  The current engine remains phase-lockstep inside
+    #   each BFS level: generate level -> execute all selected level tasks through
+    #   the existing per-task engine -> flush LEDGER -> persist .bfs_level_state
+    #   -> run coalesced remote verify -> evaluate checkpoint/acceptance.
+    #
+    #   A future pipelined scheduler must use durable per-track state rather than
+    #   inferring liveness from `[~]` or waiting on synchronous Agent() calls.  The
+    #   required state machine is:
+    #     queued -> prechecking -> implementing -> reviewing -> retrying ->
+    #     halted | done
+    #   with explicit paused/checkpointed metadata when a clear checkpoint is
+    #   emitted.  Each track record must include task id, BFS level, attempt,
+    #   claimed paths, background handle id, current phase, last heartbeat,
+    #   reviewer diff capture mode, and terminal result.
+    #
+    #   Refill loop: refill may dispatch another same-level ready task only when
+    #   a track reaches durable done/halted and the scheduler has re-read the
+    #   durable track table, TASKS.md, workstreams scope, and active leases.  It
+    #   must still obey the fan-out cap, unknown-scope serialization, same-level
+    #   dependency/file-conflict gates, and review diff-isolation rule.
+    #   Refill across BFS levels is forbidden until the prior level's LEDGER flush,
+    #   .bfs_level_state write, coalesced remote verify, checkpoint check, and
+    #   acceptance evaluation have completed.
+    #
+    #   Checkpoint boundary: clear checkpoints remain BFS-level boundaries only.
+    #   A checkpoint may be written after all live tracks in the current level are
+    #   drained or durably paused; it must not snapshot half-written TASKS.md,
+    #   unflushed LEDGER entries, or in-memory Agent() state.
+    #
+    #   Halt-drain behavior: if any track reaches a user-blocking halt, stop
+    #   refilling immediately, let already-started sibling tracks reach a durable
+    #   terminal or paused state, persist all track records, then surface halts in
+    #   deterministic task-id order.  Do not deregister the run for pause-for-
+    #   resume checkpoints.
+    #
+    #   Lease lifecycle: a track claims explicit paths before implementation,
+    #   keeps the lease through retry/review failure, expands it for newly-touched
+    #   paths before retry, releases only on clean success, and leaves held paths
+    #   to deregister/reap on run-ending halt.  Pipelined refill must re-check
+    #   leases before every dispatch.
+    #
+    #   Background-handle expectation: native hosts must expose a durable background handle with poll/cancel/result semantics for each subagent track.
+    #   A future implementation that only launches synchronous Agent()
+    #   calls and stores no durable handle/state does not satisfy this contract.
+    #
+    #   Diff-isolation rule: every review must receive either a per-task
+    #   path-filtered diff captured from that track's declared/touched paths or a
+    #   serialized review capture window.  A reviewer must never inspect a
+    #   combined dirty-tree diff that includes sibling-track edits.
     LEVEL_EXECUTE_ACTIVE=1
     LEVEL_EXECUTE_SUPPRESS_COMPACTION=1
     # Per-level accumulator file for LEDGER content (replaces eval'd dynamic vars).
@@ -1422,8 +1489,11 @@ This is the same finalize path as a level-cap halt: `FINALIZE_STATUS=aborted`, d
    `deps` (which tasks depend on which), `file_conflicts` (tasks whose known file sets overlap),
    and `scope_unknown` (whether any task block has no parseable `**Files:` line, making
    rule 2's dedup blind for that task). The orchestrator uses this data — alongside rule 2's
-   inline check — to decide the safe concurrency for each batch. No caps, no floors: the
-   orchestrator decides. Continue to step 5.
+   inline check — to decide the safe concurrency for each batch. In INTENT mode, `scope_unknown:
+   true` is a serialization gate for the affected BFS level, not a risk tradeoff; default-on
+   same-level batching requires parseable precise `**Files:**` scope for every sibling. In INTENT
+   mode, eligible siblings are also capped or partitioned by the documented fan-out limit in the
+   T023 parallelism gate. Legacy mode keeps the historical DAG-driven behavior. Continue to step 5.
 
 5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
@@ -1685,15 +1755,27 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
-0. **INTENT-BFS serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a BFS level, per the T023-SEAM above) AND `$INTENT_PARALLEL_LEVELS` is not literally `"true"`, restrict rule 1's eligibility set to a **single** task (the lowest-numbered eligible task) — do not batch. This is the only place `workflow.intent_parallel_levels` is consulted; without this gate, rules 1-6 below would already batch-dispatch independent same-level siblings regardless of the knob, since nothing else in this section reads `LEVEL_EXECUTE_ACTIVE` or `INTENT_PARALLEL_LEVELS`. Legacy-mode invocations (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are unaffected by this gate and proceed straight to rule 1.
+0. **INTENT-BFS serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a BFS level, per the T023-SEAM above), same-level batching is default-on only after these safety checks pass:
+   - `$INTENT_PARALLEL_LEVELS` is literally `"true"`; explicit false user/repo config still serializes.
+   - Every sibling task block in the current level has a parseable precise `**Files:**` scope. Missing or unparseable scope serializes the affected INTENT level.
+   - `$BASE/workstreams.json`, when present, reports `scope_unknown: false`; `scope_unknown: true` serializes the affected INTENT level.
+   - Eligible siblings have no dependency edge, no `file_conflicts` edge, and no inline `**Files:**` overlap.
+   - The dispatch set is capped or partitioned by `$INTENT_PARALLEL_FANOUT_LIMIT` (currently 3); do not launch an unbounded same-level batch.
+   - The review step uses per-task path-filtered diff capture, serialized review capture inside the parallel level, or an equivalent documented guard so a reviewer never receives a combined dirty-tree diff containing sibling-task changes.
+
+   If any safety check fails, restrict rule 1's eligibility set to a **single** task (the lowest-numbered eligible task) and run the level sequentially. Serialized fallback paths, including unknown-scope serialization, MUST set `INTENT_RULE0_SAFETY_PASSED=0` and `INTENT_PARALLEL_BATCH_ACTIVE=0` for that track and use serialized review/full diff capture.
+
+   If all safety checks pass and the selected dispatch set contains more than one sibling task, mark each dispatched track with `INTENT_RULE0_SAFETY_PASSED=1` and `INTENT_PARALLEL_BATCH_ACTIVE=1`; only these tracks are allowed to use per-task path-filtered review diff capture. If the dispatch set contains only one task, run it as serialized (`INTENT_PARALLEL_BATCH_ACTIVE=0`) even when the config flag is true.
+
+   This is the only place `workflow.intent_parallel_levels` is consulted; without this gate, rules 1-6 below would already batch-dispatch independent same-level siblings regardless of the knob, since nothing else in this section reads `LEVEL_EXECUTE_ACTIVE` or `INTENT_PARALLEL_LEVELS`. Legacy-mode invocations (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are unaffected by this gate and proceed straight to rule 1.
 1. **Eligibility.** Pick ALL tasks whose deps are all `[x]` and that aren't skip-flagged (see step 2).
 2. **File-overlap dedup.** Two tasks whose "Files:" blocks share a path cannot run concurrently. When two eligible tasks conflict, run the lower-numbered one this batch and defer the other.
 3. **Parallel dispatch (per phase):** within a batch, run the spec-precheck for all batch tasks in a single message with multiple `Agent()` calls. Same for the implementer phase. Same for the reviewer phase.
 4. **Halt semantics.** If one track returns `spec_problem` / `decision_needed` / `needs_clarification` / `unable_to_complete`, that *track* halts and you collect the question. **In-flight tracks for other tasks continue.** Only after the batch completes do you present the collected halts to the user (one `AskUserQuestion` per halt, in order).
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
 6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-execute` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
-   - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel — no hard cap, the DAG decides.
-   - `scope_unknown: true` means some task block has no parseable `**Files:**` line — rule 2 is blind for that task. The orchestrator knows this and decides whether to parallelize anyway or serialize, weighing the risk of clobbered edits.
+   - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel; in INTENT mode, still apply `$INTENT_PARALLEL_FANOUT_LIMIT` by partitioning wider eligible sets.
+   - `scope_unknown: true` means some task block has no parseable `**Files:**` line, making rule 2 blind for that task. In INTENT BFS mode this is a hard serialization gate for the affected level. Legacy mode keeps the historical risk-based behavior.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
 ## Hard caps (token / wall-clock safety)
@@ -2272,9 +2354,31 @@ whether the undeclared write introduced a real conflict. They do not stop step 6
 
 ```bash
 mkdir -p $BASE/archive/tasks/<task-id>
-git diff > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
-  || ls -la <implementer's FILES_CHANGED> > $BASE/archive/tasks/<task-id>/diff.patch
+if [ "${INTENT_RULE0_SAFETY_PASSED:-0}" -eq 1 ] && [ "${INTENT_PARALLEL_BATCH_ACTIVE:-0}" -eq 1 ]; then
+  # INTENT parallel review-diff isolation: never capture a combined dirty-tree diff
+  # for sibling tasks. This branch is reachable only for an actual INTENT parallel
+  # batch after Rule 0 safety gates passed. Use only this task's parseable precise
+  # **Files:** scope.
+  TASK_DIFF_PATHS=(<paths parsed from this task block's **Files:** line>)
+  git diff -- "${TASK_DIFF_PATHS[@]}" > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
+    || ls -la "${TASK_DIFF_PATHS[@]}" > $BASE/archive/tasks/<task-id>/diff.patch
+else
+  # Serialized review/full diff capture. This is mandatory for config-false runs,
+  # one-task batches, safety-gate failures, and unknown-scope serialization.
+  git diff > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
+    || ls -la <implementer's FILES_CHANGED> > $BASE/archive/tasks/<task-id>/diff.patch
+fi
 ```
+
+**INTENT review-diff isolation (mandatory).** When an INTENT BFS level runs sibling tasks in
+parallel, the reviewer must not inspect a combined dirty-tree diff that can include sibling-task
+changes. The approved guard is per-task path-filtered diff capture using that task's precise
+`**Files:**` scope, but only for tracks marked by Rule 0 as both
+`INTENT_RULE0_SAFETY_PASSED=1` and `INTENT_PARALLEL_BATCH_ACTIVE=1`. If Rule 0 serializes for
+missing/unparseable `**Files:**`, `scope_unknown: true`, config false, dependency/file conflict, or a
+one-task pick, use serialized review/full diff capture. If a driver cannot perform path-filtered
+capture, it must serialize review capture inside the parallel level or serialize the entire
+affected level before dispatching review.
 
 **Skip-rereview on clean cycle-1.** If `CYCLE == 2` AND the cycle-1 reviewer returned `blockers=0` AND `majors=0`, do **not** spawn the reviewer. Instead, skip directly to the test step (step 7b) and then proceed to step 8.
 

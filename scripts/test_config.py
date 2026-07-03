@@ -127,6 +127,12 @@ class TestBaseline(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "always")
 
+    def test_get_intent_parallel_levels_default_on_without_repo_override(self):
+        """Default-on INTENT parallelism resolves hermetically without repo config."""
+        r = run(["get", "workflow.intent_parallel_levels"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "true")
+
     def test_get_schema_version_exits_3(self):
         r = run(["get", "schema_version"], env=self.env, cwd=self.cwd)
         self.assertEqual(r.returncode, 3)
@@ -190,6 +196,17 @@ class TestRepoLocalPrecedence(unittest.TestCase):
         r = run(["get", "notify.level"], env=self.env)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "off")
+
+    def test_repo_false_overrides_intent_parallel_levels_default(self):
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[workflow]\nintent_parallel_levels = false\n',
+        )
+        env = dict(self.env)
+        env["Z_HARNESS_REPO_CONFIG"] = repo_cfg
+        r = run(["get", "workflow.intent_parallel_levels"], env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "false")
 
     def test_explain_shows_source_repo(self):
         """explain prints the full repo config file path as source label."""

@@ -79,7 +79,11 @@ Each task carries a tentative `**Complexity:** low|medium|high` line. Use the co
 When in doubt, default to `medium`. The orchestrator will re-stamp via `complexity-classifier` before dispatching, but your tentative tier lets it skip the re-stamp for clear cases.
 
 ### Size rule
-A healthy level batch is 3–8 tasks. Fewer than 3 may indicate the criteria are nearly met (fine — emit what you have). More than 10 tasks in one level is a signal the decomposition is too fine-grained; merge related independent tasks before emitting.
+Default healthy level batch is 3–8 tasks. Fewer than 3 may indicate the criteria are nearly met (fine — emit what you have).
+
+Wider same-level batches are allowed only for pipelined task-track scheduling when every sibling has a precise, parseable `**Files:**` scope, every sibling's `**Files:**` set is disjoint from every other sibling's `**Files:**` set, and the level can be partitioned into bounded task tracks/workstreams. The general Independence rule's append-only/non-conflicting overlap exception is not enough for wider pipelined batches. A wider frozen level MUST NOT mean the executor launches every sibling at once; actual dispatch remains capped by the executor's fan-out window, and the notes must make the bounded/partitioned shape explicit.
+
+If dependencies are uncertain, a task is missing `**Files:**`, file scope is vague, any sibling `**Files:**` entries overlap, or the candidate batch would require unbounded fan-out, do not emit a wide same-level batch. Defer dependent or overlapping work to the next level, partition it into a smaller bounded level with disjoint file scopes, serialize the risky work, or merge over-fine tasks before emitting. More than 10 tasks in one level is acceptable only under the proven safe wider-batch conditions above; otherwise it is a signal the decomposition is too fine-grained.
 
 ### Deferral rule
 If an unmet criterion cannot be addressed this level (because all tasks addressing it depend on other tasks in this batch), note it in the `DEFERRED_CRITERIA` return field. The next level will pick it up. Never emit a task that has an intra-level dependency just to "cover" a criterion.

@@ -2804,6 +2804,50 @@ class TestWriteHandoffProducer:
         )
 
 
+class TestPipelinedHandoffBoundary:
+    """T005 guards: future pipelining must not alter current handoff schema/state."""
+
+    def test_zexecute_contract_says_no_handoff_schema_or_state_change(self):
+        text = _load_zexecute_skill()
+        contract_idx = text.index("FUTURE PIPELINED TRACK CONTRACT")
+        contract = text[contract_idx:contract_idx + 3500]
+
+        assert "DOES NOT enable runtime pipelined refill" in contract
+        assert "DOES NOT change" in contract
+        assert "handoff schema/state" in contract
+        assert "clear checkpoints remain BFS-level boundaries only" in contract
+        assert "must not snapshot half-written TASKS.md" in contract
+
+    def test_handoff_schema_has_no_pipelined_track_state_surface(self):
+        schema = _load_handoff_schema()
+        serialized = json.dumps(schema)
+
+        for forbidden in (
+            "pipelined_tracks",
+            "track_state",
+            "background_handle_id",
+            "refill_cursor",
+            "pipeline_scheduler",
+        ):
+            assert forbidden not in serialized
+
+    def test_write_handoff_default_output_has_no_pipelined_state(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        handoff = _run_write_handoff(tmp_path)
+
+        for forbidden in (
+            "pipelined_tracks",
+            "track_state",
+            "background_handle_id",
+            "refill_cursor",
+            "pipeline_scheduler",
+        ):
+            assert forbidden not in handoff
+
+        assert handoff["protocol_version"] == "1.0"
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+
 class TestClearCheckpointProducer:
     """write-clear-checkpoint.sh emits generic watcher-readable checkpoint artifacts."""
 

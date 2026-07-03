@@ -1,6 +1,6 @@
 {
   "concept": "adaptive-intent",
-  "last_updated": "2026-06-29",
+  "last_updated": "2026-07-03",
   "covers_spec": "beyond-sdd",
   "source_file": [
     "scripts/intent-schema.py",
@@ -166,9 +166,10 @@
     "INTENT.md is drafted through a short user iteration loop before final approval.",
     "Concern flags are surfaced before final read-through, and /z-plan asks whether to incorporate an optional /z-audit-plan scan.",
     "Execution strategy metadata includes task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and workstream/handoff data.",
+    "task-tree-generator may emit wider same-level INTENT BFS batches only when siblings have precise disjoint file scope and executor fan-out can be capped or partitioned.",
     "Watcher checkpoint seams run after preplanning artifacts and after execution strategy/handoff artifacts stabilize.",
     "Unknown acceptance state counts as unmet.",
-    "workflow.intent_parallel_levels controls within-level sibling dispatch only."
+    "workflow.intent_parallel_levels defaults true but controls within-level sibling dispatch only, under /z-execute safety preconditions."
   ],
   "gotchas": [
     "workflow.intent_bfs_level_cap is runtime-read and may not appear in DEFAULTS; empty/None falls back to 6.",
@@ -176,12 +177,14 @@
     ".bfs_level_state hash mismatch restarts from level 0.",
     "Brainstorm and audit are ask gates, not automatic route changes: /z-plan can recommend /z-brainstorm or /z-audit-plan, but it never launches them.",
     "Execution strategy metadata is part of the planning contract consumed by fresh /z-execute context; do not treat TASKS.md alone as the complete handoff.",
-    "Do not pass spec_path/plan_path to implementers in INTENT mode."
+    "Do not pass spec_path/plan_path to implementers in INTENT mode.",
+    "Missing, unparseable, overlapping, or scope_unknown same-level task scope serializes the affected INTENT BFS level/task; do not infer arbitrary fan-out.",
+    "Default-on workflow.intent_parallel_levels still requires precise Files scope, bounded/partitioned fan-out, and per-task review diff isolation or serialized review capture."
   ],
   "config_keys": {
     "workflow.planning_mode": "intent|full recommendation for the explicit mode gate",
     "workflow.intent_level": "auto|quick|standard|deep; level flags override and bypass classifier",
-    "workflow.intent_parallel_levels": "bool, default false",
+    "workflow.intent_parallel_levels": "bool, default true; opt out with false; same-level INTENT BFS only when /z-execute safety preconditions pass",
     "workflow.intent_bfs_level_cap": "int guard, fallback 6 when unset",
     "workflow.hermes_enabled": "bool master gate for Hermes machinery"
   },

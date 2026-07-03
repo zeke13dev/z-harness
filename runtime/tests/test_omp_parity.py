@@ -29,11 +29,15 @@ Each test is annotated with the failure class it catches if a regression occurs.
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from runtime.drivers.omp.subprocess_driver import OmpDriverConfigError, OmpHostDriver
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ZEXECUTE_SKILL_PATH = REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +165,21 @@ class TestSubagentFanOutParity:
         assert "implementer-1" in agents_seen and "implementer-2" in agents_seen, (
             f"Not all subagent identities preserved: {agents_seen}"
         )
+
+
+class TestFutureBackgroundHandleContract:
+    """T005 structural guard for future native pipelined scheduler parity."""
+
+    def test_zexecute_contract_requires_durable_background_handles(self) -> None:
+        text = ZEXECUTE_SKILL_PATH.read_text(encoding="utf-8")
+        start = text.index("FUTURE PIPELINED TRACK CONTRACT")
+        contract = text[start:start + 4500]
+
+        assert "Background-handle expectation" in contract
+        assert "native hosts must expose a durable" in contract
+        assert "background handle with poll/cancel/result semantics" in contract
+        assert "synchronous Agent()" in contract
+        assert "does not satisfy this contract" in contract
 
 
 # ---------------------------------------------------------------------------
