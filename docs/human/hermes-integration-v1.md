@@ -6,7 +6,7 @@
 > (default `false`). To revive, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
 > Deletion of `scripts/hermes/` is a **deferred cleanup** — files are kept to prevent bit-rot until
 > a deliberate removal task is planned.
-> **Version:** 1.5.0
+> **Version:** 1.6.0
 >
 > This document defines the contract between z-harness (the planning layer)
 > and any orchestrator (the execution layer) that wants to execute z-harness
@@ -18,6 +18,7 @@
 > **v1.3** (amended 2026-06-12): `parallel_group` is now populated as a derived `level-{depth}` label; new `scope_unknown` manifest boolean; concurrency execution contract (depends_on-driven level scheduler, HIGH-severity file-conflict serialization, `max_parallel_workstreams` cap, semaphore-for-lifetime); cross-plan `--slugs` mode contract; non-file shared-state limitation documented.
 > **v1.4** (amended 2026-06-16): Hermes gated OFF by default (`workflow.hermes_enabled=false`). All concurrency/retry/timeout knobs moved from `HERMES_*` env vars to `workflow.*` file config. File deletion deferred.
 > **v1.5** (amended 2026-07-03): `/z-plan-split` fanout uses MCP `so` sessions over grouped split-plan cluster directories. Split workstreams are not required to contain `<path>/TASKS.md`; legacy flat `/z-plan` executors may still require that path.
+> **v1.6** (amended 2026-07-03): Intent-mode `/z-execute` treats `work-graph.json` as the append-only known-work DAG. `workstreams.json` remains static scope/conflict metadata; levels are computed ready sets over the graph, not preplanned execution phases.
 
 ---
 
@@ -56,7 +57,103 @@ flat-plan workstreams track progress in TASKS.md and `session-status.json`;
 MCP `so` fanout tracks grouped child state in `SoSessionRecord` records and
 signal events. Modifications to the file mid-execution are not supported.
 
-### Schema
+For intent-mode adaptive execution, `workstreams.json` is not the live work
+queue. It is conflict and scope metadata used by the scheduler. The live queue
+is `work-graph.json`, described below.
+
+---
+
+## Artifact: `work-graph.json`
+
+**Location:** `z-harness/<slug>/work-graph.json`
+
+**Generation:** `/z-plan` writes the initial known frontier from the approved
+INTENT and initial TASKS projection. `/z-execute` appends newly knowable nodes
+as implementation outcomes return. The graph is intentionally partial: absence
+of a downstream node means "not known yet," not "not needed."
+
+**Lifecycle:** Append-only for node identity and discovery history during
+execution. Existing nodes are never deleted or renumbered. Status fields are
+mutable durable scheduler state; new work is appended with an `append_log` entry
+naming the trigger, while status transitions may be recorded in `status_log`. A
+watcher or fresh session may resume by reading `work-graph.json`, `TASKS.md`,
+and `LEDGER.md`.
+
+### Known-work graph schema
+
+```json
+{
+  "artifact": "known_work_graph",
+  "schema_version": 1,
+  "slug": "<plan-slug>",
+  "planning_mode": "intent",
+  "generated_at": "<ISO 8601 UTC>",
+  "status": "open",
+  "updated_at": "<ISO 8601 UTC>",
+  "nodes": [ ... ],
+  "append_log": [ ... ],
+  "status_log": [ ... ]
+}
+```
+
+### Node object
+
+```json
+{
+  "id": "T001",
+  "kind": "implementation",
+  "status": "ready",
+  "depends_on": [],
+  "files": ["skills/z-execute/SKILL.md"],
+  "task_ref": "TASKS.md#T001",
+  "advances": "criterion #1",
+  "origin": {
+    "command": "/z-plan",
+    "run": "<run-id>",
+    "reason": "initial-known-frontier"
+  },
+  "fresh_session_required": false,
+  "level_hint": 0
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable node id. Implementation nodes use `T###`; non-implementation nodes may use `W###`. |
+| `kind` | `implementation`, `research`, `decision_gate`, `expansion`, or `handoff_required`. |
+| `status` | `ready`, `blocked`, `running`, `done`, `halted`, or `skipped`. |
+| `depends_on` | Node ids that must be `done` before this node is eligible. |
+| `files` | Repo-relative file scope when known. Missing or vague scope serializes the affected ready frontier. |
+| `task_ref` | Pointer to the TASKS.md block for implementation nodes, or a note for non-implementation nodes. |
+| `advances` | Acceptance criterion mapping or rationale. |
+| `origin` | Why this node became known; includes command/run and a short reason. |
+| `fresh_session_required` | When true, the scheduler drains live tracks and writes a handoff instead of spawning another in-context subagent. |
+| `level_hint` | Derived longest-path depth. It is a scheduling hint, not a semantic phase. |
+
+`updated_at` and `status_log` are optional on the initial artifact and become
+present after `/z-execute` syncs TASKS.md outcomes back into the graph.
+
+### Scheduling semantics
+
+The scheduler computes ready nodes from the graph:
+
+```
+ready(node) = node.status == "ready" and all(dep.status == "done" for dep in node.depends_on)
+```
+
+Ready nodes at the same dependency depth form a level in the CPU-scheduler sense:
+they are runnable work, not a phase that must be fully planned up front. When a
+node-return notification reaches the orchestrator, it marks the node terminal,
+flushes `TASKS.md` and `LEDGER.md`, asks the graph expander to append newly
+knowable nodes, then immediately dispatches another ready node if fan-out, file
+scope, and lease gates allow. The notification may instead instruct the
+orchestrator to pause for context or write a fresh-session handoff. It stops
+refilling only for user gates, halts, context checkpoints, or
+`fresh_session_required` nodes.
+
+---
+
+## `workstreams.json` schema
 
 ```json
 {
@@ -195,22 +292,23 @@ lines across all tasks into a DAG via a deterministic 5-rule algorithm:
 
 ## Execution contract
 
-The orchestrator reads `workstreams.json` and follows this lifecycle:
+The orchestrator reads `workstreams.json` for static workstream/conflict metadata. For intent-mode adaptive execution it also reads `work-graph.json` as the live known-work DAG and follows this lifecycle:
 
-### 1. Resolve dependency order
+### 1. Resolve runnable work
 
-Build a DAG from `depends_on`. Identify execution levels using the
-longest-path depth of each workstream:
+For legacy/static workstreams, build a DAG from `workstreams[].depends_on`.
+For intent-mode adaptive runs, build the DAG from `work-graph.json` nodes.
+Identify scheduler levels using the longest-path depth:
 
 ```
 Level 0 (no deps):    ws-1
 Level 1 (after ws-1): ws-2, ws-3   ← share parallel_group "level-1"
 ```
 
-`depends_on` is the sole scheduling gate (INV-2). `parallel_group` is a
-derived label for orchestrator convenience — it is NOT a scheduling
-mechanism. A workstream is eligible to start iff every id in its
-`depends_on` has reached `"done"`.
+`depends_on` is the sole scheduling gate (INV-2). `parallel_group` or
+`level_hint` is a derived label for orchestrator convenience — it is NOT a
+scheduling mechanism. A workstream/node is eligible to start iff every id in
+its `depends_on` has reached `"done"`.
 
 **Concurrency cap (v1.3):** The orchestrator applies a
 `max_parallel_workstreams` limit (default 1 ≡ sequential, matching
@@ -231,9 +329,15 @@ explicitly disabled in orchestrator config.
 1, equivalent to `serialize_all`). Silent blind parallelism is forbidden
 when conflict data is absent or low-confidence.
 
-The orchestrator MAY also serialize workstreams at the same level based
+The orchestrator MAY also serialize workstreams/nodes at the same level based
 on `"medium"` or `"low"` severity conflicts — this is left to orchestrator
 discretion.
+
+Intent-mode refill rule: after any node reaches a durable terminal state, the
+orchestrator re-reads `work-graph.json`, appends newly knowable nodes via the
+graph expander, recomputes ready nodes, and dispatches another ready node if no
+handoff/user gate is required. It does not wait for a predeclared level to be
+fully planned before keeping the worker pool busy.
 
 ### 2. Create worktrees for independent workstreams
 

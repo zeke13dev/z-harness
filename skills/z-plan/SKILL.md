@@ -2615,8 +2615,103 @@ PYEOF
     "$(printf '{"slug":"%s","path":"%s","source":"z-plan","validation":%s}' \
       "$Z_HARNESS_SLUG" "$WORKSTREAMS_FILE" "$WORKSTREAM_VALIDATE_OUT")" 2>/dev/null || true
 
+  # Write the initial known-work graph for intent-mode /z-execute.
+  # This graph is deliberately a frontier, not a claimed complete task tree:
+  # /z-execute appends newly discovered nodes as implementation outcomes make
+  # additional work knowable. Levels are scheduler depths over depends_on.
+  WORK_GRAPH_FILE="$Z_HARNESS_PLAN_DIR/work-graph.json"
+  WORK_GRAPH_OUT="$(python3 - "$Z_HARNESS_PLAN_DIR" "$RUN" "$Z_HARNESS_SLUG" 2>&1 <<'PYEOF'
+from __future__ import annotations
+import json, re, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+plan_dir = Path(sys.argv[1])
+run = sys.argv[2]
+slug = sys.argv[3]
+tasks_path = plan_dir / "TASKS.md"
+out_path = plan_dir / "work-graph.json"
+
+try:
+    tasks_text = tasks_path.read_text(encoding="utf-8")
+except OSError as exc:
+    raise SystemExit(f"TASKS.md unreadable while writing work graph: {exc}") from exc
+
+task_blocks = re.findall(r"^## (T\d{3}) — (.*?) `\[ \]`(.*?)(?=^## T\d{3} — |\Z)", tasks_text, re.M | re.S)
+nodes = []
+for task_id, title, body in task_blocks:
+    files_m = re.search(r"^\*\*Files:\*\*\s*(.+)$", body, re.M)
+    deps_m = re.search(r"^\*\*Depends on:\*\*\s*(.+)$", body, re.M)
+    advances_m = re.search(r"^\*\*Advances:\*\*\s*(.+)$", body, re.M)
+    raw_deps = [] if not deps_m else re.findall(r"T\d{3}", deps_m.group(1))
+    nodes.append({
+        "id": task_id,
+        "kind": "implementation",
+        "status": "ready" if not raw_deps else "blocked",
+        "depends_on": raw_deps,
+        "files": [part.strip().strip("`") for part in (files_m.group(1).split(",") if files_m else []) if part.strip()],
+        "task_ref": f"TASKS.md#{task_id}",
+        "advances": advances_m.group(1).strip() if advances_m else "unknown",
+        "origin": {"command": "/z-plan", "run": run, "reason": "initial-known-frontier"},
+        "fresh_session_required": False,
+        "level_hint": 0,
+    })
+
+node_by_id = {node["id"]: node for node in nodes}
+def depth(node_id, seen=None):
+    seen = set() if seen is None else seen
+    if node_id in seen:
+        return 0
+    seen.add(node_id)
+    node = node_by_id.get(node_id)
+    if not node or not node["depends_on"]:
+        return 0
+    return 1 + max((depth(dep, seen) for dep in node["depends_on"] if dep in node_by_id), default=0)
+for node in nodes:
+    node["level_hint"] = depth(node["id"])
+
+payload = {
+    "artifact": "known_work_graph",
+    "schema_version": 1,
+    "slug": slug,
+    "planning_mode": "intent",
+    "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "status": "open",
+    "nodes": nodes,
+    "append_log": [{
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "trigger": "initial",
+        "source_node_id": None,
+        "nodes_added": [node["id"] for node in nodes],
+        "deferred_criteria": [],
+    }],
+}
+tmp = out_path.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+tmp.replace(out_path)
+print(out_path)
+PYEOF
+)"
+  WORK_GRAPH_RC=$?
+  if [ "$WORK_GRAPH_RC" -ne 0 ] || [ ! -s "$WORK_GRAPH_FILE" ]; then
+    printf '%s\n' "$WORK_GRAPH_OUT" >&2
+    WORK_GRAPH_JSON="$(printf '%s' "$WORK_GRAPH_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"phase8_work_graph_generation_failed","rc":%d,"output":%s,"path":"%s"}' \
+        "$WORK_GRAPH_RC" "$WORK_GRAPH_JSON" "$WORK_GRAPH_FILE")" 2>/dev/null || true
+    RB_HALT_REASON="intent known-work graph generation failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" work_graph_written \
+    "$(printf '{"slug":"%s","path":"%s","source":"z-plan","mode":"known_work_graph"}' \
+      "$Z_HARNESS_SLUG" "$WORK_GRAPH_FILE")" 2>/dev/null || true
+
   # Execution strategy metadata for intent-mode /z-execute.
-  # This is derived from TASKS.md + validated workstreams.json; it is not static boilerplate.
+  # This is derived from TASKS.md + work-graph.json + validated workstreams.json; it is not static boilerplate.
   EXECUTION_STRATEGY_OUT="$(python3 - "$Z_HARNESS_PLAN_DIR" "$RUN" 2>&1 <<'PYEOF'
 from __future__ import annotations
 import json, re, sys
@@ -2626,6 +2721,7 @@ plan_dir = Path(sys.argv[1])
 run = sys.argv[2]
 tasks_path = plan_dir / "TASKS.md"
 workstreams_path = plan_dir / "workstreams.json"
+work_graph_path = plan_dir / "work-graph.json"
 flags_path = plan_dir / "archive" / run / "intent-readthrough-flags.md"
 out_path = plan_dir / "execution-strategy.md"
 
@@ -2649,12 +2745,20 @@ for task_id, title, body in task_blocks:
 
 if not workstreams_path.exists():
     raise SystemExit("workstreams.json missing after Phase 8 validation")
+if not work_graph_path.exists():
+    raise SystemExit("work-graph.json missing after Phase 8 work graph generation")
 try:
     workstreams = json.loads(workstreams_path.read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError) as exc:
     raise SystemExit(f"workstreams.json became unreadable or invalid after Phase 8 validation: {exc}") from exc
+try:
+    work_graph = json.loads(work_graph_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"work-graph.json became unreadable or invalid after Phase 8 generation: {exc}") from exc
 if not isinstance(workstreams, dict):
     raise SystemExit("workstreams.json root must be an object")
+if not isinstance(work_graph, dict) or work_graph.get("artifact") != "known_work_graph":
+    raise SystemExit("work-graph.json root must be a known_work_graph object")
 parallel_groups = {}
 for ws in workstreams.get("workstreams", []) if isinstance(workstreams, dict) else []:
     group = ws.get("parallel_group")
@@ -2674,7 +2778,8 @@ lines = [
     "- INTENT.md is the user-approved contract.",
     f"- {flags_path.relative_to(plan_dir) if flags_path.exists() else 'archive/<run>/intent-readthrough-flags.md'} contains concerns, decisions, and optional audit-plan notes the user saw before approval when present.",
     "- TASKS.md maps each task to INTENT acceptance criteria via **Advances:** lines.",
-    "- workstreams.json is the validated conflict DAG for safe parallel batches.",
+    "- work-graph.json is the append-only known-work DAG. It starts with this frontier and /z-execute appends new nodes as outcomes reveal more work.",
+    "- workstreams.json is validated conflict/scope metadata for safe dispatch; it is not the complete task tree.",
     "",
     "## Task-to-intent mapping",
     "",
@@ -2685,6 +2790,7 @@ if not tasks:
     lines.append("- none — TASKS.md had no pending canonical task blocks")
 
 lines.extend(["", "## Parallel batches", ""])
+lines.append("- Scheduler rule: compute ready nodes from work-graph.json (`status=ready` and all `depends_on` done), then dispatch up to the safe fan-out window. When a node returns, append newly knowable nodes before idling.")
 if parallel_groups:
     for group, ids in sorted(parallel_groups.items()):
         lines.append(f"- parallel_group {group}: {', '.join(ids)}")
@@ -2707,8 +2813,8 @@ lines.extend([
     "",
     "## Checkpoint cadence",
     "",
-    "- Use the shared context watcher at durable task, batch, and BFS-level boundaries.",
-    "- Never checkpoint while a task is in flight or before TASKS.md / LEDGER.md state is flushed.",
+    "- Use the shared context watcher at durable DAG settle points: all live tracks drained, work-graph.json flushed, TASKS.md updated, and LEDGER.md appended.",
+    "- Never checkpoint while a node is in flight or before TASKS.md / LEDGER.md / work-graph.json state is flushed.",
 ])
 try:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2907,6 +3013,7 @@ else
   _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/SPEC.md" "$Z_HARNESS_PLAN_DIR/PLAN.md" "$Z_HARNESS_PLAN_DIR/TASKS.md")
 fi
 [[ -f "$Z_HARNESS_PLAN_DIR/workstreams.json" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/workstreams.json")
+[[ -f "$Z_HARNESS_PLAN_DIR/work-graph.json" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/work-graph.json")
 [[ -f "$Z_HARNESS_PLAN_DIR/execution-strategy.md" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/execution-strategy.md")
 _HANDOFF_PRIMARY_ARTIFACT_LIST="$(printf '%s\n' "${_HANDOFF_PRIMARY_ARTIFACTS[@]}")"
 ```
@@ -2928,7 +3035,7 @@ generated_at: <ISO UTC timestamp>
 
 ## Primary artifacts
 
-<One bullet per path in $_HANDOFF_PRIMARY_ARTIFACT_LIST. Use pointers only; do not paste file contents. Include role labels such as "HANDOFF.md — curated context", "INTENT.md — accepted intent contract", "SPEC.md/PLAN.md — full SDD artifacts", "TASKS.md — executable task contract", "workstreams.json — generated workstream split", and "LEDGER.md — intent-mode BFS ledger" when present. In intent mode, note that `LEDGER.md` is created or finalized by `/z-execute` before it recommends `/z-review-all`; its absence at planning handoff is allowed, but its absence after completed execution is not.>
+<One bullet per path in $_HANDOFF_PRIMARY_ARTIFACT_LIST. Use pointers only; do not paste file contents. Include role labels such as "HANDOFF.md — curated context", "INTENT.md — accepted intent contract", "SPEC.md/PLAN.md — full SDD artifacts", "TASKS.md — executable implementation projection", "work-graph.json — append-only known-work DAG used by /z-execute scheduling", "workstreams.json — conflict/scope metadata", and "LEDGER.md — intent-mode decision/outcome ledger" when present. In intent mode, note that `LEDGER.md` is created or finalized by `/z-execute` before it recommends `/z-review-all`; its absence at planning handoff is allowed, but its absence after completed execution is not.>
 
 ## Intent / Goal
 
@@ -2941,7 +3048,7 @@ or PLAN.md goals section — do not invent; quote or lightly paraphrase the appr
 
 ## Execution strategy
 
-<Summarize `execution-strategy.md` and `workstreams.json` when present: safe parallel batches, serial blockers, checkpoint cadence, and aggregate review recommendation. Use pointers; do not paste raw JSON.>
+<Summarize `execution-strategy.md`, `work-graph.json`, and `workstreams.json` when present: ready-node scheduling, safe parallel batches, serial blockers, checkpoint cadence, and aggregate review recommendation. Use pointers; do not paste raw JSON.>
 
 ## Key decisions
 
@@ -2982,13 +3089,13 @@ key files, key constraints, or notable surprises. Omit if nothing noteworthy.>
 Choose one of the Phase 8.6 gate options (`fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`). Do not hard-code an audit-first recommendation before `FINAL_HANDOFF_CHOICE` is captured.
 ```
 
-Machine handoff files (`handoff.json`, when produced by `scripts/write-handoff.sh`) must stay thin: `context_files` contains only `{path, role}` pointers. For a complete plan directory it should point at `HANDOFF.md`, the HANDOFF.md context categories (`invariants`, `rejected_approaches`, `decisions_archive`, `verification_commands`), `INTENT.md` when present, `SPEC.md`/`PLAN.md` when present, `TASKS.md`, `workstreams.json` when present, `LEDGER.md` when present, and `SESSION.md`; the schema owns the allowed roles. Intent-mode handoff prose must make the LEDGER lifecycle observable: planning handoff may omit `LEDGER.md`, but completed `/z-execute` must create/snapshot it before `/z-review-all`.
+Machine handoff files (`handoff.json`, when produced by `scripts/write-handoff.sh`) must stay thin: `context_files` contains only `{path, role}` pointers. For a complete plan directory it should point at `HANDOFF.md`, the HANDOFF.md context categories (`invariants`, `rejected_approaches`, `decisions_archive`, `verification_commands`), `INTENT.md` when present, `SPEC.md`/`PLAN.md` when present, `TASKS.md`, `work-graph.json` when present, `workstreams.json` when present, `LEDGER.md` when present, and `SESSION.md`; the schema owns the allowed roles. Intent-mode handoff prose must make the LEDGER lifecycle observable: planning handoff may omit `LEDGER.md`, but completed `/z-execute` must create/snapshot it before `/z-review-all`.
 
 After writing `HANDOFF.md`, call the machine handoff producer before Phase 8.6. Set the required z-plan overrides so the generated `handoff.json` describes a completed planning handoff, not an in-progress execute checkpoint; validate that the file exists and log both the human and machine artifacts:
 
 ```bash
 export Z_HARNESS_HANDOFF_STATUS="complete"
-export Z_HARNESS_HANDOFF_NEXT_STEP="Plan complete for ${Z_HARNESS_SLUG}. Choose the Phase 8.6 next step: fresh-session implementation, audit first, stop with handoff, or amend. Read HANDOFF.md, ${_HANDOFF_ARTIFACT_KIND}, and TASKS.md before acting; after completed intent-mode /z-execute, LEDGER.md must be present before /z-review-all."
+export Z_HARNESS_HANDOFF_NEXT_STEP="Plan complete for ${Z_HARNESS_SLUG}. Choose the Phase 8.6 next step: fresh-session implementation, audit first, stop with handoff, or amend. Read HANDOFF.md, ${_HANDOFF_ARTIFACT_KIND}, TASKS.md, and work-graph.json before acting; after completed intent-mode /z-execute, LEDGER.md must be present before /z-review-all."
 export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
 
 HANDOFF_PRODUCER_OUT="$(Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" Z_HARNESS_SLUG="$Z_HARNESS_SLUG" bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" 2>&1)"
@@ -3242,6 +3349,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `legacy_spec_detected` | Backward-compat guard: SPEC.md found in slug dir; `PLANNING_MODE` forced to `full` (Invariant 4) | `slug`, `spec_path`, `original_planning_mode` |
 | `legacy_mode_active` | `PLANNING_MODE=full` branch entered (from --full flag, config, or SPEC detection) | `slug`, `reason` |
 | `legacy_plan_exists` | Finished legacy plan (SPEC.md + TASKS.md) detected; user prompted to amend/implement/overwrite/abort | `slug`, `has_spec`, `has_tasks` |
+| `work_graph_written` | Phase 8 wrote the initial append-only known-work DAG for intent-mode `/z-execute` | `slug`, `path`, `source`, `mode` (`known_work_graph`) |
 
 ---
 

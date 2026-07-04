@@ -411,7 +411,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
         ```
         Continue.
 
-   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). With the cluster's BASE bound, run the cluster through the **same mode-detection seam used for legacy single-slug plans** (Setup step 3.5): point step 3.5 at the cluster's BASE so it sets `IMPLEMENT_MODE` per that cluster's artifacts. A `/z-plan-split` cluster now emits `INTENT.md` + `MANIFEST.json` (no `SPEC.md`, no pre-baked `TASKS.md`), so step 3.5 will set `IMPLEMENT_MODE=intent` and the cluster runs the existing INTENT engine (freeze cluster `INTENT.md` → bootstrap cluster `LEDGER.md` → BFS `task-tree-generator` → per-task loop) rooted at the cluster's BASE — there is no pre-baked `TASKS.md` to read; the BFS generates the cluster's task tree at execution time. A legacy cluster (`SPEC.md`/`TASKS.md` present) sets `IMPLEMENT_MODE=legacy` and runs the existing task-dispatch main loop over `BASE/TASKS.md` unchanged. In either mode, advance to the next cluster when the cluster's loop completes. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored). Do **not** add a separate cluster-only mode-detection branch — reuse the one `IMPLEMENT_MODE` seam.
+   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). With the cluster's BASE bound, run the cluster through the **same mode-detection seam used for legacy single-slug plans** (Setup step 3.5): point step 3.5 at the cluster's BASE so it sets `IMPLEMENT_MODE` per that cluster's artifacts. A `/z-plan-split` cluster now emits `INTENT.md` + `MANIFEST.json` (no `SPEC.md`, no pre-baked `TASKS.md`), so step 3.5 will set `IMPLEMENT_MODE=intent` and the cluster runs the existing INTENT engine (freeze cluster `INTENT.md` → bootstrap cluster `LEDGER.md` → known-work graph expansion → per-task loop) rooted at the cluster's BASE — there is no pre-baked `TASKS.md` to read; the graph expander generates/appends known implementation work at execution time. A legacy cluster (`SPEC.md`/`TASKS.md` present) sets `IMPLEMENT_MODE=legacy` and runs the existing task-dispatch main loop over `BASE/TASKS.md` unchanged. In either mode, advance to the next cluster when the cluster's loop completes. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored). Do **not** add a separate cluster-only mode-detection branch — reuse the one `IMPLEMENT_MODE` seam.
 
    **Parallel-pair optimization (N=2 cross-cluster dispatch) — gated by `workflow.hermes_enabled`.** This optimization is Hermes machinery and only fires when `workflow.hermes_enabled=true`. When `hermes_enabled=false` (default), always dispatch clusters serially (the "any other case" fallback in point 3 below):
    ```bash
@@ -461,7 +461,7 @@ fi
 
 **`IMPLEMENT_MODE=legacy` (SPEC.md present):** Continue with the existing task-dispatch loop below, unchanged. Subagents read `$BASE/SPEC.md` and `$BASE/PLAN.md` directly. This is the proven default for all in-flight and historical plans.
 
-**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 (BFS generate level → execute → checkpoint) is the body of the `if` block that follows; T010 replaces the inner stub. In this mode, the frozen INTENT narrative plus approved concern flags, optional audit notes, task-to-intent mapping, and execution strategy metadata are the source of truth. Implementers must not invent product scope outside INTENT; if execution uncovers a new intent/product decision, halt and ask the user.
+**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 schedules over the append-only known-work DAG (`work-graph.json`): generate the initial known frontier, run ready nodes, append newly knowable work as nodes return, and checkpoint at durable DAG settle points. Levels are scheduler depths over `depends_on`, not semantic planning phases. In this mode, the frozen INTENT narrative plus approved concern flags, optional audit notes, task-to-intent mapping, known-work graph, and execution strategy metadata are the source of truth. Implementers must not invent product scope outside INTENT; if execution uncovers a new intent/product decision, halt and ask the user.
 
 ```bash
 if [ "$IMPLEMENT_MODE" = "intent" ]; then
@@ -526,12 +526,14 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
 
   # Intent-conversation companion artifacts from /z-plan. These are optional for
   # backward compatibility, but when present they must be passed through to the
-  # BFS task generator and implementers/reviewers as attention guidance, not as
-  # scope expansion. This preserves accepted concern flags (approved concern flags),
-  # optional audit notes, task-to-intent mapping, and execution strategy metadata, plus the recorded
-  # brainstorm choice, across every adaptive INTENT BFS level.
-  # Compatibility contract: approved concern flags, optional audit notes, task-to-intent mapping, and execution strategy metadata.
-  # BFS generator handoff includes accepted concern flags, brainstorm choice, execution strategy/workstreams metadata, and precise task-to-intent mapping requirements.
+  # known-work graph expander and implementers/reviewers as attention guidance,
+  # not as scope expansion. This preserves accepted concern flags, optional audit
+  # notes, task-to-intent mapping, execution strategy metadata, the known-work
+  # graph, and the recorded brainstorm choice across the adaptive INTENT run.
+  # Compatibility contract: approved concern flags, optional audit notes,
+  # task-to-intent mapping, work-graph metadata, and execution strategy metadata.
+  # Graph-expander handoff includes accepted concern flags, brainstorm choice,
+  # execution strategy/workstreams metadata, and precise task-to-intent mapping requirements.
   # Load-bearing planning artifacts MUST come only from stable plan-root files or
   # exact pointers in handoff.json/execution-strategy.md. Never enumerate archive
   # directories to choose a matching file: that can attach another planning run's
@@ -540,6 +542,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
   # review gate at finalize.
   EXECUTION_STRATEGY_FILE="$BASE/execution-strategy.md"
   WORKSTREAMS_FILE="$BASE/workstreams.json"
+  WORK_GRAPH_FILE="$BASE/work-graph.json"
   _resolve_exact_plan_artifact() {
     local expected_name="$1"
     local resolved=""
@@ -597,17 +600,20 @@ PYEOF
   }
   INTENT_FLAGS_FILE="$(_resolve_exact_plan_artifact intent-readthrough-flags.md)"
   BRAINSTORM_CHOICE_FILE="$(_resolve_exact_plan_artifact brainstorm-choice.json)"
-  export INTENT_FLAGS_FILE BRAINSTORM_CHOICE_FILE EXECUTION_STRATEGY_FILE WORKSTREAMS_FILE
+  WORK_GRAPH_FILE="$(_resolve_exact_plan_artifact work-graph.json)"
+  WORK_GRAPH_FILE="${WORK_GRAPH_FILE:-$BASE/work-graph.json}"
+  export INTENT_FLAGS_FILE BRAINSTORM_CHOICE_FILE EXECUTION_STRATEGY_FILE WORKSTREAMS_FILE WORK_GRAPH_FILE
 
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_execution_context \
-    "$(printf '{"base":"%s","flags_present":%s,"brainstorm_choice_present":%s,"execution_strategy_present":%s,"workstreams_present":%s}' \
+    "$(printf '{"base":"%s","flags_present":%s,"brainstorm_choice_present":%s,"execution_strategy_present":%s,"work_graph_present":%s,"workstreams_present":%s}' \
       "$BASE" "$(test -n "$INTENT_FLAGS_FILE" && test -f "$INTENT_FLAGS_FILE" && echo true || echo false)" \
       "$(test -n "$BRAINSTORM_CHOICE_FILE" && test -f "$BRAINSTORM_CHOICE_FILE" && echo true || echo false)" \
       "$(test -f "$EXECUTION_STRATEGY_FILE" && echo true || echo false)" \
+      "$(test -f "$WORK_GRAPH_FILE" && echo true || echo false)" \
       "$(test -f "$WORKSTREAMS_FILE" && echo true || echo false)")" 2>/dev/null || true
 
   # -----------------------------------------------------------------------
-  # Step 2 — BFS-level loop (T010)
+  # Step 2 — Known-work DAG scheduler loop (T010)
   # -----------------------------------------------------------------------
   # Capture the git commit that existed when INTENT was frozen.
   # On first freeze (frozen_now), HEAD is the freeze commit.
@@ -644,10 +650,16 @@ PYEOF
     get cost.token_budget 2>/dev/null || echo "")"
   # Normalize None/empty to empty string so arithmetic guards below are safe.
   [ "$INTENT_TOKEN_BUDGET" = "None" ] && INTENT_TOKEN_BUDGET=""
+  # Documented INTENT ready-node fan-out limit. The graph expander receives this
+  # before it drafts/appends a wider frontier; the reusable Main loop also reads it
+  # before dispatch.
+  INTENT_PARALLEL_FANOUT_LIMIT=3
 
-  # ── Determine starting level (resume detection) ───────────────────────
-  # The level state file persists the last completed level so a resumed run re-enters
-  # at the correct level without re-running completed levels.
+  # ── Determine starting scheduler depth (resume detection) ─────────────
+  # The level state file persists the last fully drained scheduler depth for
+  # backward-compatible resume. In known-work graph mode, this is only a checkpoint
+  # hint: the actual runnable set is recomputed from work-graph.json node statuses
+  # and dependencies on every scheduler refill.
   LEVEL_STATE_FILE="$ARCHIVE_DIR/.bfs_level_state"
   CURRENT_LEVEL=0
   if [ -f "$LEVEL_STATE_FILE" ]; then
@@ -674,7 +686,21 @@ PYEOF
     fi
   fi
 
-  # ── BFS-level loop ────────────────────────────────────────────────────
+  # ── Known-work DAG scheduler loop ─────────────────────────────────────
+  # `work-graph.json` is the durable source of scheduling truth when present.
+  # The scheduler repeatedly:
+  #   1. Re-reads work-graph.json.
+  #   2. Computes ready nodes: status=ready and every depends_on node is done.
+  #   3. Dispatches up to the safe fan-out window using the reusable per-task engine.
+  #   4. As each node returns, marks it done/halted, flushes LEDGER/TASKS state, and
+  #      re-dispatches task-tree-generator in append mode to add newly knowable nodes.
+  #   5. Immediately refills another ready node unless a node has
+  #      fresh_session_required=true, a user gate is needed, or a clear checkpoint fires.
+  #
+  # Levels are derived scheduler depths over the DAG, like CPU scheduling over
+  # dependencies; they are not required to drain before another independent ready
+  # node can be spawned. Drivers without durable background handles may fall back to
+  # the legacy level-drain behavior, but must keep work-graph.json append-only.
   BFS_DONE=0
   BFS_HALTED=0
 
@@ -713,7 +739,7 @@ PYEOF
       exit 1
     fi
 
-    # ── Generate level N ─────────────────────────────────────────────
+    # ── Expand known work for the current ready frontier ──────────────
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_start \
       "$(printf '{"base":"%s","level":%d,"level_cap":%d}' \
          "$BASE" "$CURRENT_LEVEL" "$INTENT_BFS_LEVEL_CAP")" 2>/dev/null || true
@@ -761,17 +787,20 @@ print(m.group(1).strip() if m else '')
 " "$LEDGER_FILE" "$PRIOR_LEVEL" 2>/dev/null || echo "")"
     fi
 
-    # Dispatch the task-tree-generator agent to generate level N's TASKS.md.
+    # Dispatch the task-tree-generator agent to append known work and refresh
+    # the TASKS.md implementation projection for the current scheduler frontier.
     # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user. -->
     GENERATOR_RETURN="$(Agent(
       subagent_type="task-tree-generator",
-      description="Generate BFS level ${CURRENT_LEVEL} task batch",
+      description="Expand known-work DAG at scheduler depth ${CURRENT_LEVEL}",
       prompt="intent_snapshot_path: ${ARCHIVE_DIR}/INTENT.frozen.md
 ledger_path: ${LEDGER_FILE}
 intent_readthrough_flags_path: ${INTENT_FLAGS_FILE}
 brainstorm_choice_path: ${BRAINSTORM_CHOICE_FILE}
 execution_strategy_path: ${EXECUTION_STRATEGY_FILE}
+work_graph_path: ${WORK_GRAPH_FILE}
 workstreams_path: ${WORKSTREAMS_FILE}
+scheduler_mode: known_work_graph
 level: ${CURRENT_LEVEL}
 unmet_criteria: ${UNMET_CRITERIA_JSON}
 prior_level_outcomes: ${PRIOR_LEVEL_OUTCOMES:-none}
@@ -780,6 +809,7 @@ plan_dir: ${BASE}
 level_cap: ${INTENT_BFS_LEVEL_CAP}
 budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
 task_id_start: ${TASK_ID_START}
+ready_window: ${INTENT_PARALLEL_FANOUT_LIMIT:-3}
 execution_strategy_required: true
 task_to_intent_mapping_required: true"
     ))"
@@ -788,12 +818,16 @@ task_to_intent_mapping_required: true"
     GENERATOR_STATUS="$(printf '%s' "$GENERATOR_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
     GENERATOR_TASKS_COUNT="$(printf '%s' "$GENERATOR_RETURN" | grep '^TASKS_WRITTEN:' | head -1 | awk '{print $2}')"
     GENERATOR_TERMINATION="$(printf '%s' "$GENERATOR_RETURN" | grep '^TERMINATION_CONDITION:' | head -1 | awk '{print $2}')"
+    GENERATOR_GRAPH_NODES_ADDED="$(printf '%s' "$GENERATOR_RETURN" | grep '^GRAPH_NODES_ADDED:' | head -1 | awk '{print $2}')"
+    GENERATOR_HANDOFF_REQUIRED="$(printf '%s' "$GENERATOR_RETURN" | grep '^HANDOFF_REQUIRED:' | head -1 | awk '{print $2}')"
 
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_generated \
-      "$(printf '{"base":"%s","level":%d,"generator_status":"%s","tasks_written":%s,"termination_condition":"%s"}' \
+      "$(printf '{"base":"%s","level":%d,"scheduler_mode":"known_work_graph","generator_status":"%s","tasks_written":%s,"graph_nodes_added":%s,"handoff_required":"%s","termination_condition":"%s"}' \
          "$BASE" "$CURRENT_LEVEL" \
          "${GENERATOR_STATUS:-unknown}" \
          "${GENERATOR_TASKS_COUNT:-0}" \
+         "${GENERATOR_GRAPH_NODES_ADDED:-0}" \
+         "${GENERATOR_HANDOFF_REQUIRED:-false}" \
          "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
 
     # Handle generator unable_to_complete.
@@ -842,8 +876,8 @@ task_to_intent_mapping_required: true"
     # ── Per-level execute: run the existing per-task loop over the level's tasks ──
     #
     # INTENT mode context available here:
-    #   $LEVEL_TASKS_FILE  — frozen TASKS.md for this BFS level (immutable while running)
-    #   $CURRENT_LEVEL     — current BFS level number (read-only in this block)
+    #   $LEVEL_TASKS_FILE  — frozen TASKS.md projection for this ready frontier (immutable while running)
+    #   $CURRENT_LEVEL     — current scheduler depth hint (read-only in this block)
     #   $INTENT_FILE       — $BASE/INTENT.md (frozen)
     #   $LEDGER_FILE       — $BASE/LEDGER.md (append-only)
     #   $ARCHIVE_DIR       — $BASE/archive/$RUN
@@ -868,23 +902,23 @@ print(p if os.path.isfile(p) else '')
     # is honored only after the INTENT safety gates in "Parallelism (read first)" pass.
     INTENT_PARALLEL_LEVELS="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
       get workflow.intent_parallel_levels 2>/dev/null || echo false)"
-    # Documented INTENT same-level fan-out limit. If more siblings are eligible,
-    # partition them into chunks of at most this many task tracks.
-    INTENT_PARALLEL_FANOUT_LIMIT=3
+    # INTENT_PARALLEL_FANOUT_LIMIT was set before graph expansion; reuse the same
+    # ready-node cap here. If more siblings are eligible, partition them into
+    # chunks of at most this many task tracks.
 
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_level_execute_start \
       "$(printf '{"base":"%s","level":%d,"tasks_file":"%s","parallel":"%s","fanout_limit":%d}' \
          "$BASE" "$CURRENT_LEVEL" "$LEVEL_TASKS_FILE" "${INTENT_PARALLEL_LEVELS:-false}" "$INTENT_PARALLEL_FANOUT_LIMIT")" 2>/dev/null || true
 
-    # ── Execute the level's tasks via the existing per-task implementer→reviewer loop ──
+    # ── Execute the ready frontier via the existing per-task implementer→reviewer loop ──
     #
     # The per-task engine (Main loop steps 1–8 above) is reused verbatim — no new
     # task-engine code.  The only difference from legacy mode is the TASKS_FILE
     # pointer and the INTENT-context injected into every implementer + reviewer prompt.
     #
-    # Override TASKS_FILE to this level's frozen batch for the duration of this block.
+    # Override TASKS_FILE to this frontier's frozen projection for the duration of this block.
     # The Main loop steps 1–8 re-read TASKS_FILE on each iteration; by pointing it at
-    # the level's TASKS.md we run the engine over the level's tasks only.
+    # the scheduler projection we run the engine over known ready implementation nodes only.
     # IMPORTANT: restore TASKS_FILE to $BASE/TASKS.md after the level completes.
     OUTER_TASKS_FILE="$TASKS_FILE"   # save the outer pointer
     TASKS_FILE="$LEVEL_TASKS_FILE"   # redirect the per-task engine to the level batch
@@ -901,6 +935,8 @@ intent_flags_path: ${INTENT_FLAGS_FILE}"
 execution_strategy_path: ${EXECUTION_STRATEGY_FILE}"
     [ -f "$WORKSTREAMS_FILE" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
 workstreams_path: ${WORKSTREAMS_FILE}"
+    [ -f "$WORK_GRAPH_FILE" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
+work_graph_path: ${WORK_GRAPH_FILE}"
     [ -n "$KERNEL_PATH" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
 kernel_path: ${KERNEL_PATH}"
     [ -n "$INVARIANTS_PATH" ] && INTENT_CTX_LINES="${INTENT_CTX_LINES}
@@ -909,14 +945,14 @@ invariants_path: ${INVARIANTS_PATH}"
 style_path: ${STYLE_PATH}"
     export INTENT_MODE_CTX="$INTENT_CTX_LINES"   # consumed by implementer + reviewer dispatch in steps 5 and 6
 
-    # ── Invoke the reusable per-task engine over this BFS level ────────────────
+    # ── Invoke the reusable per-task engine over this ready frontier ───────────
     LEVEL_EXECUTE_RC=0
     LEVEL_EXECUTE_HALT_REASON=""
 
     # EXPLICIT INVOCATION CONTRACT (T023):
     #
     # The orchestrator MUST apply Main loop steps 1-8 (defined in the "## Main loop"
-    # section below) over $LEVEL_TASKS_FILE as the task queue for this BFS level.
+    # section below) over $LEVEL_TASKS_FILE as the task queue for this ready frontier.
     # This is an unambiguous REUSE of the existing per-task engine — NOT a re-
     # implementation.  The steps are entered verbatim; the only differences from
     # legacy mode are:
@@ -944,7 +980,7 @@ style_path: ${STYLE_PATH}"
     #   - When $INTENT_PARALLEL_LEVELS is not literally "true" (including explicit
     #     false user/repo overrides): rule 0 restricts step 1's eligibility set to a
     #     single (lowest-numbered) task per pick, so the level runs strictly sequentially.
-    #   - Default-on INTENT same-level batching is allowed only when all safety gates
+    #   - Default-on INTENT ready-frontier batching is allowed only when all safety gates
     #     pass: every sibling in $LEVEL_TASKS_FILE has a parseable precise `**Files:**`
     #     scope; `workstreams.json` exists when available and reports
     #     `scope_unknown: false`; eligible siblings have disjoint file scope and no
@@ -959,43 +995,48 @@ style_path: ${STYLE_PATH}"
     #     those tracks with INTENT_RULE0_SAFETY_PASSED=1 and INTENT_PARALLEL_BATCH_ACTIVE=1.
     #     Serialized fallbacks, including unknown-scope serialization and one-task picks,
     #     leave those track flags unset/0 so review diff capture uses the serialized path.
-    #   NOTE: $INTENT_PARALLEL_LEVELS controls within-level parallelism only.  Cross-
-    #   level parallelism (running two BFS levels at once) is NOT supported in v1.
+    #   NOTE: $INTENT_PARALLEL_LEVELS controls ready-node fan-out only.  It does
+    #   not authorize blind cross-graph execution; every dispatched node must be
+    #   ready according to work-graph.json dependencies and file-scope gates.
     #   `runtime.max_parallel` / `runtime.max_parallel_plans` / `HERMES_MAX_PARALLEL`
     #   are UNRELATED vestigial knobs (defined, validated, and env-aliased in
     #   scripts/config.py, but never read by any dispatch path) — do not confuse them
     #   with this gate.
     #
-    # FUTURE PIPELINED TRACK CONTRACT (docs-only boundary):
-    #   This bundle DOES NOT enable runtime pipelined refill and DOES NOT change
-    #   handoff schema/state.  The current engine remains phase-lockstep inside
-    #   each BFS level: generate level -> execute all selected level tasks through
-    #   the existing per-task engine -> flush LEDGER -> persist .bfs_level_state
-    #   -> run coalesced remote verify -> evaluate checkpoint/acceptance.
+    # KNOWN-WORK DAG SCHEDULER CONTRACT:
+    #   Runtime refill is now allowed when the driver has durable background
+    #   handles. The scheduler uses work-graph.json as an append-only known-work
+    #   graph, not as a complete upfront plan. It may spawn another ready subagent
+    #   as soon as one track reaches a durable terminal state and the graph/ledger
+    #   have been flushed.
     #
-    #   A future pipelined scheduler must use durable per-track state rather than
-    #   inferring liveness from `[~]` or waiting on synchronous Agent() calls.  The
-    #   required state machine is:
+    #   Track state must be durable rather than inferred from `[~]` or synchronous
+    #   Agent() calls. The required state machine is:
     #     queued -> prechecking -> implementing -> reviewing -> retrying ->
     #     halted | done
     #   with explicit paused/checkpointed metadata when a clear checkpoint is
-    #   emitted.  Each track record must include task id, BFS level, attempt,
+    #   emitted.  Each track record must include node/task id, scheduler depth, attempt,
     #   claimed paths, background handle id, current phase, last heartbeat,
     #   reviewer diff capture mode, and terminal result.
     #
-    #   Refill loop: refill may dispatch another same-level ready task only when
-    #   a track reaches durable done/halted and the scheduler has re-read the
-    #   durable track table, TASKS.md, workstreams scope, and active leases.  It
-    #   must still obey the fan-out cap, unknown-scope serialization, same-level
-    #   dependency/file-conflict gates, and review diff-isolation rule.
-    #   Refill across BFS levels is forbidden until the prior level's LEDGER flush,
-    #   .bfs_level_state write, coalesced remote verify, checkpoint check, and
-    #   acceptance evaluation have completed.
+    #   Refill loop: refill may dispatch another ready node when a track reaches
+    #   durable done/halted and the scheduler has re-read the durable track table,
+    #   work-graph.json, TASKS.md, workstreams scope, and active leases. Before
+    #   idling, dispatch task-tree-generator with scheduler_mode=known_work_graph
+    #   so newly knowable follow-on nodes are appended. Refill must still obey the
+    #   fan-out cap, unknown-scope serialization, dependency/file-conflict gates,
+    #   and review diff-isolation rule.
     #
-    #   Checkpoint boundary: clear checkpoints remain BFS-level boundaries only.
-    #   A checkpoint may be written after all live tracks in the current level are
-    #   drained or durably paused; it must not snapshot half-written TASKS.md,
-    #   unflushed LEDGER entries, or in-memory Agent() state.
+    #   Fresh-session boundary: if a ready node has fresh_session_required=true,
+    #   kind=handoff_required, or the graph expander returns HANDOFF_REQUIRED:true,
+    #   stop refilling, drain already-started tracks to durable terminal/paused
+    #   states, write a clear checkpoint/handoff, and resume in a fresh session.
+    #
+    #   Checkpoint boundary: clear checkpoints happen at durable DAG settle
+    #   points, not arbitrary wall-clock positions. A checkpoint may be written
+    #   after all live tracks are drained or durably paused and work-graph.json,
+    #   TASKS.md, and LEDGER.md are flushed. It must not snapshot half-written
+    #   TASKS.md, unflushed LEDGER entries, or in-memory Agent() state.
     #
     #   Halt-drain behavior: if any track reaches a user-blocking halt, stop
     #   refilling immediately, let already-started sibling tracks reach a durable
@@ -1009,9 +1050,14 @@ style_path: ${STYLE_PATH}"
     #   to deregister/reap on run-ending halt.  Pipelined refill must re-check
     #   leases before every dispatch.
     #
-    #   Background-handle expectation: native hosts must expose a durable background handle with poll/cancel/result semantics for each subagent track.
-    #   A future implementation that only launches synchronous Agent()
-    #   calls and stores no durable handle/state does not satisfy this contract.
+    #   Completion-signal expectation: native hosts must expose either a durable
+    #   per-track completion notification or a pollable background handle with
+    #   result/cancel semantics to use true refill. The notification can be a
+    #   simple orchestrator instruction: spawn another ready implementer, pause
+    #   for context, or write a fresh-session handoff. A host that only launches
+    #   synchronous Agent() calls may preserve correctness by falling back to
+    #   drain-then-refill, but it must not mark the graph scheduler as
+    #   concurrently refilled in telemetry.
     #
     #   Diff-isolation rule: every review must receive either a per-task
     #   path-filtered diff captured from that track's declared/touched paths or a
@@ -1079,8 +1125,121 @@ style_path: ${STYLE_PATH}"
     fi
     # T011-LEDGER-HOOK-END
 
-    # Restore the outer TASKS_FILE pointer after the level's tasks complete.
-    TASKS_FILE="$OUTER_TASKS_FILE"
+    # ── Work-graph status sync ────────────────────────────────────────
+    # Keep work-graph.json durable before any checkpoint, acceptance
+    # evaluation, or refill. TASKS.md remains the human-readable projection;
+    # the graph carries scheduler state. Status fields are mutable scheduler
+    # state even though node identity and append_log are append-only.
+    if [ -f "$WORK_GRAPH_FILE" ]; then
+      WORK_GRAPH_SYNC_OUT="$(python3 - "$WORK_GRAPH_FILE" "$LEVEL_TASKS_FILE" "$CURRENT_LEVEL" 2>&1 <<'PYEOF'
+from __future__ import annotations
+import json, re, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+graph_path = Path(sys.argv[1])
+tasks_path = Path(sys.argv[2])
+level = int(sys.argv[3])
+
+try:
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"work-graph.json unreadable or invalid: {exc}") from exc
+if not isinstance(graph, dict) or graph.get("artifact") != "known_work_graph":
+    raise SystemExit("work-graph.json root must be a known_work_graph object")
+nodes = graph.get("nodes")
+if not isinstance(nodes, list):
+    raise SystemExit("work-graph.json nodes must be a list")
+
+tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.exists() else ""
+task_status = {}
+for match in re.finditer(r"^##\s+(T\d{3})\b.*?`\[([x ~])\]`", tasks_text, re.M):
+    marker = match.group(2).lower()
+    if marker == "x":
+        task_status[match.group(1)] = "done"
+    elif marker == "~":
+        task_status[match.group(1)] = "running"
+    else:
+        task_status[match.group(1)] = "ready"
+
+node_by_id = {
+    str(node.get("id")): node
+    for node in nodes
+    if isinstance(node, dict) and node.get("id")
+}
+changed = []
+
+def set_status(node, new_status):
+    old_status = node.get("status")
+    if old_status != new_status:
+        node["status"] = new_status
+        changed.append({"id": node.get("id"), "from": old_status, "to": new_status})
+
+for node_id, status in task_status.items():
+    node = node_by_id.get(node_id)
+    if node is not None:
+        set_status(node, status)
+
+terminal = {"done", "halted", "skipped"}
+for node in nodes:
+    if not isinstance(node, dict) or not node.get("id"):
+        continue
+    if node.get("status") in terminal or node.get("status") == "running":
+        continue
+    deps = [str(dep) for dep in (node.get("depends_on") or [])]
+    deps_done = all(node_by_id.get(dep, {}).get("status") == "done" for dep in deps)
+    set_status(node, "ready" if deps_done else "blocked")
+
+now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+if changed:
+    graph["updated_at"] = now
+    graph.setdefault("status_log", []).append({
+        "generated_at": now,
+        "trigger": "frontier_settle",
+        "level": level,
+        "changes": changed,
+    })
+    tmp = graph_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(graph, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(graph_path)
+
+ready_ids = [
+    str(node.get("id"))
+    for node in nodes
+    if isinstance(node, dict) and node.get("status") == "ready"
+]
+done_ids = [
+    str(node.get("id"))
+    for node in nodes
+    if isinstance(node, dict) and node.get("status") == "done"
+]
+print(json.dumps({
+    "changed": len(changed),
+    "ready": ready_ids,
+    "done": done_ids,
+}, separators=(",", ":")))
+PYEOF
+)"
+      WORK_GRAPH_SYNC_RC=$?
+      if [ "$WORK_GRAPH_SYNC_RC" -ne 0 ]; then
+        printf '%s\n' "$WORK_GRAPH_SYNC_OUT" >&2
+        WORK_GRAPH_SYNC_JSON="$(printf '%s' "$WORK_GRAPH_SYNC_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" work_graph_status_sync_failed \
+          "$(printf '{"base":"%s","level":%d,"path":"%s","output":%s}' \
+             "$BASE" "$CURRENT_LEVEL" "$WORK_GRAPH_FILE" "$WORK_GRAPH_SYNC_JSON")" 2>/dev/null || true
+        RB_HALT_REASON="work-graph status sync failed at scheduler depth ${CURRENT_LEVEL}"
+        FINALIZE_STATUS=aborted
+        python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+          --run-id "$RUN" --status aborted 2>/dev/null || true
+        exit 1
+      fi
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" work_graph_status_synced \
+        "$(printf '{"base":"%s","level":%d,"path":"%s","summary":%s}' \
+           "$BASE" "$CURRENT_LEVEL" "$WORK_GRAPH_FILE" "$WORK_GRAPH_SYNC_OUT")" 2>/dev/null || true
+    fi
+
+	    # Restore the outer TASKS_FILE pointer after the level's tasks complete.
+	    TASKS_FILE="$OUTER_TASKS_FILE"
     # T023-SEAM-END
 
     # If the per-level execute halted, propagate the halt.
@@ -1102,14 +1261,14 @@ style_path: ${STYLE_PATH}"
       done_set_hash "$LEVEL_TASKS_FILE" 2>/dev/null || echo "")"
     printf '%d %s\n' "$CURRENT_LEVEL" "$LEVEL_DONE_HASH" > "$LEVEL_STATE_FILE" 2>/dev/null || true
 
-    # ── Coalesced remote build (INTENT BFS level boundary) ────────────
+    # ── Coalesced remote build (INTENT DAG settle point) ──────────────
     # Reuses the queue-wide REMOTE_VERIFY inspection precedent (Setup step 6,
     # `Z_HARNESS_LOCAL_CARGO_CLEAN`) but scoped to just-completed level's tasks
     # instead of the whole queue. Runs AFTER the LEDGER flush (T011-LEDGER-HOOK
     # above) and AFTER the done_set_hash checkpoint just persisted, and BEFORE
     # `intent_bfs_level_complete` below — the same seam documented in "Clear
-    # checkpoint policy" > "INTENT BFS level boundary". This is the ONE build
-    # per level replacing the (now-suppressed) per-task dispatch in Main-loop
+    # checkpoint policy" > "INTENT DAG settle point". This is the ONE build
+    # per settled frontier replacing the (now-suppressed) per-task dispatch in Main-loop
     # step 5: a level with N REMOTE_VERIFY-tagged tasks pays one rsync+build
     # cycle, not N.
     LEVEL_REMOTE_VERIFY_CMDS="$(grep -h '^\*\*REMOTE_VERIFY:\*\*' "$LEVEL_TASKS_FILE" 2>/dev/null \
@@ -1184,8 +1343,8 @@ style_path: ${STYLE_PATH}"
       "$(printf '{"base":"%s","level":%d,"done_set_hash":"%s"}' \
          "$BASE" "$CURRENT_LEVEL" "$LEVEL_DONE_HASH")" 2>/dev/null || true
 
-    # ── BFS boundary clear-checkpoint threshold check ─────────────────
-    # Runs only after LEDGER flush + level done_set_hash persistence. A
+    # ── DAG settle-point clear-checkpoint threshold check ─────────────
+    # Runs only after LEDGER flush + graph/TASKS done_set_hash persistence. A
     # below-threshold estimate continues to acceptance evaluation; a threshold
     # hit follows the Clear checkpoint policy protocol and exits without
     # Finalize/deregister.
@@ -1206,7 +1365,7 @@ style_path: ${STYLE_PATH}"
       TASKS_FILE="$CHECKPOINT_TASKS_FILE" execute_clear_checkpoint_protocol
       exit 0
     elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
-      RB_HALT_REASON="context pressure estimate failed in strict mode at BFS level ${CURRENT_LEVEL}"
+      RB_HALT_REASON="context pressure estimate failed in strict mode at scheduler depth ${CURRENT_LEVEL}"
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -1235,7 +1394,7 @@ style_path: ${STYLE_PATH}"
     # EVAL_RC == 1 means VERDICT: continue (one or more criteria unmet or unknown).
     # Conservative rule: unknown == unmet; NEVER exit the loop on ambiguity.
     if [ "$EVAL_RC" -eq 0 ]; then
-      # All acceptance criteria satisfied — BFS loop terminates normally.
+      # All acceptance criteria satisfied — DAG scheduler terminates normally.
       echo "All acceptance criteria met at level ${CURRENT_LEVEL}. VERDICT: done." >&2
       BFS_DONE=1
     else
@@ -1246,7 +1405,7 @@ style_path: ${STYLE_PATH}"
       # ── Divergence halt check ────────────────────────────────────────
       # After VERDICT: continue, scan the level's LEDGER entries for a
       # divergence_signal flag set by any task in this level.  A divergence
-      # signal indicates that a BFS layer outcome has invalidated the frozen
+      # signal indicates that a node/frontier outcome has invalidated the frozen
       # INTENT (e.g. grounding proved false, a key assumption collapsed) and
       # the intent must be re-sharpened before the next level can be safely
       # generated.
@@ -1290,9 +1449,9 @@ print(ds.group(1).strip() if ds else '')
       CURRENT_LEVEL=$(( CURRENT_LEVEL + 1 ))
     fi
 
-  done  # end BFS while loop
+  done  # end known-work DAG scheduler loop
 
-  # ── BFS loop exited cleanly (all criteria met) ────────────────────────
+  # ── DAG scheduler exited cleanly (all criteria met) ──────────────────
   # Emit a final done event and fall through to Finalize (FINALIZE_STATUS unset = complete).
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_complete \
     "$(printf '{"base":"%s","levels_run":%d,"intent_frozen_at":"%s"}' \
@@ -1302,16 +1461,15 @@ fi
 # Beyond this point: IMPLEMENT_MODE=legacy — fall through to step 4.
 ```
 
-> **Hook note for T010/T023/T024:** Replace the Step 2 stub block inside `if [ "$IMPLEMENT_MODE" = "intent" ]` above with the full BFS-level loop (generate level → execute level → checkpoint). Do not touch the Step 1 freeze/LEDGER bootstrap block. The detection seam (`if [ -f "$BASE/SPEC.md" ]`) is the authoritative branch; do not add a second detection elsewhere. The legacy path below this comment is CLOSED for modification.
+> **Hook note for T010/T023/T024:** Step 2 inside `if [ "$IMPLEMENT_MODE" = "intent" ]` is the known-work DAG scheduler loop (append known nodes → dispatch ready frontier → refill on return → checkpoint at durable settle points). Do not touch the Step 1 freeze/LEDGER bootstrap block. The detection seam (`if [ -f "$BASE/SPEC.md" ]`) is the authoritative branch; do not add a second detection elsewhere. The legacy path below this comment is CLOSED for modification.
 
-### T024 — Acceptance evaluator invocation seam (called by T010's BFS loop at each level checkpoint)
+### T024 — Acceptance evaluator invocation seam (called by T010 at DAG settle points)
 
-After each BFS level completes execution (T023 returns level outcomes), T010's loop calls the
-acceptance evaluator (T024) to decide `done | continue`.  The seam is:
+After a ready frontier or refill batch reaches a durable settle point (all live tracks drained or durably paused, work-graph.json/TASKS.md/LEDGER.md flushed), T010 calls the acceptance evaluator (T024) to decide `done | continue`. The seam is:
 
 ```bash
 # -----------------------------------------------------------------------
-# Acceptance-evaluator hook (T024) — called at EVERY level checkpoint
+# Acceptance-evaluator hook (T024) — called at every durable DAG settle point
 # -----------------------------------------------------------------------
 # Build a cumulative diff of all changes since the INTENT was frozen.
 # The diff is written to a temp file so the static evaluator can read it.
@@ -1323,7 +1481,8 @@ EVAL_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/int
 EVAL_RC=$?
 rm -f "$CUMULATIVE_DIFF_FILE"
 
-# Log the per-criterion breakdown.
+# Log the per-criterion breakdown. The `level` field is the current scheduler
+# depth hint retained for telemetry compatibility.
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" acceptance_evaluated \
   "$(printf '{"base":"%s","level":%d,"verdict":"%s"}' "$BASE" "$CURRENT_LEVEL" \
      "$(echo "$EVAL_OUT" | grep '^VERDICT:' | awk '{print $2}')")" 2>/dev/null || true
@@ -1332,46 +1491,46 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
 # EVAL_RC == 1 means VERDICT: continue (one or more criteria unmet or unknown).
 # Conservative rule: unknown == unmet; NEVER exit the loop on ambiguity.
 if [ "$EVAL_RC" -eq 0 ]; then
-  # All acceptance criteria satisfied — BFS loop terminates normally.
+  # All acceptance criteria satisfied — the DAG scheduler terminates normally.
   echo "All acceptance criteria met at level $CURRENT_LEVEL. VERDICT: done." >&2
   BFS_DONE=1
 else
-  # At least one criterion unmet or unknown — continue to next level.
+  # At least one criterion unmet or unknown — continue/refill the known-work graph.
   echo "Acceptance evaluator: VERDICT: continue (level $CURRENT_LEVEL)" >&2
   BFS_DONE=0
 fi
-# Hard stops (level-cap + budget guard) are checked by T010 ABOVE this seam,
+# Hard stops (level-cap/depth-cap + budget guard) are checked by T010 ABOVE this seam,
 # not inside it.  This seam only reports criterion satisfaction.
 # -----------------------------------------------------------------------
 ```
 
 **Invariants for T010:**
-- Call this seam AFTER appending each level's decisions/deviations to LEDGER.md
+- Call this seam AFTER appending each settled frontier's decisions/deviations to LEDGER.md
   (so the evaluator sees up-to-date criterion citations).
 - The diff passed in MUST be cumulative from `INTENT_FROZEN_AT_COMMIT` (the git commit
   that existed when INTENT was frozen) to `HEAD`, not just the current level's diff.
 - `INTENT_FROZEN_AT_COMMIT` should be captured at freeze time; fall back to `HEAD~1`
   when not available (worst case: diff is empty → unknown → conservative continue).
-- When `BFS_DONE=1`, exit the BFS loop and proceed to Finalize.
+- When `BFS_DONE=1`, exit the known-work DAG scheduler and proceed to Finalize.
 - `unknown` status is treated as `unmet` by the evaluator; T010 MUST NOT override this
   conservative rule.
 - **Prose/doc-plan false-negative caveat.** `evaluate-acceptance` is a keyword/diff matcher,
   not a reader. For INTENT plans whose acceptance criteria are satisfied by *prose* changes
   (markdown command specs, docs, config narratives) it systematically under-credits and can
-  return `VERDICT: continue` with criteria that are in fact met — spinning a wasted BFS level
+  return `VERDICT: continue` with criteria that are in fact met — spinning wasted graph expansion
   (extra task-tree-generator dispatch + spurious tasks). When this is plausible (the diff is
   predominantly `.md`/doc edits and the flagged criteria read as prose assertions), the
   orchestrator MUST spot-verify each flagged criterion against the actual diff/file (grep the
-  exact strings the criterion asserts). It MAY then terminate the BFS with **documented
+  exact strings the criterion asserts). It MAY then terminate the DAG scheduler with **documented
   per-criterion line-level evidence** recorded in an `intent_bfs_complete` note — a bounded,
   evidence-backed exception to "unknown == unmet". This is NOT a blanket override: a criterion
   with no concrete file evidence stays `unmet` and the loop continues.
 
 ### Divergence halt
 
-After the acceptance evaluator returns `VERDICT: continue`, the orchestrator checks the current level's LEDGER entries for a `divergence_signal` flag before advancing to the next level. This check is part of the BFS outer loop (wired into the inline code block above) and fires on every `VERDICT: continue` path — never on `VERDICT: done` (no divergence check is needed when the plan is already complete).
+After the acceptance evaluator returns `VERDICT: continue`, the orchestrator checks the just-settled frontier's LEDGER entries for a `divergence_signal` flag before refilling the known-work graph. This check is part of the DAG scheduler loop and fires on every `VERDICT: continue` path — never on `VERDICT: done` (no divergence check is needed when the plan is already complete).
 
-**What triggers a divergence signal.** An implementer or reviewer sets a `divergence_signal` in their `LEDGER_DECISIONS:` return when a BFS layer outcome reveals that the frozen INTENT contract has been invalidated: for example, a key grounding assumption proved false during implementation, a discovered file structure is incompatible with the INTENT's approach, or a completed task shows that the acceptance criteria themselves are internally contradictory. The signal is NOT set for ordinary incomplete work — only for outcomes that make the current INTENT unexecutable or self-contradictory.
+**What triggers a divergence signal.** An implementer or reviewer sets a `divergence_signal` in their `LEDGER_DECISIONS:` return when a node outcome reveals that the frozen INTENT contract has been invalidated: for example, a key grounding assumption proved false during implementation, a discovered file structure is incompatible with the INTENT's approach, or a completed task shows that the acceptance criteria themselves are internally contradictory. The signal is NOT set for ordinary incomplete work — only for outcomes that make the current INTENT unexecutable or self-contradictory.
 
 **LEDGER flag format.** The flag is written as a line in the task's `LEDGER_DECISIONS:` entry:
 
@@ -1403,7 +1562,7 @@ The orchestrator scans the current level's `## Level N` section in `LEDGER.md` f
 
 This is the same finalize path as a level-cap halt: `FINALIZE_STATUS=aborted`, deregister with `aborted`, and exit non-zero. The user's next move is `/z-amend --reopen-intent <slug>`, which re-sharpens the INTENT and un-freezes it so a fresh `/z-execute` run can re-freeze from the new contract.
 
-**No divergence check on `VERDICT: done`.** The divergence scan only runs on the `VERDICT: continue` branch. When all acceptance criteria are met (`VERDICT: done`), the BFS loop terminates normally regardless of LEDGER content — a divergence signal in the final level's LEDGER is irrelevant because the plan succeeded.
+**No divergence check on `VERDICT: done`.** The divergence scan only runs on the `VERDICT: continue` branch. When all acceptance criteria are met (`VERDICT: done`), the DAG scheduler terminates normally regardless of LEDGER content — a divergence signal in the final settled frontier's LEDGER is irrelevant because the plan succeeded.
 
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 
@@ -1490,8 +1649,8 @@ This is the same finalize path as a level-cap halt: `FINALIZE_STATUS=aborted`, d
    and `scope_unknown` (whether any task block has no parseable `**Files:` line, making
    rule 2's dedup blind for that task). The orchestrator uses this data — alongside rule 2's
    inline check — to decide the safe concurrency for each batch. In INTENT mode, `scope_unknown:
-   true` is a serialization gate for the affected BFS level, not a risk tradeoff; default-on
-   same-level batching requires parseable precise `**Files:**` scope for every sibling. In INTENT
+   true` is a serialization gate for the affected ready frontier, not a risk tradeoff; default-on
+   ready-frontier batching requires parseable precise `**Files:**` scope for every sibling. In INTENT
    mode, eligible siblings are also capped or partitioned by the documented fan-out limit in the
    T023 parallelism gate. Legacy mode keeps the historical DAG-driven behavior. Continue to step 5.
 
@@ -1569,15 +1728,15 @@ High-context runs accumulate orchestrator context pressure. Clear checkpoints fi
 **Durable boundaries covered:**
 - **Completed single task:** after the task is accepted, `[~]` is atomically flipped to `[x]`, the completion note/summary is written, `task_done` is emitted, and no other task from the current batch remains unsettled. This is a one-task batch.
 - **Completed parallel batch:** exactly once after every track in the batch reaches terminal status, the orchestrator performs one atomic TASKS.md write containing every completed task, emits one `batch_done`, then evaluates compaction once. The curator prompt includes `completed_task_ids` for all tasks flipped to `[x]` in that batch, and `last_gate_task_id` is the last completed id.
-- **INTENT BFS level boundary:** after the Main loop returns for the level, after the T011 LEDGER accumulator is flushed to LEDGER.md, after `.bfs_level_state` is updated with the level done-set hash, and before acceptance evaluation or next-level generation.
+- **INTENT DAG settle point:** after the Main loop returns for a ready frontier, after the T011 LEDGER accumulator is flushed to LEDGER.md, after `work-graph.json` and TASKS.md status are durable, after `.bfs_level_state` is updated as a compatibility depth marker, and before acceptance evaluation or graph refill.
 
-**No unconditional checkpointing.** Completing a task, completing a batch, or crossing a BFS level boundary only creates an opportunity to evaluate the threshold. It does not itself write SESSION.md, handoff.json, or a clear checkpoint. If `check-compaction.sh` exits 0, continue immediately.
+**No unconditional checkpointing.** Completing a task, completing a batch, or reaching a DAG settle point only creates an opportunity to evaluate the threshold. It does not itself write SESSION.md, handoff.json, or a clear checkpoint. If `check-compaction.sh` exits 0, continue immediately.
 
 **No deregister on checkpoint-pause.** A clear-checkpoint exit is a non-terminal pause (see Main-loop condition 3): skip the entire Finalize section, do NOT deregister the registry record, do NOT set `FINALIZE_STATUS`, and do NOT run Run Brief finalize. The next `/z-execute` invocation re-registers idempotently and resumes from the checkpointed done set.
 
-### INTENT mode: BFS-boundary clear checkpoints
+### INTENT mode: DAG settle-point clear checkpoints
 
-In INTENT mode (`IMPLEMENT_MODE=intent`) clear checkpoints fire at **BFS level boundaries**. In-level Main-loop checks are suppressed by `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1` so the orchestrator never checkpoints before the level's LEDGER and done-set state are flushed.
+In INTENT mode (`IMPLEMENT_MODE=intent`) clear checkpoints fire at **DAG settle points**. In-flight Main-loop checks are suppressed by `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1` so the orchestrator never checkpoints before the frontier's LEDGER, work-graph, TASKS, and done-set state are flushed.
 
 **Timing:** The checkpoint check runs AFTER the T011 LEDGER-flush hook completes (so the LEDGER is durably written) and AFTER the level-boundary done_set_hash checkpoint is persisted. This ensures the next invocation resumes from a fully checkpointed state.
 
@@ -1604,7 +1763,7 @@ If `COMPACTION_TRIGGERED` is 0: continue to the next outer loop iteration.
 
 If `COMPACTION_TRIGGERED` is 1: the script has already emitted `compaction_pause`. Proceed to curator dispatch below.
 
-**Reusable clear-checkpoint protocol (concrete block).** Both legacy batch-settle and INTENT BFS-boundary callers use this block; do not leave an `include` placeholder or skip directly to `exit 0`. Before calling it, set `CHECKPOINT_TASKS_FILE` to the TASKS.md whose done-set was just durably flushed and set `BATCH_COMPLETED_TASK_IDS` to the comma-separated ids completed at that boundary (parallel batches and BFS levels include every completed id). The protocol derives `last_gate_task_id` from the last id in that same list, verifies the curator hash against the same tasks file, writes the watcher-readable clear checkpoint on success, emits exactly one push-notify, then returns to the caller; the caller exits 0 without Finalize.
+**Reusable clear-checkpoint protocol (concrete block).** Both legacy batch-settle and INTENT DAG-settle callers use this block; do not leave an `include` placeholder or skip directly to `exit 0`. Before calling it, set `CHECKPOINT_TASKS_FILE` to the TASKS.md whose done-set was just durably flushed and set `BATCH_COMPLETED_TASK_IDS` to the comma-separated ids completed at that boundary (parallel batches and DAG settle points include every completed id). The protocol derives `last_gate_task_id` from the last id in that same list, verifies the curator hash against the same tasks file, writes the watcher-readable clear checkpoint on success, emits exactly one push-notify, then returns to the caller; the caller exits 0 without Finalize.
 
 ```bash
 execute_clear_checkpoint_protocol() {
@@ -1755,11 +1914,12 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
-0. **INTENT-BFS serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a BFS level, per the T023-SEAM above), same-level batching is default-on only after these safety checks pass:
+0. **INTENT known-work serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a ready frontier from the known-work DAG), batching is default-on only after these safety checks pass:
    - `$INTENT_PARALLEL_LEVELS` is literally `"true"`; explicit false user/repo config still serializes.
-   - Every sibling task block in the current level has a parseable precise `**Files:**` scope. Missing or unparseable scope serializes the affected INTENT level.
-   - `$BASE/workstreams.json`, when present, reports `scope_unknown: false`; `scope_unknown: true` serializes the affected INTENT level.
-   - Eligible siblings have no dependency edge, no `file_conflicts` edge, and no inline `**Files:**` overlap.
+   - Every ready node/task block in the current frontier has a parseable precise `**Files:**` scope. Missing or unparseable scope serializes the affected frontier.
+   - `$BASE/workstreams.json`, when present, reports `scope_unknown: false`; `scope_unknown: true` serializes the affected INTENT frontier.
+   - `$BASE/work-graph.json`, when present, reports each selected node as ready: `status=ready` and every `depends_on` node already `done`.
+   - Eligible nodes have no dependency edge, no `file_conflicts` edge, and no inline `**Files:**` overlap.
    - The dispatch set is capped or partitioned by `$INTENT_PARALLEL_FANOUT_LIMIT` (currently 3); do not launch an unbounded same-level batch.
    - The review step uses per-task path-filtered diff capture, serialized review capture inside the parallel level, or an equivalent documented guard so a reviewer never receives a combined dirty-tree diff containing sibling-task changes.
 
@@ -1767,15 +1927,17 @@ The numbered steps below describe a **single task track** — one task's journey
 
    If all safety checks pass and the selected dispatch set contains more than one sibling task, mark each dispatched track with `INTENT_RULE0_SAFETY_PASSED=1` and `INTENT_PARALLEL_BATCH_ACTIVE=1`; only these tracks are allowed to use per-task path-filtered review diff capture. If the dispatch set contains only one task, run it as serialized (`INTENT_PARALLEL_BATCH_ACTIVE=0`) even when the config flag is true.
 
-   This is the only place `workflow.intent_parallel_levels` is consulted; without this gate, rules 1-6 below would already batch-dispatch independent same-level siblings regardless of the knob, since nothing else in this section reads `LEVEL_EXECUTE_ACTIVE` or `INTENT_PARALLEL_LEVELS`. Legacy-mode invocations (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are unaffected by this gate and proceed straight to rule 1.
+   This is the only place `workflow.intent_parallel_levels` is consulted; without this gate, rules 1-6 below would already batch-dispatch independent ready siblings regardless of the knob, since nothing else in this section reads `LEVEL_EXECUTE_ACTIVE` or `INTENT_PARALLEL_LEVELS`. Legacy-mode invocations (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are unaffected by this gate and proceed straight to rule 1.
 1. **Eligibility.** Pick ALL tasks whose deps are all `[x]` and that aren't skip-flagged (see step 2).
 2. **File-overlap dedup.** Two tasks whose "Files:" blocks share a path cannot run concurrently. When two eligible tasks conflict, run the lower-numbered one this batch and defer the other.
 3. **Parallel dispatch (per phase):** within a batch, run the spec-precheck for all batch tasks in a single message with multiple `Agent()` calls. Same for the implementer phase. Same for the reviewer phase.
 4. **Halt semantics.** If one track returns `spec_problem` / `decision_needed` / `needs_clarification` / `unable_to_complete`, that *track* halts and you collect the question. **In-flight tracks for other tasks continue.** Only after the batch completes do you present the collected halts to the user (one `AskUserQuestion` per halt, in order).
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
-6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-execute` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
-   - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel; in INTENT mode, still apply `$INTENT_PARALLEL_FANOUT_LIMIT` by partitioning wider eligible sets.
-   - `scope_unknown: true` means some task block has no parseable `**Files:**` line, making rule 2 blind for that task. In INTENT BFS mode this is a hard serialization gate for the affected level. Legacy mode keeps the historical risk-based behavior.
+6. **`work-graph.json` is your known-work DAG; `workstreams.json` is conflict metadata.** Read `$BASE/work-graph.json` on every INTENT refill and `$BASE/workstreams.json` for scope/conflict safety. Use them alongside rule 2's inline `**Files:**` dedup:
+   - `work-graph.json` supplies known nodes, statuses, and `depends_on`. A node is eligible only when all dependencies are `done`.
+   - `workstreams.json` supplies `file_conflicts` and `scope_unknown`. It is not assumed to contain complete future work.
+   - Tasks with disjoint file sets and no dependency chain can run in parallel; in INTENT mode, still apply `$INTENT_PARALLEL_FANOUT_LIMIT` by partitioning wider eligible sets.
+   - `scope_unknown: true` means some task block has no parseable `**Files:**` line, making rule 2 blind for that task. In INTENT known-work mode this is a hard serialization gate for the affected frontier. Legacy mode keeps the historical risk-based behavior.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
 ## Hard caps (token / wall-clock safety)
@@ -1792,8 +1954,8 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 
 The Main loop is a reusable procedure. In legacy mode it is entered directly after setup and
 falls through to Finalize when it completes or halts. In INTENT mode T023 invokes it from the
-BFS-level seam as `execute_main_loop_steps_1_to_8` with `TASKS_FILE` temporarily redirected to
-the generated level `TASKS.md`.
+known-work scheduler seam as `execute_main_loop_steps_1_to_8` with `TASKS_FILE` temporarily redirected to
+the current ready-frontier `TASKS.md` projection.
 
 When `LEVEL_EXECUTE_ACTIVE=1`, the Main loop MUST return to its caller instead of jumping to
 Finalize:
@@ -2242,7 +2404,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
-**Coalesced-path suppression (INTENT BFS).** When `LEVEL_EXECUTE_ACTIVE=1`, this per-task dispatch is SUPPRESSED entirely — do NOT call `remote-runner` here. The BFS orchestrator instead collects the union of the level's `**REMOTE_VERIFY:**` lines and dispatches exactly ONE `remote-runner` build at the level boundary (see "Coalesced remote build (INTENT BFS level boundary)" below). Per-task `cargo check` early feedback is intentionally dropped under the coalesced path — this is the full-coalesce option from the INTENT ("Consider for this" decision (a): recommended as the biggest win with the simplest failure-attribution story). Legacy/non-BFS callers (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are UNCHANGED and still dispatch per-task below.
+**Coalesced-path suppression (INTENT known-work mode).** When `LEVEL_EXECUTE_ACTIVE=1`, this per-task dispatch is SUPPRESSED entirely — do NOT call `remote-runner` here. The DAG scheduler instead collects the union of the settled frontier's `**REMOTE_VERIFY:**` lines and dispatches exactly ONE `remote-runner` build at the DAG settle point (see "Coalesced remote build (INTENT DAG settle point)" above). Per-task `cargo check` early feedback is intentionally dropped under the coalesced path — this is the full-coalesce option from the INTENT ("Consider for this" decision (a): recommended as the biggest win with the simplest failure-attribution story). Legacy/non-INTENT callers (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are UNCHANGED and still dispatch per-task below.
 
 ```bash
 if [ "${LEVEL_EXECUTE_ACTIVE:-0}" -eq 0 ]; then
@@ -2370,7 +2532,7 @@ else
 fi
 ```
 
-**INTENT review-diff isolation (mandatory).** When an INTENT BFS level runs sibling tasks in
+**INTENT review-diff isolation (mandatory).** When an INTENT ready frontier runs sibling tasks in
 parallel, the reviewer must not inspect a combined dirty-tree diff that can include sibling-task
 changes. The approved guard is per-task path-filtered diff capture using that task's precise
 `**Files:**` scope, but only for tracks marked by Rule 0 as both
@@ -3064,7 +3226,7 @@ print(m.group(1).rstrip() if m else "")
   fi
 
   # ── Append to level accumulator (only when at least one field is non-empty) ──
-  # LEVEL_LEDGER_PENDING_FILE is set by the BFS loop before invoking the Main loop.
+  # LEVEL_LEDGER_PENDING_FILE is set by the known-work scheduler before invoking the Main loop.
   # We only write when there is actual content to avoid polluting LEDGER.md with
   # empty task sections.
   if [ -n "$IMPL_LEDGER_DECISIONS" ] || [ -n "$IMPL_LEDGER_DEVIATIONS" ] || [ -n "$REVIEWER_CRITERIA_FINDINGS" ]; then
@@ -3089,8 +3251,8 @@ fi
 
    ```bash
    if [ "${LEVEL_EXECUTE_SUPPRESS_COMPACTION:-0}" = "1" ]; then
-     # INTENT BFS levels checkpoint only in the BFS caller after LEDGER.md and
-     # .bfs_level_state are flushed. Never pause inside the reused Main loop.
+     # INTENT frontiers checkpoint only in the scheduler caller after LEDGER.md,
+     # work-graph.json, and .bfs_level_state are flushed. Never pause inside the reused Main loop.
      MAIN_LOOP_RESULT="compaction_deferred"
      return 0
    fi

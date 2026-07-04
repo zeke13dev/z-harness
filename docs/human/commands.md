@@ -156,7 +156,7 @@ The catalogue below is manifest-aligned with `z_harness_cli.release_surface` for
 
 ### Planning
 
-- **`/z-plan <task>`** — Conversational intent compiler: sharpen always first; ask whether to run optional `/z-brainstorm`; consume selected framing if present; draft `INTENT.md` from sharpened problem + framing + targeted grounding; iterate 1–2 times with the user; run LLM concern/decision flags and ask whether to fold in `/z-audit-plan` before final read-through; on approval, generate `TASKS.md`, task-to-intent mapping, workstreams/execution strategy, `HANDOFF.md`, and watcher-readable checkpoint metadata for `/z-execute`. `--full` keeps the legacy detailed SDD path (`SPEC.md` + `PLAN.md` + `TASKS.md`).
+- **`/z-plan <task>`** — Conversational intent compiler: sharpen always first; ask whether to run optional `/z-brainstorm`; consume selected framing if present; draft `INTENT.md` from sharpened problem + framing + targeted grounding; iterate 1–2 times with the user; run LLM concern/decision flags and ask whether to fold in `/z-audit-plan` before final read-through; on approval, generate `TASKS.md`, an initial append-only `work-graph.json` known-work DAG, task-to-intent mapping, workstreams/execution strategy, `HANDOFF.md`, and watcher-readable checkpoint metadata for `/z-execute`. `--full` keeps the legacy detailed SDD path (`SPEC.md` + `PLAN.md` + `TASKS.md`).
 - **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics. Proposes 2-6 narrow clusters; reconciles overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md`. Active-plan registry lifecycle.
 - **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests, cross-consults, writes `TESTS.md`.
 
