@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "z-harness",
-      "version": "1.0.332",
+      "version": "1.0.334",
       "source": "./",
       "description": "Rigorous planning + implementation pipeline with cross-LLM consultation."
     }

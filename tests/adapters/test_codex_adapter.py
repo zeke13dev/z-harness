@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -70,7 +71,10 @@ class TestStaticIdentity(unittest.TestCase):
         self.assertEqual(self.adapter.name, "codex")
 
     def test_fidelity_tier_is_flattened(self):
-        """Fidelity must be exactly 'flattened' — the core invariant for this adapter."""
+        """Default fidelity remains flattened until Codex parity evidence exists."""
+        from z_harness_cli.adapters.codex_parity_gate import codex_adapter_fidelity
+
+        self.assertEqual(self.adapter.fidelity_tier, codex_adapter_fidelity())
         self.assertEqual(self.adapter.fidelity_tier, "flattened")
 
     def test_capabilities_project_mcp(self):
@@ -99,7 +103,7 @@ class TestStaticIdentity(unittest.TestCase):
 
 
 class TestCommandCapabilityMatrix(unittest.TestCase):
-    """Verify the command-tier matrix is populated correctly for codex."""
+    """Verify the command-tier matrix is populated from the Codex parity gate."""
 
     _MULTI_AGENT = {"z-execute", "z-panel", "z-consult", "z-gate"}
 
@@ -132,6 +136,25 @@ class TestCommandCapabilityMatrix(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 tier = command_tier("codex", cmd)
                 self.assertIn(tier, ("native", "degraded", "blocked"))
+
+    def test_gate_drives_command_tiers(self):
+        """Every registered command tier must match codex_parity_gate."""
+        from z_harness_cli.adapters.codex_parity_gate import codex_command_tier
+
+        for cmd in KNOWN_COMMANDS:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(command_tier("codex", cmd), codex_command_tier(cmd))
+
+    def test_multi_agent_block_reasons_are_explicit(self):
+        """Blocked multi-agent families explain which Codex evidence is missing."""
+        from z_harness_cli.adapters.codex_parity_gate import codex_command_decision
+
+        for cmd in self._MULTI_AGENT:
+            with self.subTest(cmd=cmd):
+                decision = codex_command_decision(cmd)
+                self.assertEqual(decision.tier, "blocked")
+                self.assertIn("Missing required Codex parity evidence", decision.reason)
+                self.assertIn(cmd, decision.reason)
 
 
 # ---------------------------------------------------------------------------
@@ -244,11 +267,14 @@ class TestExportPayload(unittest.TestCase):
             )
 
     def test_export_fidelity_is_flattened(self):
-        """export_payload() always reports fidelity=flattened regardless of outcome."""
+        """export_payload() reports the gate-driven default fidelity."""
+        from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "out"
             dest.mkdir()
             result = self.adapter.export_payload(dest)
+        self.assertEqual(result.fidelity, codex_export_fidelity())
         self.assertEqual(result.fidelity, "flattened")
 
     def test_export_to_temp_dir_with_mock_persona(self):
@@ -292,6 +318,105 @@ class TestExportPayload(unittest.TestCase):
 
             self.assertEqual(result.fidelity, "flattened")
             self.assertEqual(result.dest, dest)
+
+
+# ---------------------------------------------------------------------------
+# Codex parity gate
+# ---------------------------------------------------------------------------
+
+
+class TestParityGate(unittest.TestCase):
+    """The Codex gate synchronizes adapter, export, and command-tier defaults."""
+
+    _PARITY_MODULE = "runtime.tests.test_codex_parity"
+    _EXPORT_MODULE = "tests.drivers.test_codex_export_driver"
+
+    def _fake_module(self, class_names: set[str]) -> types.ModuleType:
+        module = types.ModuleType("fake_codex_parity")
+        for class_name in class_names:
+            setattr(module, class_name, type(class_name, (), {}))
+        return module
+
+    def test_adapter_export_and_command_tiers_all_read_gate(self):
+        from z_harness_cli.adapters.codex_parity_gate import (
+            codex_adapter_fidelity,
+            codex_command_tier,
+            codex_export_fidelity,
+        )
+
+        adapter = CodexAdapter()
+
+        self.assertEqual(adapter.fidelity_tier, codex_adapter_fidelity())
+        self.assertEqual(codex_export_fidelity(), "flattened")
+        for cmd in KNOWN_COMMANDS:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(command_tier("codex", cmd), codex_command_tier(cmd))
+
+    def test_clearing_evidence_keeps_multi_agent_families_blocked(self):
+        import z_harness_cli.adapters.codex_parity_gate as gate_mod
+
+        original = {cmd: list(entries) for cmd, entries in gate_mod.PARITY_EVIDENCE.items()}
+        try:
+            gate_mod.PARITY_EVIDENCE.clear()
+            self.assertEqual(CodexAdapter().fidelity_tier, "flattened")
+            for cmd in gate_mod.NATIVE_CANDIDATE_FAMILIES:
+                with self.subTest(cmd=cmd):
+                    decision = gate_mod.codex_command_decision(cmd)
+                    self.assertEqual(decision.tier, "blocked")
+                    self.assertIn("No Codex parity evidence is registered", decision.reason)
+        finally:
+            gate_mod.PARITY_EVIDENCE.clear()
+            gate_mod.PARITY_EVIDENCE.update(original)
+
+    def test_partial_resolvable_evidence_does_not_promote_unproven_families(self):
+        import z_harness_cli.adapters.codex_parity_gate as gate_mod
+
+        original_module = sys.modules.get(self._PARITY_MODULE)
+        fake = self._fake_module({"TestConsultantDispatchIsolation"})
+        try:
+            sys.modules[self._PARITY_MODULE] = fake
+            self.assertEqual(gate_mod.codex_command_tier("z-consult"), "native")
+            self.assertEqual(gate_mod.codex_command_tier("z-execute"), "blocked")
+            self.assertEqual(gate_mod.codex_adapter_fidelity(), "partial")
+            self.assertEqual(gate_mod.codex_export_fidelity(), "partial")
+        finally:
+            if original_module is None:
+                sys.modules.pop(self._PARITY_MODULE, None)
+            else:
+                sys.modules[self._PARITY_MODULE] = original_module
+
+    def test_full_fake_evidence_promotes_adapter_and_export(self):
+        import z_harness_cli.adapters.codex_parity_gate as gate_mod
+
+        original_parity_module = sys.modules.get(self._PARITY_MODULE)
+        original_export_module = sys.modules.get(self._EXPORT_MODULE)
+        fake_parity = self._fake_module(
+            {
+                "TestSubagentFanOutParity",
+                "TestConsultantDispatchIsolation",
+                "TestAskUserGateParity",
+                "TestTelemetryParity",
+                "TestMultiAgentCommandPath",
+            }
+        )
+        fake_export = self._fake_module({"TestCodexNativeAgentExport"})
+        try:
+            sys.modules[self._PARITY_MODULE] = fake_parity
+            sys.modules[self._EXPORT_MODULE] = fake_export
+            for cmd in gate_mod.NATIVE_CANDIDATE_FAMILIES:
+                with self.subTest(cmd=cmd):
+                    self.assertEqual(gate_mod.codex_command_tier(cmd), "native")
+            self.assertEqual(CodexAdapter().fidelity_tier, "native")
+            self.assertEqual(gate_mod.codex_export_fidelity(), "native")
+        finally:
+            if original_parity_module is None:
+                sys.modules.pop(self._PARITY_MODULE, None)
+            else:
+                sys.modules[self._PARITY_MODULE] = original_parity_module
+            if original_export_module is None:
+                sys.modules.pop(self._EXPORT_MODULE, None)
+            else:
+                sys.modules[self._EXPORT_MODULE] = original_export_module
 
 
 # ---------------------------------------------------------------------------

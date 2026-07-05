@@ -16,6 +16,12 @@ Probes (run in sequence by run_probes()):
    is expected to fail quickly).  Records the exit code and any warning lines
    from stderr in ProbeResults.cross_env_collision_outcome.
 
+3. Capability contract probe
+   Best-effort discovery of Codex app/plugin multi-agent support, CLI-visible
+   agent support, AskUser/gate support, and event-frame support.  Results are
+   represented as structured per-surface status/evidence records so downstream
+   code does not rely on stale host-wide assumptions.
+
 Telemetry:
   ``codex_env_collision_detected`` is fired (informational) if ANTHROPIC_API_KEY
   is present in the parent process environment at probe time.
@@ -37,6 +43,7 @@ import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +57,79 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _PROBE_RESULTS_PATH = Path(__file__).parent / "probe_results.json"
+
+
+class CapabilityStatus(str, Enum):
+    """Tri-state capability status emitted by the Codex probe."""
+
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    UNKNOWN = "unknown"
+
+
+class CodexSurface(str, Enum):
+    """Codex surface where a capability was observed or not observed."""
+
+    APP_PLUGIN = "app_plugin"
+    CLI = "cli"
+    CLI_STREAM = "cli_stream"
+
+
+class CodexSupportTier(str, Enum):
+    """Concise classification derived from the individual probe fields."""
+
+    UNKNOWN = "unknown"
+    FLATTENED_CLI = "flattened_cli"
+    CLI_PARTIAL = "cli_partial"
+    CLI_NATIVE_CANDIDATE = "cli_native_candidate"
+    APP_PLUGIN_MULTI_AGENT_CLI_DEGRADED = "app_plugin_multi_agent_cli_degraded"
+    FULL_NATIVE_CANDIDATE = "full_native_candidate"
+
+
+@dataclass
+class CapabilityResult:
+    """Evidence-backed result for one Codex capability on one surface."""
+
+    status: CapabilityStatus
+    surface: CodexSurface
+    evidence: str
+
+
+@dataclass
+class CodexCapabilityContract:
+    """Capability contract for current Codex app/plugin and CLI surfaces."""
+
+    app_plugin_multi_agent_support: CapabilityResult
+    cli_visible_agent_support: CapabilityResult
+    ask_user_gate_support: CapabilityResult
+    event_frame_support: CapabilityResult
+    support_tier: CodexSupportTier
+
+    @classmethod
+    def unknown(cls) -> "CodexCapabilityContract":
+        return cls(
+            app_plugin_multi_agent_support=CapabilityResult(
+                status=CapabilityStatus.UNKNOWN,
+                surface=CodexSurface.APP_PLUGIN,
+                evidence="not probed",
+            ),
+            cli_visible_agent_support=CapabilityResult(
+                status=CapabilityStatus.UNKNOWN,
+                surface=CodexSurface.CLI,
+                evidence="not probed",
+            ),
+            ask_user_gate_support=CapabilityResult(
+                status=CapabilityStatus.UNKNOWN,
+                surface=CodexSurface.CLI,
+                evidence="not probed",
+            ),
+            event_frame_support=CapabilityResult(
+                status=CapabilityStatus.UNKNOWN,
+                surface=CodexSurface.CLI_STREAM,
+                evidence="not probed",
+            ),
+            support_tier=CodexSupportTier.UNKNOWN,
+        )
 
 
 @dataclass
@@ -72,6 +152,8 @@ class ProbeResults:
         Raw warning lines captured from stderr during the cross-env probe.
     codex_path:
         The codex binary path passed to run_probes().
+    codex_capabilities:
+        Structured Codex app/plugin and CLI capability contract.
     """
 
     session_resume_flag: Optional[str]
@@ -79,6 +161,9 @@ class ProbeResults:
     cross_env_collision_outcome: str
     cross_env_collision_warnings: list[str] = field(default_factory=list)
     codex_path: str = "codex"
+    codex_capabilities: CodexCapabilityContract = field(
+        default_factory=CodexCapabilityContract.unknown
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +196,7 @@ def run_probes(codex_path: str = "codex") -> ProbeResults:
 
     session_flag = _probe_session_resume(codex_path)
     collision_outcome, collision_warnings = _probe_cross_env_collision(codex_path)
+    codex_capabilities = _probe_codex_capabilities(codex_path)
 
     results = ProbeResults(
         session_resume_flag=session_flag,
@@ -118,6 +204,7 @@ def run_probes(codex_path: str = "codex") -> ProbeResults:
         cross_env_collision_outcome=collision_outcome,
         cross_env_collision_warnings=collision_warnings,
         codex_path=codex_path,
+        codex_capabilities=codex_capabilities,
     )
 
     _write_results(results)
@@ -220,6 +307,238 @@ def _probe_cross_env_collision(codex_path: str) -> tuple[str, list[str]]:
         outcome = base
 
     return outcome, warning_lines
+
+
+# ---------------------------------------------------------------------------
+# Probe 3 — Codex capability contract
+# ---------------------------------------------------------------------------
+
+_CLI_AGENT_PATTERN = re.compile(
+    r"--[\w-]*(?:agent|subagent)[\w-]*|"
+    r"\b(?:agent|agents|subagent|subagents)\s+"
+    r"(?:run|list|exec|dispatch|spawn)\b",
+    re.IGNORECASE,
+)
+_ASK_USER_GATE_PATTERN = re.compile(
+    # Positive AskUser/gate evidence only. Bypass, sandbox, trust, or generic
+    # approval flags are not proof that Codex can stop for a user gate.
+    r"(?<![\w-])--(?:ask-user|user-gate|prompt-user|approval-request)(?![\w-])|"
+    r"(?<![\w-])(?:ask(?:[-_ \t]+)?user|user[-_ \t]+gate|"
+    r"prompt[-_ \t]+user|approval[-_ \t]+request)(?![\w-])",
+    re.IGNORECASE,
+)
+_EVENT_FRAME_PATTERN = re.compile(
+    r"--output-format[^\n]*(?:stream-json|jsonl)|"
+    r"\b(?:stream-json|jsonl|event[-_\s]?frames?)\b",
+    re.IGNORECASE,
+)
+
+
+def _probe_codex_capabilities(codex_path: str) -> CodexCapabilityContract:
+    """Probe Codex app/plugin and CLI capability surfaces.
+
+    The app/plugin multi-agent signal is read from ``codex features list`` when
+    that command is available.  CLI agent, AskUser/gate, and event-frame signals
+    are read from ``codex exec --help``.  Missing commands produce ``unknown``
+    rather than a host-wide negative claim.
+    """
+    features_text, features_exit, features_error = _run_capability_command(
+        codex_path, ["features", "list"], timeout=10
+    )
+    help_text, help_exit, help_error = _run_capability_command(
+        codex_path, ["exec", "--help"], timeout=15
+    )
+
+    app_plugin_multi_agent = _app_plugin_multi_agent_result(
+        features_text, features_exit, features_error
+    )
+    cli_visible_agent, ask_user_gate, event_frame = _cli_capability_results(
+        help_text, help_exit, help_error
+    )
+
+    return CodexCapabilityContract(
+        app_plugin_multi_agent_support=app_plugin_multi_agent,
+        cli_visible_agent_support=cli_visible_agent,
+        ask_user_gate_support=ask_user_gate,
+        event_frame_support=event_frame,
+        support_tier=_classify_codex_support(
+            app_plugin_multi_agent,
+            cli_visible_agent,
+            ask_user_gate,
+            event_frame,
+        ),
+    )
+
+
+def _run_capability_command(
+    codex_path: str, args: list[str], *, timeout: int
+) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    """Run a lightweight Codex discovery command and capture text output."""
+    try:
+        proc = subprocess.run(
+            [codex_path, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"could not run '{codex_path} {' '.join(args)}': {exc}"
+
+    return (proc.stdout or "") + (proc.stderr or ""), proc.returncode, None
+
+
+def _app_plugin_multi_agent_result(
+    features_text: Optional[str],
+    features_exit: Optional[int],
+    features_error: Optional[str],
+) -> CapabilityResult:
+    if features_error is not None:
+        return CapabilityResult(
+            status=CapabilityStatus.UNKNOWN,
+            surface=CodexSurface.APP_PLUGIN,
+            evidence=features_error,
+        )
+
+    feature_enabled = _feature_enabled(features_text or "", "multi_agent")
+    if feature_enabled is True:
+        return CapabilityResult(
+            status=CapabilityStatus.SUPPORTED,
+            surface=CodexSurface.APP_PLUGIN,
+            evidence="codex features list reports multi_agent enabled",
+        )
+    if feature_enabled is False:
+        return CapabilityResult(
+            status=CapabilityStatus.UNSUPPORTED,
+            surface=CodexSurface.APP_PLUGIN,
+            evidence="codex features list reports multi_agent disabled",
+        )
+
+    if features_exit not in (0, None):
+        return CapabilityResult(
+            status=CapabilityStatus.UNKNOWN,
+            surface=CodexSurface.APP_PLUGIN,
+            evidence=(
+                f"codex features list exited {features_exit}; "
+                "app/plugin multi_agent support unverified"
+            ),
+        )
+
+    return CapabilityResult(
+        status=CapabilityStatus.UNSUPPORTED,
+        surface=CodexSurface.APP_PLUGIN,
+        evidence="codex features list did not report multi_agent enabled",
+    )
+
+
+def _feature_enabled(features_text: str, feature_name: str) -> Optional[bool]:
+    """Return enabled state for a feature-list row, or None when absent."""
+    wanted = feature_name.replace("-", "_").lower()
+    for raw_line in features_text.splitlines():
+        line = raw_line.strip().replace("-", "_").lower()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if not parts or parts[0] != wanted:
+            continue
+        value_tokens = {
+            token.removeprefix("enabled=")
+            .removeprefix("stable=")
+            .removeprefix("default=")
+            for token in parts[1:]
+        }
+        if value_tokens.intersection({"true", "enabled", "yes"}):
+            return True
+        if value_tokens.intersection({"false", "disabled", "no"}):
+            return False
+    return None
+
+
+def _cli_capability_results(
+    help_text: Optional[str],
+    help_exit: Optional[int],
+    help_error: Optional[str],
+) -> tuple[CapabilityResult, CapabilityResult, CapabilityResult]:
+    if help_error is not None or not (help_text or "").strip():
+        evidence = help_error or f"codex exec --help exited {help_exit} with no output"
+        return (
+            CapabilityResult(CapabilityStatus.UNKNOWN, CodexSurface.CLI, evidence),
+            CapabilityResult(CapabilityStatus.UNKNOWN, CodexSurface.CLI, evidence),
+            CapabilityResult(
+                CapabilityStatus.UNKNOWN, CodexSurface.CLI_STREAM, evidence
+            ),
+        )
+
+    text = help_text or ""
+    agent_match = _CLI_AGENT_PATTERN.search(text)
+    ask_match = _ASK_USER_GATE_PATTERN.search(text)
+    event_match = _EVENT_FRAME_PATTERN.search(text)
+
+    cli_visible_agent = CapabilityResult(
+        status=CapabilityStatus.SUPPORTED
+        if agent_match
+        else CapabilityStatus.UNSUPPORTED,
+        surface=CodexSurface.CLI,
+        evidence=_match_evidence(
+            agent_match, "codex exec --help has no agent/subagent flags or commands"
+        ),
+    )
+    ask_user_gate = CapabilityResult(
+        status=CapabilityStatus.SUPPORTED
+        if ask_match
+        else CapabilityStatus.UNSUPPORTED,
+        surface=CodexSurface.CLI,
+        evidence=_match_evidence(
+            ask_match, "codex exec --help has no AskUser/gate markers"
+        ),
+    )
+    event_frame = CapabilityResult(
+        status=CapabilityStatus.SUPPORTED
+        if event_match
+        else CapabilityStatus.UNSUPPORTED,
+        surface=CodexSurface.CLI_STREAM,
+        evidence=_match_evidence(
+            event_match, "codex exec --help has no stream-json/jsonl event output"
+        ),
+    )
+    return cli_visible_agent, ask_user_gate, event_frame
+
+
+def _match_evidence(match: Optional[re.Match[str]], fallback: str) -> str:
+    if match is None:
+        return fallback
+    token = " ".join(match.group(0).strip().split())
+    return f"codex exec --help exposes {token!r}"
+
+
+def _classify_codex_support(
+    app_plugin_multi_agent: CapabilityResult,
+    cli_visible_agent: CapabilityResult,
+    ask_user_gate: CapabilityResult,
+    event_frame: CapabilityResult,
+) -> CodexSupportTier:
+    statuses = [
+        app_plugin_multi_agent.status,
+        cli_visible_agent.status,
+        ask_user_gate.status,
+        event_frame.status,
+    ]
+    if all(status == CapabilityStatus.UNKNOWN for status in statuses):
+        return CodexSupportTier.UNKNOWN
+
+    app_supported = app_plugin_multi_agent.status == CapabilityStatus.SUPPORTED
+    cli_agent_supported = cli_visible_agent.status == CapabilityStatus.SUPPORTED
+    ask_supported = ask_user_gate.status == CapabilityStatus.SUPPORTED
+    event_supported = event_frame.status == CapabilityStatus.SUPPORTED
+
+    if app_supported and cli_agent_supported and ask_supported and event_supported:
+        return CodexSupportTier.FULL_NATIVE_CANDIDATE
+    if app_supported:
+        return CodexSupportTier.APP_PLUGIN_MULTI_AGENT_CLI_DEGRADED
+    if cli_agent_supported and ask_supported and event_supported:
+        return CodexSupportTier.CLI_NATIVE_CANDIDATE
+    if cli_agent_supported or ask_supported:
+        return CodexSupportTier.CLI_PARTIAL
+    return CodexSupportTier.FLATTENED_CLI
 
 
 # ---------------------------------------------------------------------------

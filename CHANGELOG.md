@@ -32,6 +32,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 ## 2026-07-05
 
 - _(auto)_ Add codex prod support and model routing _(release)_
+- _(auto)_ Add parity-gated capability contract _(codex)_
 
 ## 2026-07-04
 

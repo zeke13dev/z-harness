@@ -26,10 +26,18 @@ import pytest
 
 import runtime.drivers.codex.probe as _probe_module
 from runtime.drivers.codex.probe import (
+    CapabilityResult,
+    CapabilityStatus,
+    CodexCapabilityContract,
+    CodexSupportTier,
+    CodexSurface,
     ProbeResults,
     _PROBE_RESULTS_PATH,
     _SESSION_PATTERN,
     _WARNING_PATTERN,
+    _classify_codex_support,
+    _feature_enabled,
+    _probe_codex_capabilities,
     _probe_cross_env_collision,
     _probe_session_resume,
     run_probes,
@@ -64,6 +72,27 @@ Options:
   -h, --help              Print help
 """
 
+_FAKE_HELP_WITH_CODEX_CAPABILITIES = """\
+Usage: codex exec [OPTIONS] -
+
+Options:
+  --agent <name>          Run with a named agent
+  --ask-user              Emit AskUser gate prompts
+  --output-format <fmt>   Output format (stream-json, json)
+  -h, --help              Print help
+"""
+
+_FAKE_HELP_WITH_BYPASS_APPROVALS_AND_JSONL = """\
+Usage: codex exec [OPTIONS] -
+
+Options:
+  --json                              Print events to stdout as JSONL
+  --dangerously-bypass-approvals-and-sandbox
+                                      Bypass approval prompts and sandboxing
+  --dangerously-bypass-hook-trust     Bypass hook trust checks
+  -h, --help                          Print help
+"""
+
 
 # ===========================================================================
 # Unit tests — ProbeResults dataclass
@@ -84,6 +113,7 @@ class TestProbeResultsDataclass:
         assert r.cross_env_collision_outcome == "non_zero_exit:1"
         assert r.cross_env_collision_warnings == []
         assert r.codex_path == "codex"
+        assert r.codex_capabilities.support_tier == CodexSupportTier.UNKNOWN
 
     def test_asdict_serialisable_to_json(self):
         r = ProbeResults(
@@ -101,6 +131,7 @@ class TestProbeResultsDataclass:
         assert parsed["session_resume_supported"] is False
         assert parsed["cross_env_collision_outcome"] == "exit_zero"
         assert parsed["cross_env_collision_warnings"] == ["WARN: something"]
+        assert parsed["codex_capabilities"]["support_tier"] == "unknown"
 
     def test_session_resume_flag_none_means_unsupported(self):
         """When flag is None, supported must be False."""
@@ -119,6 +150,187 @@ class TestProbeResultsDataclass:
             cross_env_collision_outcome="exit_zero",
         )
         assert r.session_resume_supported is True
+
+
+# ===========================================================================
+# Unit tests — Codex capability contract
+# ===========================================================================
+
+
+class TestCodexCapabilityContractUnit:
+    """Codex capability contract stays JSON-safe and evidence-backed."""
+
+    def test_unknown_contract_shape(self):
+        contract = CodexCapabilityContract.unknown()
+        assert contract.app_plugin_multi_agent_support.status == CapabilityStatus.UNKNOWN
+        assert contract.app_plugin_multi_agent_support.surface == CodexSurface.APP_PLUGIN
+        assert contract.cli_visible_agent_support.surface == CodexSurface.CLI
+        assert contract.ask_user_gate_support.surface == CodexSurface.CLI
+        assert contract.event_frame_support.surface == CodexSurface.CLI_STREAM
+        assert contract.support_tier == CodexSupportTier.UNKNOWN
+
+    def test_contract_round_trips_through_json(self):
+        contract = CodexCapabilityContract(
+            app_plugin_multi_agent_support=CapabilityResult(
+                CapabilityStatus.SUPPORTED,
+                CodexSurface.APP_PLUGIN,
+                "codex features list reports multi_agent enabled",
+            ),
+            cli_visible_agent_support=CapabilityResult(
+                CapabilityStatus.UNSUPPORTED,
+                CodexSurface.CLI,
+                "no CLI agent flag",
+            ),
+            ask_user_gate_support=CapabilityResult(
+                CapabilityStatus.UNSUPPORTED,
+                CodexSurface.CLI,
+                "no AskUser marker",
+            ),
+            event_frame_support=CapabilityResult(
+                CapabilityStatus.SUPPORTED,
+                CodexSurface.CLI_STREAM,
+                "stream-json",
+            ),
+            support_tier=CodexSupportTier.APP_PLUGIN_MULTI_AGENT_CLI_DEGRADED,
+        )
+        data = json.loads(json.dumps(asdict(contract)))
+        assert data["app_plugin_multi_agent_support"]["status"] == "supported"
+        assert data["app_plugin_multi_agent_support"]["surface"] == "app_plugin"
+        assert data["support_tier"] == "app_plugin_multi_agent_cli_degraded"
+
+    @pytest.mark.parametrize(
+        ("features_text", "expected"),
+        [
+            ("multi_agent stable true\n", True),
+            ("multi-agent stable false\n", False),
+            ("multi_agent enabled=true\n", True),
+            ("other_feature stable true\n", None),
+        ],
+    )
+    def test_feature_enabled_parses_multi_agent_rows(self, features_text, expected):
+        assert _feature_enabled(features_text, "multi_agent") is expected
+
+    def test_classification_distinguishes_app_plugin_from_cli(self):
+        supported_app = CapabilityResult(
+            CapabilityStatus.SUPPORTED, CodexSurface.APP_PLUGIN, "multi_agent true"
+        )
+        unsupported_cli = CapabilityResult(
+            CapabilityStatus.UNSUPPORTED, CodexSurface.CLI, "no flag"
+        )
+        supported_events = CapabilityResult(
+            CapabilityStatus.SUPPORTED, CodexSurface.CLI_STREAM, "stream-json"
+        )
+
+        assert (
+            _classify_codex_support(
+                supported_app, unsupported_cli, unsupported_cli, supported_events
+            )
+            == CodexSupportTier.APP_PLUGIN_MULTI_AGENT_CLI_DEGRADED
+        )
+
+    def test_classification_full_cli_without_app_plugin_is_cli_native_candidate(self):
+        unsupported_app = CapabilityResult(
+            CapabilityStatus.UNSUPPORTED, CodexSurface.APP_PLUGIN, "multi_agent false"
+        )
+        supported_cli = CapabilityResult(
+            CapabilityStatus.SUPPORTED, CodexSurface.CLI, "--agent"
+        )
+        supported_events = CapabilityResult(
+            CapabilityStatus.SUPPORTED, CodexSurface.CLI_STREAM, "stream-json"
+        )
+
+        assert (
+            _classify_codex_support(
+                unsupported_app, supported_cli, supported_cli, supported_events
+            )
+            == CodexSupportTier.CLI_NATIVE_CANDIDATE
+        )
+
+    def test_classification_event_frames_alone_remains_flattened_cli(self):
+        unsupported_app = CapabilityResult(
+            CapabilityStatus.UNSUPPORTED, CodexSurface.APP_PLUGIN, "no multi_agent"
+        )
+        unsupported_cli = CapabilityResult(
+            CapabilityStatus.UNSUPPORTED, CodexSurface.CLI, "no flag"
+        )
+        supported_events = CapabilityResult(
+            CapabilityStatus.SUPPORTED, CodexSurface.CLI_STREAM, "stream-json"
+        )
+
+        assert (
+            _classify_codex_support(
+                unsupported_app, unsupported_cli, unsupported_cli, supported_events
+            )
+            == CodexSupportTier.FLATTENED_CLI
+        )
+
+    def test_probe_codex_capabilities_detects_supported_fields(self):
+        def _fake_run(argv, **kwargs):
+            if argv[1:] == ["features", "list"]:
+                return MagicMock(
+                    returncode=0, stdout="multi_agent stable true\n", stderr=""
+                )
+            if argv[1:] == ["exec", "--help"]:
+                return MagicMock(
+                    returncode=0,
+                    stdout=_FAKE_HELP_WITH_CODEX_CAPABILITIES,
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected argv: {argv!r}")
+
+        with patch("runtime.drivers.codex.probe.subprocess.run", _fake_run):
+            contract = _probe_codex_capabilities("codex")
+
+        assert (
+            contract.app_plugin_multi_agent_support.status
+            == CapabilityStatus.SUPPORTED
+        )
+        assert contract.cli_visible_agent_support.status == CapabilityStatus.SUPPORTED
+        assert contract.ask_user_gate_support.status == CapabilityStatus.SUPPORTED
+        assert contract.event_frame_support.status == CapabilityStatus.SUPPORTED
+        assert contract.support_tier == CodexSupportTier.FULL_NATIVE_CANDIDATE
+
+    def test_probe_codex_capabilities_keeps_app_plugin_unknown_on_failed_features(self):
+        def _fake_run(argv, **kwargs):
+            if argv[1:] == ["features", "list"]:
+                return MagicMock(returncode=2, stdout="", stderr="unknown command\n")
+            if argv[1:] == ["exec", "--help"]:
+                return MagicMock(returncode=0, stdout=_FAKE_HELP_WITH_SESSION, stderr="")
+            raise AssertionError(f"unexpected argv: {argv!r}")
+
+        with patch("runtime.drivers.codex.probe.subprocess.run", _fake_run):
+            contract = _probe_codex_capabilities("codex")
+
+        assert (
+            contract.app_plugin_multi_agent_support.status == CapabilityStatus.UNKNOWN
+        )
+        assert contract.cli_visible_agent_support.status == CapabilityStatus.UNSUPPORTED
+        assert contract.ask_user_gate_support.status == CapabilityStatus.UNSUPPORTED
+        assert contract.event_frame_support.status == CapabilityStatus.SUPPORTED
+        assert contract.support_tier == CodexSupportTier.FLATTENED_CLI
+
+    def test_bypass_approval_flags_do_not_imply_ask_user_gate_support(self):
+        def _fake_run(argv, **kwargs):
+            if argv[1:] == ["features", "list"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if argv[1:] == ["exec", "--help"]:
+                return MagicMock(
+                    returncode=0,
+                    stdout=_FAKE_HELP_WITH_BYPASS_APPROVALS_AND_JSONL,
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected argv: {argv!r}")
+
+        with patch("runtime.drivers.codex.probe.subprocess.run", _fake_run):
+            contract = _probe_codex_capabilities("codex")
+
+        assert contract.ask_user_gate_support.status == CapabilityStatus.UNSUPPORTED
+        assert (
+            contract.ask_user_gate_support.evidence
+            == "codex exec --help has no AskUser/gate markers"
+        )
+        assert contract.event_frame_support.status == CapabilityStatus.SUPPORTED
+        assert "JSONL" in contract.event_frame_support.evidence
 
 
 # ===========================================================================
@@ -393,6 +605,8 @@ class TestRunProbesUnit:
         assert "cross_env_collision_outcome" in data
         assert "cross_env_collision_warnings" in data
         assert "codex_path" in data
+        assert "codex_capabilities" in data
+        assert "support_tier" in data["codex_capabilities"]
 
     def test_probe_results_json_overwrites_previous(self, tmp_path: Path):
         """Each run_probes() call writes exactly once (overwrite semantics)."""
@@ -561,6 +775,7 @@ class TestProbeResultsJsonWriteIntegration:
                 "cross_env_collision_outcome",
                 "cross_env_collision_warnings",
                 "codex_path",
+                "codex_capabilities",
             }
             assert expected_keys.issubset(data.keys())
         finally:

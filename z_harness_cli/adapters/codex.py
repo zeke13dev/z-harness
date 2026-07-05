@@ -1,8 +1,9 @@
-"""Codex host adapter — fidelity: flattened.
+"""Codex host adapter — fidelity gated by Codex parity evidence.
 
-Codex CLI (OpenAI ``codex``) runs z-harness commands as a single-agent
-transliteration.  Multi-agent orchestration (/z-execute, /z-panel,
-/z-consult, /z-gate) is absent at this fidelity tier.
+Codex CLI (OpenAI ``codex``) currently runs z-harness commands as a
+single-agent transliteration unless ``codex_parity_gate`` can resolve
+Codex-specific parity evidence.  Multi-agent orchestration (/z-execute,
+/z-panel, /z-consult, /z-gate) remains blocked until the gate authorizes it.
 
 Injection modes
 ---------------
@@ -51,14 +52,16 @@ binary does not expose a ``--cwd`` / ``--project`` flag; the working
 directory is set via the cwd of the spawned process.
 
 Command-capability matrix
---------------------------
-All single-agent /z-* commands run in degraded mode (transliterated via
-AGENTS.md, no subagent dispatch).  Multi-agent commands are blocked.
+-------------------------
+Command tiers are read from ``codex_parity_gate``.  With no Codex parity
+evidence present, single-agent /z-* commands run in degraded mode and
+multi-agent commands are blocked.
 
 Attribution / decision record
 ------------------------------
 - binary probed: codex (on PATH; version via ``codex --version``)
-- fidelity=flattened: single-agent transliteration, per SPEC D13 + PLAN Phase B
+- fidelity gate default=flattened: single-agent transliteration unless Codex
+  parity evidence resolves
 - supports_project_mcp=True: codex mcp add writes ~/.codex/config.toml
 - supports_user_mcp=False: codex has no separate user-scoped MCP store;
   global ~/.codex/config.toml is the only MCP config location
@@ -89,6 +92,11 @@ from z_harness_cli.adapters.base import (
     Injection,
     register_command_tiers,
 )
+from z_harness_cli.adapters.codex_parity_gate import (
+    codex_adapter_fidelity,
+    codex_command_tier,
+    codex_export_fidelity,
+)
 from z_harness_cli import inject_safety
 
 
@@ -97,7 +105,6 @@ from z_harness_cli import inject_safety
 # ---------------------------------------------------------------------------
 
 _HOST_NAME = "codex"
-_FIDELITY_TIER: Literal["flattened"] = "flattened"
 
 # The codex binary name.
 _CODEX_BINARY = "codex"
@@ -138,26 +145,9 @@ Run `z-harness export --host codex` to populate the full prompt library.
 # Command-capability matrix registration
 # ---------------------------------------------------------------------------
 
-#: Commands that require multi-agent orchestration — blocked on flattened hosts.
-_MULTI_AGENT_COMMANDS = frozenset(
-    {
-        "z-execute",
-        "z-panel",
-        "z-consult",
-        "z-gate",
-    }
-)
-
-#: Commands that run in degraded mode (single-agent transliteration present,
-#: but reduced fidelity vs the native Claude Code experience).
-_DEGRADED_COMMANDS = frozenset(KNOWN_COMMANDS) - _MULTI_AGENT_COMMANDS
-
 register_command_tiers(
     _HOST_NAME,
-    {
-        cmd: ("blocked" if cmd in _MULTI_AGENT_COMMANDS else "degraded")
-        for cmd in KNOWN_COMMANDS
-    },
+    {cmd: codex_command_tier(cmd) for cmd in KNOWN_COMMANDS},
 )
 
 
@@ -180,7 +170,7 @@ _CAPABILITIES = Capabilities(
 
 
 class CodexAdapter:
-    """Host adapter for Codex CLI (fidelity: flattened).
+    """Host adapter for Codex CLI.
 
     Instantiate once per process; safe to reuse across multiple inject/
     cleanup cycles (each inject() produces an independent Injection).
@@ -195,8 +185,12 @@ class CodexAdapter:
     """
 
     name: str = _HOST_NAME
-    fidelity_tier: Literal["flattened"] = _FIDELITY_TIER
     capabilities: Capabilities = _CAPABILITIES
+
+    @property
+    def fidelity_tier(self) -> str:  # type: ignore[override]
+        """Return the current Codex parity-gate fidelity tier."""
+        return codex_adapter_fidelity()
 
     # ------------------------------------------------------------------
     # detect
@@ -249,8 +243,8 @@ class CodexAdapter:
         via ``runtime/drivers/codex/persona_export.py::export_persona()`` for
         each persona file found in the ``personas/`` directory.
 
-        Both results are merged into a single ExportResult.  Fidelity is
-        always ``"flattened"`` for Codex.
+        Both results are merged into a single ExportResult.  Fidelity is read
+        from ``codex_parity_gate`` so adapter/export claims cannot diverge.
 
         Non-empty warnings from the runtime export (validation errors) are
         preserved and re-raised as ``RuntimeError`` so callers that expect the
@@ -271,8 +265,8 @@ class CodexAdapter:
         Returns
         -------
         ExportResult
-            fidelity="flattened"; files lists all written files under dest;
-            warnings aggregated from both stages.
+            fidelity is gate-driven; files lists all written files under dest;
+            warnings are aggregated from both stages.
 
         Raises
         ------
@@ -360,7 +354,7 @@ class CodexAdapter:
         return ExportResult(
             dest=dest,
             files=all_files,
-            fidelity="flattened",
+            fidelity=codex_export_fidelity(),
             warnings=all_warnings,
         )
 

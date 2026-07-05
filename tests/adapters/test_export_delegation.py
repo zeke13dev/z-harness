@@ -321,6 +321,8 @@ class TestCodexExportDelegation(unittest.TestCase):
 
     def test_files_contains_both_runtime_and_persona_files(self):
         """export_payload() must include BOTH runtime-export files AND persona files."""
+        from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp).resolve()
             dest = tmp_path / "dest"
@@ -338,7 +340,7 @@ class TestCodexExportDelegation(unittest.TestCase):
                 persona_files=[persona_source],
             )
 
-        self.assertEqual(result.fidelity, "flattened")
+        self.assertEqual(result.fidelity, codex_export_fidelity())
         file_strs = [str(f) for f in result.files]
         self.assertTrue(
             any("z-plan.md" in s for s in file_strs),
@@ -371,6 +373,17 @@ class TestCodexExportDelegation(unittest.TestCase):
                 )
 
         self.assertIn("validation error", str(ctx.exception).lower())
+
+    def test_runtime_export_uses_gate_fidelity(self):
+        """runtime.drivers.codex.export reads fidelity from codex_parity_gate."""
+        from runtime.drivers.codex.export import export as codex_runtime_export
+        from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp).resolve()
+            result = codex_runtime_export(REPO_ROOT, dest)
+
+        self.assertEqual(result.fidelity, codex_export_fidelity())
 
     def test_persona_collision_in_prompts_namespace_raises(self):
         """Persona name that collides with a prompt file id must raise RuntimeError.
@@ -770,10 +783,12 @@ class TestFidelityPreserved(unittest.TestCase):
         result = self._minimal_export(CursorAdapter(), "cursor", "flattened")
         self.assertEqual(result.fidelity, "flattened")
 
-    def test_codex_fidelity_is_flattened(self):
+    def test_codex_fidelity_matches_parity_gate(self):
         from z_harness_cli.adapters.codex import CodexAdapter
-        result = self._minimal_export(CodexAdapter(), "codex", "flattened")
-        self.assertEqual(result.fidelity, "flattened")
+        from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
+        result = self._minimal_export(CodexAdapter(), "codex", "native")
+        self.assertEqual(result.fidelity, codex_export_fidelity())
 
     def test_antigravity_fidelity_is_high(self):
         from z_harness_cli.adapters.antigravity import AntigravityAdapter

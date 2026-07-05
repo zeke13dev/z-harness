@@ -19,6 +19,8 @@ export(repo_root, export_root, *, options=None) -> ExportResult
                                     so Codex CLI discovers the skills directory.
 
 ExportResult is imported from runtime.drivers._export_utils (BLOCKER-1).
+Fidelity is read from the Codex parity gate when available, with a conservative
+``flattened`` fallback for isolated runtime environments.
 """
 
 from __future__ import annotations
@@ -55,6 +57,16 @@ _REPLACEMENT_COMMENT = (
     "<!-- agent dispatch / skill invocation not supported in Codex CLI;"
     " see CAPABILITIES.md -->"
 )
+
+
+def _current_fidelity() -> str:
+    """Read Codex export fidelity from the parity gate."""
+    try:
+        from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
+        return codex_export_fidelity()
+    except ImportError:
+        return "flattened"
 
 
 def _rewrite_body(body: str) -> str:
@@ -106,16 +118,28 @@ def _render_prompt(entry: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_agents_md(agents: list[dict[str, Any]]) -> str:
+def _render_agents_md(agents: list[dict[str, Any]], *, fidelity: str) -> str:
     """Render all agents as a single consolidated AGENTS.md."""
+    if fidelity == "native":
+        dispatch_note = [
+            "Codex parity evidence has authorized native orchestration for the\n",
+            "covered z-harness command families.  These agent definitions remain\n",
+            "a reference for the exported Codex package.\n",
+        ]
+    else:
+        dispatch_note = [
+            "Codex CLI native subagent dispatch has not been proven by the\n",
+            "z-harness Codex parity gate.  These agent definitions describe the\n",
+            "**role and behaviour** of each agent so you can manually compose\n",
+            "prompts or invoke the appropriate prompt file.\n",
+        ]
+
     lines: list[str] = [
         "# Agents\n",
         "\n",
         "This file documents all z-harness agents exported for Codex CLI use.\n",
         "\n",
-        "Codex CLI has no native subagent dispatch.  These agent definitions\n",
-        "describe the **role and behaviour** of each agent so you can manually\n",
-        "compose prompts or invoke the appropriate prompt file.\n",
+        *dispatch_note,
         "\n",
         "---\n",
         "\n",
@@ -214,8 +238,7 @@ def export(
     ExportResult
         ``dest`` is *export_root* (resolved).
         ``files`` lists every file written.
-        ``fidelity`` is ``"flattened"`` because skills are copied verbatim but
-        Codex still lacks native z-harness subagent orchestration.
+        ``fidelity`` is read from ``codex_parity_gate``.
         ``warnings`` carries any non-fatal validation errors discovered during
         export.
     """
@@ -226,6 +249,7 @@ def export(
     emitted: list[Path] = []
     warnings: list[str] = []
     validation_errors: list[str] = []
+    fidelity = _current_fidelity()
 
     # Default base according to output_path_for convention (used to remap
     # paths when export_root differs from the default).
@@ -248,7 +272,7 @@ def export(
     # --- Emit consolidated AGENTS.md ---
     agents_path = export_root / "AGENTS.md"
     agents_path.parent.mkdir(parents=True, exist_ok=True)
-    agents_md = _render_agents_md(sources["agents"])
+    agents_md = _render_agents_md(sources["agents"], fidelity=fidelity)
     agents_path.write_text(agents_md, encoding="utf-8")
 
     # --- Emit .codex-plugin/plugin.json manifest ---
@@ -274,6 +298,6 @@ def export(
     return ExportResult(
         dest=export_root,
         files=emitted + [agents_path, plugin_manifest_path],
-        fidelity="flattened",
+        fidelity=fidelity,
         warnings=warnings,
     )
