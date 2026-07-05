@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import importlib.util
+import subprocess
+import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -77,11 +79,11 @@ def test_manifest_classifies_disputed_commands_and_agents() -> None:
 
 
 
-def test_public_release_default_helpers_narrow_to_claude_omp() -> None:
-    assert release_surface.public_release_hosts() == ("claude", "omp")
-    assert release_surface.setup_target_ids("prod") == ("claude", "omp")
+def test_public_release_default_helpers_include_codex() -> None:
+    assert release_surface.public_release_hosts() == ("claude", "omp", "codex")
+    assert release_surface.setup_target_ids("prod") == ("claude", "omp", "codex")
     assert set(release_surface.explicit_setup_target_ids()) == {"claude", "omp", "pi", "cursor", "codex"}
-    assert release_surface.plugin_install_target_ids("prod") == {"claude"}
+    assert release_surface.plugin_install_target_ids("prod") == {"claude", "codex"}
     assert release_surface.plugin_install_target_ids("dev") == {"claude", "codex"}
 
 def test_mcp_prod_tools_are_manifest_filtered(monkeypatch) -> None:
@@ -162,6 +164,26 @@ def test_prod_manifest_exclusions_cover_tar_audit_and_stage_patterns() -> None:
     assert release_surface.path_excluded_from_prod("scripts/__pycache__/axiom-store.cpython-311.pyc")
     assert release_surface.path_excluded_from_prod("scripts/__pycache__/hermes-execute.cpython-311.pyc")
     assert "--exclude=./*/__pycache__" in tar_args
+
+
+def test_prod_tarball_audit_requires_codex_manifest(tmp_path: Path) -> None:
+    payload = tmp_path / "payload"
+    (payload / "skills" / "z-plan").mkdir(parents=True)
+    (payload / "skills" / "z-plan" / "SKILL.md").write_text("name: z-plan\n", encoding="utf-8")
+    tarball = tmp_path / "payload.tar.gz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        archive.add(payload / "skills", arcname="skills")
+
+    result = subprocess.run(
+        ["bash", str(Path(__file__).parent.parent / "scripts" / "audit-tarball.sh"), str(tarball)],
+        env={**os.environ, "Z_HARNESS_RELEASE_SURFACE": "prod"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert ".codex-plugin/plugin.json" in result.stdout
 
 
 def test_stage_release_surface_prunes_without_deleting_source(tmp_path: Path) -> None:

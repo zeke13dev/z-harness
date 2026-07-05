@@ -230,13 +230,39 @@ fi
 
 ### Step 2b — Cluster fan-out (batched waves)
 
-Read the `workflow.max_explore` cap (default 3) and dispatch ONE analyzer subagent per cluster, in **batched waves** of up to the cap. Never silently drop clusters: if the cluster count exceeds one wave's cap, iterate waves until ALL clusters are analyzed.
+Dispatch ONE analyzer subagent per cluster, in **batched waves**. Never silently drop clusters: if the cluster count exceeds one wave's cap, iterate waves until ALL clusters are analyzed.
+
+**Wave cap.** These analyzers are cheap, read-only, isolated-context Haiku agents — the generic `workflow.max_explore` cap (default 3) is far too conservative for a test-prune sweep and makes ETA scale linearly with cluster count. Use a dedicated, larger cap that scales with suite size so a big suite finishes in a handful of waves without the user having to intervene:
+
+- Resolve `test_prune.wave_size` if set (explicit operator override — honor it verbatim).
+- Otherwise default the cap to `min(20, max(8, ceil(CLUSTER_COUNT / 4)))` — i.e. never fewer than 8 concurrent analyzers, scaling up to 20 for large suites, so total waves stay ≤ ~4–5 for typical repos.
+- Cap at 20 to stay within host subagent-concurrency limits; the runtime queues any excess, so a wave that names more than the host can run at once still completes safely.
+
+Announce the chosen cap and the resulting wave count once, up front, so the ETA is visible without the user asking.
 
 **Large-suite guard.** Whole-suite-by-default can discover a very large cluster set, and each wave loads full test-file contents. If `CLUSTER_COUNT` exceeds 50, do NOT proceed silently: warn the user that an unscoped full-suite analysis of this size is token- and time-heavy, report the count, and recommend narrowing with `--path <glob>` or `--base <ref>`. In interactive mode ask the user whether to proceed with the full sweep or narrow scope; in unattended mode proceed but log a `test_prune_large_suite` event with the cluster count so the cost is never hidden.
 
 ```bash
-MAX_EXPLORE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.max_explore 2>/dev/null || echo 3)"
 CLUSTER_COUNT="$(python3 -c 'import json; m=json.load(open("'"$ARCHIVE_DIR/cluster-manifest.json"'")); print(m["cluster_count"])')"
+# Dedicated test-prune wave cap: honor an explicit test_prune.wave_size override,
+# else scale with suite size (min 8, up to 20). Decoupled from workflow.max_explore=3.
+MAX_EXPLORE="$(python3 - "$CLUSTER_COUNT" <<'PYEOF'
+import math, os, subprocess, sys
+n = int(sys.argv[1])
+plugin = os.environ.get('ANTIGRAVITY_PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT', '')
+override = ''
+try:
+    override = subprocess.run(['python3', os.path.join(plugin, 'scripts/config.py'),
+                               'get', 'test_prune.wave_size'],
+                              capture_output=True, text=True).stdout.strip()
+except Exception:
+    override = ''
+if override.isdigit() and int(override) > 0:
+    print(int(override))
+else:
+    print(min(20, max(8, math.ceil(n / 4))))
+PYEOF
+)"
 ```
 
 Log a deferral event before each wave (except the first) naming the clusters not yet analyzed:

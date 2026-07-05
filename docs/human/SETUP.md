@@ -12,7 +12,7 @@ The CLI reads resolved configuration through `scripts/config.py inspect-all --js
 ## Key entry points
 
 - `skills/z-setup/SKILL.md:1` — `/z-setup` command surface; parses user arguments, shells out to `scripts/setup.py`, gates posture application with `AskUserQuestion`, and emits `setup_skill_start/end`.
-- `z_harness_cli/commands/setup.py:1` — public first-run setup command; detects Claude/OMP/Cursor/Codex, provider CLIs, optional posture application, and Claude/Codex plugin install handoff.
+- `z_harness_cli/commands/setup.py:1` — public first-run setup command; detects Claude/OMP/Cursor/Codex, provider CLIs, optional posture application, and first-class Claude/Codex plugin install handoff.
 - `scripts/setup.py:1913` — `main()` — top-level parser dispatching to inspect, wizard, apply, explain, and status handlers.
 - `scripts/setup.py:42` — `_inspect_all_json()` — subprocess call to `config.py inspect-all --json`; common read path for inspect, wizard, apply, and status.
 - `scripts/setup.py:439` — `cmd_inspect()` — read-only inspect entry; selects JSON, flat, or grouped output.
@@ -52,7 +52,7 @@ _No memories recorded yet._
 
 ```bash
 z-harness setup --target all --dry-run
-z-harness setup --target claude --install
+z-harness setup --target all --install
 /z-setup
 /z-setup wizard --scope providers
 /z-setup apply --posture interactive

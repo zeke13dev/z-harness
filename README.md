@@ -10,8 +10,9 @@ This project is pre-1.0 beta software. It can orchestrate tools that read and wr
 
 - **Claude Code plugin:** primary/native command and agent workflow.
 - **Oh My Pi / OMP:** first-class package/export target; native claims are bounded by the documented parity gate.
-- **Advanced/dev exports:** Cursor, Codex, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot exporters remain in source and explicit export paths, but they are not public release defaults.
-- **Python CLI (`z-harness`):** small setup/onboarding entrypoint for Claude/OMP install and export guidance. It is not the day-to-day z-harness workflow surface.
+- **Codex plugin:** first-class flattened plugin/export target; multi-agent orchestration remains explicitly limited.
+- **Advanced/dev exports:** Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot exporters remain in source and explicit export paths, but they are not public release defaults.
+- **Python CLI (`z-harness`):** small setup/onboarding entrypoint for Claude/OMP/Codex install and export guidance. It is not the day-to-day z-harness workflow surface.
 
 See `CAPABILITIES.md` for the host matrix and known fidelity limits.
 
@@ -25,7 +26,7 @@ z-harness setup --target claude --dry-run
 z-harness setup --target claude --install
 ```
 
-The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`. Use `z-harness setup --target all --dry-run` to inspect the release defaults: Claude Code and OMP readiness without writing host config.
+The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`. Use `z-harness setup --target all --dry-run` to inspect the release defaults: Claude Code, OMP, and Codex readiness without writing host config.
 
 ### Source checkout / plugin development
 
@@ -33,8 +34,8 @@ The CLI installer uses the release manifest, downloads the wheel over HTTPS, ver
 git clone https://github.com/zeke13dev/z-harness
 cd z-harness
 bash install.sh --target=claude
-# advanced/source-only plugin path remains available when developing Codex support
 bash install.sh --target=codex
+bash install.sh --target=all
 ```
 Source installs symlink the checkout into the host plugin location. Edits take effect after the host reloads its plugin/cache.
 
@@ -44,8 +45,8 @@ Source installs symlink the checkout into the host plugin location. Edits take e
 make export
 # Installed public wheels/tarballs default to the prod surface.
 z-harness export --host omp --out temp/exports/omp --force
-# Explicit advanced/dev export paths remain available in source checkouts.
-z-harness export --host codex --surface dev --out temp/exports/codex-dev --force
+# Codex is a first-class flattened prod export/plugin target.
+z-harness export --host codex --surface prod --out temp/exports/codex --force
 ```
 
 The manifest in `z_harness_cli.release_surface` defines which skills, agents, MCP tools, scripts/backends, generated mirrors, and docs are prod-visible. Canonical command source is `skills/<id>/SKILL.md`; generated exports go under `temp/exports/` by default and are not committed release source. Release tarballs and staged wheels are audited against the manifest before publication.

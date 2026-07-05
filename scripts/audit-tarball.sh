@@ -106,6 +106,18 @@ _check_pattern() {
     fi
 }
 
+_require_pattern() {
+    local label="$1"
+    local grep_args=("${@:2}")
+    local hit
+    hit="$(printf '%s\n' "$LISTING" | grep "${grep_args[@]}" | head -n1 || true)"
+    if [[ -z "$hit" ]]; then
+        printf '[audit-tarball] FAIL: required pattern %s was not found\n' "$label"
+        printf '[audit-tarball] tarball: %s\n' "$TARBALL"
+        exit 1
+    fi
+}
+
 # Fixed-string patterns (literal substring matches)
 # Note: personas/ (top-level persona preset files) is NOT forbidden — it is explicitly
 # allowlisted (see ALLOWLIST header comment above). Generated per-target persona
@@ -134,6 +146,10 @@ _check_pattern "~/"                     -F  "~/"
 # release_surface audit above should reject these first; keep this local check
 # as defense in depth for dev/non-prod invocations of this script.
 _check_pattern "exports/" -E  "^\./exports/|^exports/"
+
+if [[ "$SURFACE" == "prod" || "$SURFACE" == "production" ]]; then
+    _require_pattern ".codex-plugin/plugin.json" -E  "^\./\.codex-plugin/plugin\.json$|^\.codex-plugin/plugin\.json$"
+fi
 
 # Regex patterns for absolute home paths
 _check_pattern "/Users/<path>"          -E  "^/?Users/"

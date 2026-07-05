@@ -19,6 +19,8 @@ The adapters also declare static `Capabilities` flags covering MCP support, trus
 
 OMP is tracked here as a first-class host whose native claims are bounded by the parity gate (T009, `z_harness_cli/adapters/omp_parity_gate.py`). The three synchronized surfaces — `OmpAdapter.fidelity_tier`, `ExportResult.fidelity` from the OMP exporter, and `COMMAND_CAPABILITY_MATRIX["omp"]` — all read from the gate. Command families in `PARITY_EVIDENCE` promote to `native` only when their T008 test class is importable; removing that class immediately downgrades the family.
 
+Codex is tracked as a first-class flattened host. It is selected by public prod setup/export defaults and has a direct plugin installer, but its command semantics remain flattened: single-agent commands degrade and multi-agent orchestration is blocked until Codex has native subagent/ask-gate parity evidence.
+
 Drift verification for this contract refresh (2026-06-24, T009 complete): `omp_adapter_fidelity()` returns `"native"` (all 4 PARITY_EVIDENCE entries resolve); OMP command tiers are `native` for `/z-execute`, `/z-consult`, `/z-gate`, `/z-panel` and `degraded` for all others; `OmpAdapter.fidelity_tier` and `ExportResult.fidelity` return `"native"`.
 
 ## Key entry points
@@ -34,7 +36,7 @@ Drift verification for this contract refresh (2026-06-24, T009 complete): `omp_a
 - `z_harness_cli/adapters/claude.py:107` — `ClaudeAdapter` — native-fidelity adapter; `export_payload` is persona-only (native plugin handles skills natively)
 - `z_harness_cli/adapters/antigravity.py:154` — `AntigravityAdapter` — high-fidelity adapter; `export_payload` runs two-stage pipeline (runtime + personas)
 - `z_harness_cli/adapters/cursor.py:161` — `CursorAdapter` — flattened adapter; `export_payload` runs two-stage pipeline producing native `.cursor/skills/<id>/SKILL.md` files plus one generated always-apply `.cursor/rules/z-harness-skills.mdc` index and AGENT `.mdc` rule files
-- `z_harness_cli/adapters/codex.py:182` — `CodexAdapter` — flattened adapter; `export_payload` runs two-stage pipeline producing `prompts/` flat files
+- `z_harness_cli/adapters/codex.py:182` — `CodexAdapter` — flattened adapter; `export_payload` runs two-stage pipeline producing `skills/<id>/SKILL.md`, `.codex-plugin/plugin.json`, `AGENTS.md`, and persona prompts
 - `z_harness_cli/adapters/omp.py:109` — `OmpAdapter` — OMP host adapter; fidelity tier and command tiers read from the parity gate (T009 complete). `fidelity_tier` returns `"native"` now that all four T008 evidence entries resolve; four command families are `native`; all others `degraded`.
 - `runtime/drivers/omp/export.py:199` — `export` — Emit OMP package/discovery layout under `.omp/z-harness/` plus `.omp/config.yml`; returns `ExportResult(fidelity="native")` after T009; must not call `runtime/drivers/pi/export.py`.
 - `runtime/drivers/omp/subprocess_driver.py` — `OmpHostDriver` — Native OMP dispatch driver: frozen argv/prompt-transport/event/session/model contract; dispatch path is separate from `scripts/omp-consult.sh`.
@@ -77,7 +79,7 @@ All export artifacts are generated on demand and never committed. `skills/` is t
 | omp (native adapter/export; 4 native command families) | `<dest>/.omp/z-harness/skills/<id>/SKILL.md`; `<dest>/.omp/z-harness/rules/<id>.md`; `<dest>/.omp/z-harness/prompts/<id>.md`; package manifest under `<dest>/.omp/z-harness/manifest.yml` | `<dest>/.omp/z-harness/agents/<id>.md` with OMP-native metadata, no pi line rewrites | `<dest>/.omp/z-harness/profiles/<name>.yml`; `.omp/config.yml` preserved as-is (project AGENTS suppression kept); discovery via `OMP_PLUGIN_ROOT` |
 | antigravity | `.agent/skills/<id>/SKILL.md` | `.agent/workflows/<id>.md`, `.agent/rules/z-harness-<id>.md`, `prompts/<id>.md` | `<dest>/.agent/personas/<name>.md` |
 | cursor | `.cursor/skills/<id>/SKILL.md` (verbatim, no transliteration) + `.cursor/rules/z-harness-skills.mdc` (index, always-apply) | `.cursor/rules/<id>.mdc` | `<dest>/.cursor/personas/<name>.mdc` |
-| codex | `skills/<id>/SKILL.md` | `AGENTS.md` | `<dest>/prompts/personas/<name>.md` |
+| codex (first-class flattened) | `skills/<id>/SKILL.md` plus `.codex-plugin/plugin.json` | `AGENTS.md` | `<dest>/prompts/personas/<name>.md` |
 
 ## Fidelity tiers
 

@@ -21,8 +21,8 @@
 # On any failure the script exits non-zero with a specific, actionable message
 # and copy-paste manual instructions. No bespoke venv+wrapper in v1.
 #
-# Note: cursor/agy plugin injection is handled by each adapter's inject() method,
-# not by this script. install.sh handles claude/codex plugin install.
+# Note: cursor/agy plugin injection is handled by dev/source adapter paths.
+# Public install.sh handles Claude Code and Codex plugin install paths; OMP is exported with `z-harness export --host omp`.
 
 set -eu
 
@@ -274,8 +274,8 @@ main() {
     info "z-harness ${version} installed successfully."
     printf '\nQuick start:\n'
     printf '  z-harness doctor          # verify host detection + fidelity\n'
-    printf '  z-harness install         # install claude/codex plugins\n'
-    printf '  z-harness launch          # inject + launch a host in the current project\n'
+    printf '  z-harness install         # install Claude Code and Codex plugin targets\n'
+    printf '  z-harness export --host omp --surface prod --out <dir>  # build OMP package\n'
     printf '\nFor help: z-harness --help\n'
 }
 

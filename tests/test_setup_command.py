@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import sys
 import unittest
@@ -47,13 +48,16 @@ class SetupCommandTest(unittest.TestCase):
         install_mock.assert_not_called()
 
 
-    def test_prod_setup_default_all_selects_only_claude_and_omp(self) -> None:
+    def test_prod_setup_default_all_selects_claude_omp_and_codex(self) -> None:
         claude = MagicMock()
         claude.name = "claude"
         claude.fidelity_tier = "native"
         omp = MagicMock()
         omp.name = "omp"
         omp.fidelity_tier = "native"
+        codex = MagicMock()
+        codex.name = "codex"
+        codex.fidelity_tier = "flattened"
         cursor = MagicMock()
         cursor.name = "cursor"
         cursor.fidelity_tier = "flattened"
@@ -64,6 +68,7 @@ class SetupCommandTest(unittest.TestCase):
                 (claude, DetectResult(installed=True, version="1.0.0")),
                 (cursor, DetectResult(installed=True, version="2.0.0")),
                 (omp, DetectResult(installed=False)),
+                (codex, DetectResult(installed=True, version="0.42.0")),
             ],
         ), patch("z_harness_cli.commands.setup.shutil.which", return_value=None), patch(
             "z_harness_cli.commands.setup._run_plugin_install"
@@ -71,25 +76,30 @@ class SetupCommandTest(unittest.TestCase):
             result = self.runner.invoke(app, ["setup", "--dry-run"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("selected harnesses: claude, omp", result.output)
+        self.assertIn("selected harnesses: claude, omp, codex", result.output)
         self.assertIn("* claude", result.output)
         self.assertIn("* omp", result.output)
+        self.assertIn("* codex", result.output)
         self.assertNotIn("cursor", result.output.lower())
         install_mock.assert_not_called()
 
-    def test_prod_setup_all_install_runs_only_claude_plugin_install(self) -> None:
+    def test_prod_setup_all_install_runs_all_direct_plugin_targets(self) -> None:
         claude = MagicMock()
         claude.name = "claude"
         claude.fidelity_tier = "native"
         omp = MagicMock()
         omp.name = "omp"
         omp.fidelity_tier = "native"
+        codex = MagicMock()
+        codex.name = "codex"
+        codex.fidelity_tier = "flattened"
 
         with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
             "z_harness_cli.adapters.registry.detect_all",
             return_value=[
                 (claude, DetectResult(installed=True, version="1.0.0")),
                 (omp, DetectResult(installed=True, version="0.1.0")),
+                (codex, DetectResult(installed=True, version="0.42.0")),
             ],
         ), patch("z_harness_cli.commands.setup.shutil.which", return_value=None), patch(
             "z_harness_cli.commands.setup._run_plugin_install"
@@ -97,8 +107,8 @@ class SetupCommandTest(unittest.TestCase):
             result = self.runner.invoke(app, ["setup", "--target", "all", "--install"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("selected harnesses: claude, omp", result.output)
-        install_mock.assert_called_once_with("claude", force=False)
+        self.assertIn("selected harnesses: claude, omp, codex", result.output)
+        install_mock.assert_called_once_with("all", force=False)
 
     def test_prod_setup_explicit_non_core_target_is_labeled_advanced(self) -> None:
         cursor = MagicMock()
@@ -115,20 +125,23 @@ class SetupCommandTest(unittest.TestCase):
         self.assertIn("* cursor", result.output)
         self.assertIn("dev/advanced", result.output)
 
-    def test_public_help_names_claude_omp_release_defaults(self) -> None:
+    def test_public_help_names_claude_omp_codex_release_defaults(self) -> None:
         result = self.runner.invoke(app, ["setup", "--help"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Release default/all", result.output)
-        self.assertIn("claude, omp", result.output)
-        self.assertIn("Dev/advanced explicit targets", result.output)
+        self.assertIn("claude, omp, codex", result.output)
+        self.assertIn("Dev/advanced explicit", result.output)
+        self.assertIn("targets: pi, cursor", result.output)
 
     def test_root_help_presents_claude_omp_release_surface(self) -> None:
         result = self.runner.invoke(app, ["--help"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("Claude Code plugin install plus OMP package/export", result.output)
-        self.assertIn("Claude Code and OMP release surfaces", result.output)
+        self.assertIn("Claude Code plugin + OMP package/export + Codex plugin", result.output)
+        self.assertIn("Claude Code, OMP, and Codex", result.output)
+        self.assertIn("release", result.output)
+        self.assertIn("surfaces", result.output)
 
     def test_setup_rejects_unknown_target(self) -> None:
         result = self.runner.invoke(app, ["setup", "--target", "unknown", "--dry-run"])
@@ -140,9 +153,11 @@ class InstallCommandProdScopeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
 
-    def test_prod_install_all_resolves_to_claude_only(self) -> None:
+    def test_prod_install_all_passes_all_direct_plugin_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            for dirname in (".git", "skills", "agents", "runtime"):
+                (root / dirname).mkdir()
             script = root / "install.sh"
             script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             script.chmod(0o755)
@@ -162,18 +177,45 @@ class InstallCommandProdScopeTest(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         args = run_mock.call_args[0][0]
-        self.assertIn("--target=claude", args)
-        self.assertNotIn("--target=all", args)
+        self.assertIn("--target=all", args)
+        self.assertNotIn("--target=claude", args)
         self.assertNotIn("--target=codex", args)
 
-    def test_prod_install_rejects_codex_plugin_target(self) -> None:
-        with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
-            "z_harness_cli.commands.install.subprocess.run",
-        ) as run_mock:
-            result = self.runner.invoke(app, ["install", "--target", "codex"])
+    def test_prod_install_accepts_codex_plugin_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for dirname in (".git", "skills", "agents", "runtime"):
+                (root / dirname).mkdir()
+            script = root / "install.sh"
+            script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            script.chmod(0o755)
+            completed = MagicMock(returncode=0)
 
-        self.assertEqual(result.exit_code, 2, result.output)
-        self.assertIn("source/dev path", result.output)
+            with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
+                "z_harness_cli.commands.install._harness_root",
+                return_value=root,
+            ), patch(
+                "z_harness_cli.commands.install.subprocess.run",
+                return_value=completed,
+            ) as run_mock:
+                result = self.runner.invoke(app, ["install", "--target", "codex"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        args = run_mock.call_args[0][0]
+        self.assertIn("--target=codex", args)
+
+    def test_prod_install_codex_does_not_short_circuit_before_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), patch(
+                "z_harness_cli.commands.install._harness_root",
+                return_value=Path(tmp),
+            ), patch(
+                "z_harness_cli.commands.install.subprocess.run",
+            ) as run_mock:
+                result = self.runner.invoke(app, ["install", "--target", "codex"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("install.sh is missing", result.output)
         run_mock.assert_not_called()
 
     def test_dev_source_install_all_remains_explicitly_available(self) -> None:
@@ -198,6 +240,60 @@ class InstallCommandProdScopeTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         args = run_mock.call_args[0][0]
         self.assertIn("--target=all", args)
+
+    def test_install_sh_prod_codex_repo_mode_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
+            fake_codex = Path(bin_dir) / "codex"
+            fake_codex.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/codex-calls.log\"\n", encoding="utf-8")
+            fake_codex.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": home,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "Z_HARNESS_RELEASE_SURFACE": "prod",
+            }
+            result = subprocess.run(
+                ["bash", "install.sh", "--target=codex"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("z-harness installed for Codex", result.stdout)
+
+    def test_install_sh_prod_all_repo_mode_installs_claude_and_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
+            fake_codex = Path(bin_dir) / "codex"
+            fake_codex.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/codex-calls.log\"\n", encoding="utf-8")
+            fake_codex.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": home,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "Z_HARNESS_RELEASE_SURFACE": "prod",
+            }
+            result = subprocess.run(
+                ["bash", "install.sh", "--target=all"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            claude_link = Path(home) / ".claude" / "plugins" / "z-harness@zeke-tools"
+            codex_link = Path(home) / "plugins" / "z-harness"
+            claude_installed = claude_link.is_symlink()
+            codex_installed = codex_link.is_symlink()
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("z-harness installed for Claude Code", result.stdout)
+        self.assertIn("z-harness installed for Codex", result.stdout)
+        self.assertTrue(claude_installed)
+        self.assertTrue(codex_installed)
 
 
 class ProdSurfaceExportFilterTest(unittest.TestCase):

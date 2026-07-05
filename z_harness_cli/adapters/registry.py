@@ -177,12 +177,15 @@ def select(
         for adapter, result in all_results
         if result.installed and (selectable_names is None or adapter.name in selectable_names)
     ]
+    if selectable_names is not None:
+        release_order = {name: index for index, name in enumerate(release_surface.public_release_hosts())}
+        installed.sort(key=lambda pair: release_order[pair[0].name])
 
     if not installed:
         if selectable_names is None:
             hint = ", ".join(f"'{a.name}'" for a in _ALL_ADAPTERS)
         else:
-            hint = "'claude' or 'omp'"
+            hint = ", ".join(f"'{name}'" for name in release_surface.public_release_hosts())
         raise NoHostInstalledError(
             "No supported host is installed. "
             f"Install one of: {hint}. Then re-run z-harness."

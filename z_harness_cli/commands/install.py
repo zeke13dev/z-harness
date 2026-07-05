@@ -2,8 +2,8 @@
 
 The Python CLI is the first-run entrypoint installed by the curl/uv flow.  The
 actual plugin installation logic remains in install.sh so source clone, tarball,
-and packaged-wheel paths share one implementation. Public prod installs default
-to the Claude plugin path; Codex remains source/dev-only.
+and packaged-wheel paths share one implementation. Public prod installs support
+the direct Claude Code and Codex plugin paths.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ from z_harness_cli.release import (
     fetch_manifest,
     require_plugin_tarball_metadata,
 )
-from z_harness_cli import release_surface
-
 import typer
 
 
@@ -69,14 +67,7 @@ def run(
 
     root = _harness_root()
     source_checkout = _is_source_checkout(root)
-    surface = release_surface.default_surface()
-    if surface == "prod" and target == "codex":
-        typer.echo(
-            "Error: Codex plugin install is a source/dev path, not a public prod install target.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    resolved_target = "claude" if surface == "prod" and target == "all" else target
+    resolved_target = target
 
     script = root / "install.sh"
     if not script.is_file():

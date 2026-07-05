@@ -76,6 +76,22 @@ def _write_config(path: str, providers: dict, roles: dict) -> None:
         json.dump(data, fh)
 
 
+def _write_config_v2(
+    path: str,
+    providers: dict,
+    roles: dict,
+    aliases: dict | None = None,
+) -> None:
+    data = {
+        "version": 2,
+        "providers": providers,
+        "roles": roles,
+        "aliases": aliases or {},
+    }
+    with open(path, "w") as fh:
+        json.dump(data, fh)
+
+
 def _run(role: str, config_path: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "Z_HARNESS_REPO_PROVIDERS": config_path}
     if _CONSULT_ON_CONFIG:
@@ -127,6 +143,42 @@ class TestResolveProvider(unittest.TestCase):
         finally:
             os.unlink(tf_path)
 
+    def test_omp_gemini_alias_resolves_to_antigravity_provider(self):
+        """omp-gemini remains a compatibility alias for the Antigravity-backed provider."""
+        providers = {
+            "omp-antigravity-pro": _make_provider(
+                "gemini", "Antigravity Gemini 3.1 Pro"
+            ),
+            "omp-codex": _make_provider("codex", "OMP Codex GPT-5.5"),
+            "gemini-cli": _make_provider("gemini", "Direct Gemini CLI"),
+        }
+        roles = {
+            "consultant_primary": "omp-gemini",
+            "consultant_secondary": "omp-codex",
+            "reviewer": "gemini-cli",
+        }
+        aliases = {"omp-gemini": "omp-antigravity-pro"}
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config_v2(tf_path, providers, roles, aliases)
+
+            primary = _run("consultant_primary", tf_path)
+            self.assertEqual(primary.returncode, 0, msg=primary.stderr)
+            primary_out = json.loads(primary.stdout)
+            self.assertEqual(primary_out["provider"], "omp-antigravity-pro")
+            self.assertEqual(
+                primary_out["model_label"], "Antigravity Gemini 3.1 Pro"
+            )
+
+            direct = _run("reviewer", tf_path)
+            self.assertEqual(direct.returncode, 0, msg=direct.stderr)
+            direct_out = json.loads(direct.stdout)
+            self.assertEqual(direct_out["provider"], "gemini-cli")
+            self.assertEqual(direct_out["model_label"], "Direct Gemini CLI")
+        finally:
+            os.unlink(tf_path)
+
     def test_collision_primary_equals_secondary(self):
         """consultant_primary == consultant_secondary must exit nonzero."""
         providers = {
@@ -144,6 +196,29 @@ class TestResolveProvider(unittest.TestCase):
             result = _run("consultant_primary", tf_path)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("DISTINCT", result.stderr)
+        finally:
+            os.unlink(tf_path)
+
+    def test_missing_command_fails_provider_preflight_actionably(self):
+        providers = {
+            "missing-cli": _make_provider("definitely-not-on-path-zh", "missing-model"),
+            "codex": _make_provider("codex", "codex-v1"),
+        }
+        roles = {
+            "consultant_primary": "missing-cli",
+            "consultant_secondary": "codex",
+            "reviewer": "codex",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config(tf_path, providers, roles)
+            result = _run("consultant_primary", tf_path)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("provider_preflight_failed", result.stderr)
+            self.assertIn("role=consultant_primary", result.stderr)
+            self.assertIn("provider=missing-cli", result.stderr)
+            self.assertIn("command=definitely-not-on-path-zh not on PATH", result.stderr)
         finally:
             os.unlink(tf_path)
 
@@ -180,6 +255,7 @@ def _run_with_config_override(
     role: str,
     providers_path: str,
     config_toml_path: str,
+    extra_env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run resolve-provider.py with both a custom providers.json and config.toml."""
     env = {
@@ -187,6 +263,8 @@ def _run_with_config_override(
         "Z_HARNESS_REPO_PROVIDERS": providers_path,
         "Z_HARNESS_REPO_CONFIG": config_toml_path,
     }
+    if extra_env:
+        env.update(extra_env)
     if _STUB_BIN:
         env["PATH"] = _STUB_BIN + os.pathsep + env.get("PATH", "")
     return subprocess.run(
@@ -204,6 +282,11 @@ def _write_config_toml(path: str, models_section: dict) -> None:
         lines.append(f'{k} = "{v}"\n')
     with open(path, "w") as fh:
         fh.writelines(lines)
+
+
+def _write_raw_config_toml(path: str, content: str) -> None:
+    with open(path, "w") as fh:
+        fh.write(content)
 
 
 class TestModelsOverride(unittest.TestCase):
@@ -298,9 +381,10 @@ class TestModelsOverride(unittest.TestCase):
 
         result = _run_with_config_override("reviewer", self._providers_path(), self._config_path())
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("provider_preflight_failed", result.stderr)
         self.assertIn("gemini-drifted", result.stderr)
-        self.assertIn("not found in providers.json", result.stderr)
-        self.assertIn("/z-providers-discover", result.stderr)
+        self.assertIn("argv/model composition failed", result.stderr)
+        self.assertIn("default_model", result.stderr)
 
     def test_models_silent(self):
         """SILENT: models.reviewer empty → falls back to default role resolution unchanged."""
@@ -322,6 +406,96 @@ class TestModelsOverride(unittest.TestCase):
         out = json.loads(result.stdout)
         # Default resolution: roles.reviewer = gemini
         self.assertEqual(out["provider"], "gemini")
+
+    def test_role_runtime_override_precedes_models_selector(self):
+        """Provider role routing uses [roles.default.<role>].runtime before legacy [models]."""
+        providers = {
+            "gemini": _make_provider("gemini", "gemini-2.5-pro"),
+            "codex": _make_provider("codex", "codex-v1"),
+        }
+        roles = {
+            "consultant_primary": "gemini",
+            "consultant_secondary": "codex",
+            "reviewer": "gemini",
+        }
+        self._write_providers(providers, roles)
+        _write_raw_config_toml(
+            self._config_path(),
+            (
+                'schema_version = 2\n\n'
+                '[models]\n'
+                'reviewer = "gemini"\n\n'
+                '[roles.default.reviewer]\n'
+                'runtime = "codex"\n'
+            ),
+        )
+
+        result = _run_with_config_override("reviewer", self._providers_path(), self._config_path())
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "codex")
+
+    def test_runtime_consult_toml_on_wins_over_env_off(self):
+        """config.py owns runtime.consult precedence: explicit TOML on beats stale env off."""
+        providers = {
+            "gemini": _make_provider("gemini", "gemini-2.5-pro"),
+            "codex": _make_provider("codex", "codex-v1"),
+        }
+        roles = {
+            "consultant_primary": "gemini",
+            "consultant_secondary": "codex",
+            "reviewer": "gemini",
+        }
+        self._write_providers(providers, roles)
+        _write_raw_config_toml(
+            self._config_path(),
+            'schema_version = 2\n\n[runtime]\nconsult = "on"\n',
+        )
+
+        result = _run_with_config_override(
+            "reviewer",
+            self._providers_path(),
+            self._config_path(),
+            extra_env={"Z_HARNESS_CONSULT": "off"},
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotEqual(result.stdout.strip(), "none")
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "gemini")
+
+    def test_command_role_runtime_override_precedes_default_runtime(self):
+        """Command-specific role runtime wins over [roles.default.<role>].runtime."""
+        providers = {
+            "gemini": _make_provider("gemini", "gemini-2.5-pro"),
+            "codex": _make_provider("codex", "codex-v1"),
+        }
+        roles = {
+            "consultant_primary": "gemini",
+            "consultant_secondary": "codex",
+            "reviewer": "gemini",
+        }
+        self._write_providers(providers, roles)
+        _write_raw_config_toml(
+            self._config_path(),
+            (
+                'schema_version = 2\n\n'
+                '[roles.default.reviewer]\n'
+                'runtime = "gemini"\n\n'
+                '[roles.z_execute.reviewer]\n'
+                'runtime = "codex"\n'
+            ),
+        )
+
+        result = _run_with_config_override(
+            "reviewer",
+            self._providers_path(),
+            self._config_path(),
+            {"Z_HARNESS_PROVIDER_COMMAND": "/z-execute"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "codex")
 
     def test_models_consultant_collision_both_overridden(self):
         """REGRESSION: both consultant roles overridden to same provider → nonzero + DISTINCT."""

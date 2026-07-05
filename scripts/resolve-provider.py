@@ -10,11 +10,18 @@ Config locations (in priority order — repo wins):
      or <repo>/.z-harness/providers.json         (repo-local default)
 
 Output (stdout): JSON with keys: role, provider, command, args_template, stdin,
-                 timeout_s, model_label, model_arg_template, model_env_var, default_model
+                 timeout_s, model_label, model_arg_template, model_env_var,
+                 default_model, auth_env, auth_backend, auth_provider
 
+
+Provider role overrides live in config.toml role bindings:
+  [roles.<command>.<role>].runtime = "<provider>"
+  [roles.default.<role>].runtime = "<provider>"
+The older [models.<role>] provider selector remains as a compatibility fallback
+only; native model classes and external provider roles stay on separate axes.
 Exit codes:
   0  success
-  1  role unbound, CLI not on PATH, or invariant violation
+  1  role/provider/preflight/auth failure, CLI not on PATH, or invariant violation
   2  bad usage or schema error
 """
 
@@ -165,6 +172,11 @@ def _validate_provider_entry(provider_name: str, entry: dict, config_path: str) 
     default_model = entry.get("default_model")
     if default_model is not None and not isinstance(default_model, str):
         _fail("default_model", "str or null", default_model)
+
+    # auth_env: optional environment variable name, never its value.
+    auth_env = entry.get("auth_env")
+    if auth_env is not None and not isinstance(auth_env, str):
+        _fail("auth_env", "str or null", auth_env)
 
 
 def load_configs() -> tuple[dict, dict, str, str]:
@@ -352,6 +364,32 @@ def _apply_aliases(provider_name: str, aliases: dict, role: str, is_legacy: bool
     return provider_name
 
 
+def _canonical_provider_name(provider_name: str, aliases: dict) -> str:
+    """Return provider_name after alias substitution, without emitting telemetry."""
+    return aliases.get(provider_name, provider_name)
+
+
+def _descriptor(role: str, provider_name: str, entry: dict) -> dict:
+    """Build the public JSON descriptor for a resolved provider entry."""
+    args_template = entry.get("args_template", [])
+    auth_backend, auth_provider = _auth_backend_for(entry, list(args_template))
+    return {
+        "role": role,
+        "provider": provider_name,
+        "command": entry.get("command", ""),
+        "args_template": args_template,
+        "stdin": entry.get("stdin", False),
+        "timeout_s": entry.get("timeout_s", 300),
+        "model_label": entry.get("model_label", ""),
+        "model_arg_template": entry.get("model_arg_template", None),
+        "model_env_var": entry.get("model_env_var", None),
+        "default_model": entry.get("default_model", None),
+        "auth_env": entry.get("auth_env", None),
+        "auth_backend": auth_backend,
+        "auth_provider": auth_provider,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
@@ -374,11 +412,13 @@ def resolve(role: str, merged: dict) -> dict:
 
     raw_provider_name = roles.get(role)
     if not raw_provider_name:
-        print(
-            f"[providers] role={role} unbound — run /z-providers-discover",
-            file=sys.stderr,
+        _fail_preflight(
+            role=role,
+            provider_name="",
+            attempted_model="",
+            auth_backend="unknown",
+            reason="role is unbound — add a [roles.<command/default>.<role>].runtime binding or run /z-providers-discover",
         )
-        sys.exit(1)
 
     # The roles mapping in providers.json is the legacy fallback path.
     # Apply alias substitution and emit telemetry events accordingly.
@@ -386,33 +426,20 @@ def resolve(role: str, merged: dict) -> dict:
 
     provider = providers.get(provider_name)
     if not provider:
-        print(
-            f"[providers] role={role}: provider={provider_name!r} referenced in roles "
-            f"but not defined in providers map",
-            file=sys.stderr,
+        _fail_preflight(
+            role=role,
+            provider_name=provider_name,
+            attempted_model="",
+            auth_backend="unknown",
+            reason=(
+                f"provider={provider_name!r} referenced in roles but not defined "
+                "in providers map — run /z-providers-discover"
+            ),
         )
-        sys.exit(1)
 
-    command = provider.get("command", "")
-    if not shutil.which(command):
-        print(
-            f"[providers] role={role}, provider={provider_name}, command={command} not on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    return {
-        "role": role,
-        "provider": provider_name,
-        "command": command,
-        "args_template": provider.get("args_template", []),
-        "stdin": provider.get("stdin", False),
-        "timeout_s": provider.get("timeout_s", 300),
-        "model_label": provider.get("model_label", ""),
-        "model_arg_template": provider.get("model_arg_template", None),
-        "model_env_var": provider.get("model_env_var", None),
-        "default_model": provider.get("default_model", None),
-    }
+    descriptor = _descriptor(role, provider_name, provider)
+    _preflight_provider(role, descriptor)
+    return descriptor
 
 
 # ---------------------------------------------------------------------------
@@ -420,12 +447,11 @@ def resolve(role: str, merged: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def check_consultant_distinctness(role: str, merged: dict) -> None:
-    """Error if both consultant roles are bound to the same provider."""
+    """Error if both consultant roles resolve to the same canonical provider."""
     if role not in ("consultant_primary", "consultant_secondary"):
         return
-    roles = merged.get("roles", {})
-    p = roles.get("consultant_primary")
-    s = roles.get("consultant_secondary")
+    p = _peek_consultant_provider("consultant_primary", merged)
+    s = _peek_consultant_provider("consultant_secondary", merged)
     if p and s and p == s:
         print(
             f"[providers] consultant_primary and consultant_secondary must resolve to "
@@ -492,6 +518,195 @@ def compose_argv(provider_dict: dict, effective_model: str | None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Provider preflight + auth classification
+# ---------------------------------------------------------------------------
+
+def _emit_provider_event(kind: str, payload: dict) -> None:
+    """Emit provider preflight telemetry best-effort, without secret material."""
+    log_event = Path(__file__).parent / "log-event.sh"
+    if log_event.exists() and shutil.which("bash"):
+        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+        try:
+            subprocess.run(
+                ["bash", str(log_event), run_id, kind, json.dumps(payload)],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            pass
+
+
+def _omp_provider_from_argv(argv: list[str]) -> str:
+    """Return the OMP auth-provider id embedded in an omp-consult argv."""
+    if not argv:
+        return ""
+    first = argv[0]
+    if "/" not in first:
+        return ""
+    return first.split("/", 1)[0]
+
+
+def _auth_backend_for(provider_dict: dict, argv: list[str]) -> tuple[str, str]:
+    """Return (human auth backend, omp provider id if applicable)."""
+    command = os.path.basename(str(provider_dict.get("command") or ""))
+    omp_provider = _omp_provider_from_argv(argv)
+    if command == "omp-consult.sh" or omp_provider:
+        if omp_provider == "google-antigravity":
+            return "OMP OAuth / Antigravity", omp_provider
+        if omp_provider == "openai-codex":
+            return "OMP OAuth / Codex", omp_provider
+        if omp_provider:
+            return f"OMP OAuth / {omp_provider}", omp_provider
+        return "OMP OAuth", ""
+    if provider_dict.get("auth_env"):
+        return f"env:{provider_dict['auth_env']}", ""
+    return "cli-managed", ""
+
+
+def _attempted_model(provider_dict: dict, argv: list[str], effective_model: str | None) -> str:
+    """Return a non-secret model label for messages/telemetry."""
+    if effective_model:
+        return effective_model
+    if provider_dict.get("default_model"):
+        return str(provider_dict["default_model"])
+    if argv and "/" in argv[0]:
+        return argv[0]
+    return str(provider_dict.get("model_label") or "")
+
+
+def _fail_preflight(
+    *,
+    role: str,
+    provider_name: str,
+    attempted_model: str,
+    auth_backend: str,
+    reason: str,
+) -> None:
+    payload = {
+        "role": role,
+        "provider": provider_name,
+        "attempted_model": attempted_model,
+        "auth_backend": auth_backend,
+        "auth_ready": False,
+        "reason": reason,
+    }
+    _emit_provider_event("provider_preflight_failed", payload)
+    provider_part = f", provider={provider_name}" if provider_name else ""
+    model_part = f", model={attempted_model}" if attempted_model else ""
+    print(
+        f"[providers] provider_preflight_failed: role={role}{provider_part}{model_part}, "
+        f"auth_backend={auth_backend} — {reason}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _preflight_provider(
+    role: str,
+    provider_dict: dict,
+    effective_model: str | None = None,
+) -> list[str]:
+    """Validate provider dispatch prerequisites and emit preflight telemetry."""
+    provider_name = str(provider_dict.get("provider") or "")
+    command = str(provider_dict.get("command") or "")
+
+    try:
+        argv = compose_argv(provider_dict, effective_model)
+    except ValueError as exc:
+        _fail_preflight(
+            role=role,
+            provider_name=provider_name,
+            attempted_model=str(effective_model or provider_dict.get("default_model") or ""),
+            auth_backend="unknown",
+            reason=(
+                f"argv/model composition failed: {exc}; set default_model for "
+                f"provider={provider_name} or configure a concrete model"
+            ),
+        )
+
+    attempted_model = _attempted_model(provider_dict, argv, effective_model)
+    auth_backend, omp_provider = _auth_backend_for(provider_dict, argv)
+
+    if not command:
+        _fail_preflight(
+            role=role,
+            provider_name=provider_name,
+            attempted_model=attempted_model,
+            auth_backend=auth_backend,
+            reason="provider command is empty — fix providers.json command",
+        )
+    if not shutil.which(command):
+        _fail_preflight(
+            role=role,
+            provider_name=provider_name,
+            attempted_model=attempted_model,
+            auth_backend=auth_backend,
+            reason=f"command={command} not on PATH — install the CLI or update PATH",
+        )
+
+    auth_ready: bool | str = "not_required"
+    auth_env = provider_dict.get("auth_env")
+    if auth_env:
+        if not os.environ.get(str(auth_env)):
+            _fail_preflight(
+                role=role,
+                provider_name=provider_name,
+                attempted_model=attempted_model,
+                auth_backend=auth_backend,
+                reason=f"auth env var {auth_env} is not set",
+            )
+        auth_ready = True
+
+    if omp_provider:
+        if not shutil.which("omp"):
+            _fail_preflight(
+                role=role,
+                provider_name=provider_name,
+                attempted_model=attempted_model,
+                auth_backend=auth_backend,
+                reason="'omp' is not on PATH — install oh-my-pi or choose a direct CLI provider",
+            )
+        timeout_s = float(os.environ.get("Z_HARNESS_PROVIDER_PREFLIGHT_TIMEOUT_S", "25"))
+        try:
+            token = subprocess.run(
+                ["omp", "token", omp_provider],
+                capture_output=True,
+                text=False,
+                timeout=timeout_s,
+                check=False,
+            )
+            token_ok = token.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            token_ok = False
+        if not token_ok:
+            _fail_preflight(
+                role=role,
+                provider_name=provider_name,
+                attempted_model=attempted_model,
+                auth_backend=auth_backend,
+                reason=(
+                    f"auth not ready for {omp_provider}; run 'omp', then '/login' "
+                    "for that provider before retrying"
+                ),
+            )
+        auth_ready = True
+
+    _emit_provider_event(
+        "provider_preflight_ok",
+        {
+            "role": role,
+            "provider": provider_name,
+            "command": command,
+            "attempted_model": attempted_model,
+            "auth_backend": auth_backend,
+            "auth_ready": auth_ready,
+            "argv_argc": len(argv),
+        },
+    )
+    return argv
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -536,72 +751,99 @@ def _check_compose_argv_precondition(provider_name: str, entry: dict) -> bool:
     return bool(default_model)
 
 
+def _normalize_command_key(raw: str) -> str:
+    """Normalize a slash-command name to config key form (e.g. /z-plan -> z_plan)."""
+    token = raw.strip().split(maxsplit=1)[0] if raw.strip() else ""
+    token = token.lstrip("/")
+    token = token.replace("-", "_").replace("/", "_")
+    return "_".join(part for part in token.split("_") if part)
+
+
+def _active_command_key() -> str:
+    """Return the active command key for command-specific role bindings, if known."""
+    for env_name in (
+        "Z_HARNESS_PROVIDER_COMMAND",
+        "Z_HARNESS_COMMAND",
+        "Z_HARNESS_PARENT_COMMAND",
+    ):
+        command_key = _normalize_command_key(os.environ.get(env_name, ""))
+        if command_key:
+            return command_key
+    return ""
+
+
+def _config_role_runtime_binding(role: str) -> tuple[str, str]:
+    """Return the selected TOML role runtime and its config reference."""
+    role_key = role.replace("-", "_")
+    command_key = _active_command_key()
+    if command_key:
+        config_ref = f"roles.{command_key}.{role_key}.runtime"
+        selection = _config_get(config_ref, "").strip()
+        if selection:
+            return selection, config_ref
+
+    config_ref = f"roles.default.{role_key}.runtime"
+    return _config_get(config_ref, "").strip(), config_ref
+
+
+def _config_role_runtime_selection(role: str) -> str:
+    """Return the preferred [roles.<command/default>.<role>].runtime, or ""."""
+    selection, _config_ref = _config_role_runtime_binding(role)
+    return selection
+
+
+def _config_models_selection(role: str) -> str:
+    """Return legacy [models.<role>] provider selector, or "" when unset."""
+    role_key = role.replace("-", "_")
+    return _config_get(f"models.{role_key}", "").strip()
+
+
 def _peek_consultant_provider(role: str, merged: dict) -> str | None:
-    """Return the provider name a consultant role would resolve to, without exiting.
+    """Return the canonical provider name a consultant role would resolve to.
 
-    Checks the [models] config override first, then falls back to the legacy
-    roles map.  Returns None if neither source has an entry.  Used by
-    _resolve_models_override() to enforce the consultant distinctness invariant
-    across all combinations of override / legacy resolution.
+    Checks the external-provider role binding first, then the legacy [models]
+    selector, then the legacy providers.json roles map.  Used to enforce the
+    consultant distinctness invariant across all combinations of override and
+    fallback resolution without emitting alias telemetry just for the peek.
     """
-    role_key = role.replace("-", "_")
-    override_val = _config_get(f"models.{role_key}", "").strip()
-    if override_val:
-        return override_val
-    roles = merged.get("roles", {})
-    return roles.get(role)
-
-
-def _resolve_models_override(role: str, merged: dict) -> dict | None:
-    """Check [models.<role>] config for a user-supplied vendor/provider selector.
-
-    Maps the incoming role name to the underscore config key (e.g. "pre-reviewer"
-    → "pre_reviewer") and reads the value via config.py get.  Returns:
-      - A provider descriptor dict (same shape as resolve()) when the override is
-        set AND the named provider exists in providers.json AND the compose_argv
-        precondition is met.
-      - None when the config key is empty (sentinel for "use default resolution").
-    Calls sys.exit(1) with the standardised fail-loud message on MISS, DRIFT, or
-    when a consultant role collides with the other consultant role's provider.
-    """
-    role_key = role.replace("-", "_")
-    selection = _config_get(f"models.{role_key}", "").strip()
+    aliases = merged.get("aliases", {})
+    selection = _config_role_runtime_selection(role)
     if not selection:
-        return None  # Silent path: fall back to default resolution.
+        selection = _config_models_selection(role)
+    if not selection:
+        roles = merged.get("roles", {})
+        selection = roles.get(role, "")
+    if not selection:
+        return None
+    return _canonical_provider_name(selection, aliases)
 
+
+def _resolve_config_provider_selection(
+    role: str,
+    selection: str,
+    merged: dict,
+    config_ref: str,
+) -> dict:
+    """Resolve a TOML provider selection to a descriptor or fail loudly."""
     providers = merged.get("providers", {})
-    entry = providers.get(selection)
+    aliases = merged.get("aliases", {})
+    provider_name = _apply_aliases(selection, aliases, role, is_legacy=False)
+    entry = providers.get(provider_name)
 
     if entry is None:
-        print(
-            f"config.toml [models.{role}] references {selection} not found in "
-            f"providers.json — run /z-providers-discover",
-            file=sys.stderr,
+        _fail_preflight(
+            role=role,
+            provider_name=provider_name,
+            attempted_model="",
+            auth_backend="unknown",
+            reason=(
+                f"{config_ref} references {selection} not found in providers.json "
+                "— run /z-providers-discover"
+            ),
         )
-        sys.exit(1)
 
-    # Schema signature check: compose_argv precondition must be satisfiable.
-    if not _check_compose_argv_precondition(selection, entry):
-        print(
-            f"config.toml [models.{role}] references {selection} not found in "
-            f"providers.json — run /z-providers-discover",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    command = entry.get("command", "")
-    if not shutil.which(command):
-        print(
-            f"[providers] role={role}, provider={selection}, command={command} not on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Consultant distinctness: when resolving a consultant role via [models]
-    # override, verify it does not collide with the other consultant role's
-    # resolved provider (which may itself come from a [models] override OR
-    # the legacy roles map).  This mirrors check_consultant_distinctness() but
-    # covers the override path that bypasses it in main().
+    # Consultant distinctness: verify the selected provider does not collide
+    # with the other consultant role after alias canonicalization.
     _CONSULTANT_PEER = {
         "consultant_primary": "consultant_secondary",
         "consultant_secondary": "consultant_primary",
@@ -609,26 +851,49 @@ def _resolve_models_override(role: str, merged: dict) -> dict | None:
     peer_role = _CONSULTANT_PEER.get(role)
     if peer_role is not None:
         peer_provider = _peek_consultant_provider(peer_role, merged)
-        if peer_provider and peer_provider == selection:
+        if peer_provider and peer_provider == provider_name:
             print(
                 f"[providers] consultant_primary and consultant_secondary must resolve to "
-                f"DISTINCT providers (both are {selection!r})",
+                f"DISTINCT providers (both are {provider_name!r})",
                 file=sys.stderr,
             )
             sys.exit(1)
 
-    return {
-        "role": role,
-        "provider": selection,
-        "command": command,
-        "args_template": entry.get("args_template", []),
-        "stdin": entry.get("stdin", False),
-        "timeout_s": entry.get("timeout_s", 300),
-        "model_label": entry.get("model_label", ""),
-        "model_arg_template": entry.get("model_arg_template", None),
-        "model_env_var": entry.get("model_env_var", None),
-        "default_model": entry.get("default_model", None),
-    }
+    descriptor = _descriptor(role, provider_name, entry)
+    _preflight_provider(role, descriptor)
+    return descriptor
+
+
+def _resolve_role_runtime_override(role: str, merged: dict) -> dict | None:
+    """Resolve [roles.<command/default>.<role>].runtime when configured."""
+    selection, config_ref = _config_role_runtime_binding(role)
+    if not selection:
+        return None
+    return _resolve_config_provider_selection(
+        role,
+        selection,
+        merged,
+        f"config.toml [{config_ref}]",
+    )
+
+
+def _resolve_models_override(role: str, merged: dict) -> dict | None:
+    """Check legacy [models.<role>] config for a provider selector.
+
+    This compatibility path is intentionally lower priority than
+    [roles.default.<role>].runtime so native model routing and external provider
+    routing remain separate.
+    """
+    role_key = role.replace("-", "_")
+    selection = _config_models_selection(role)
+    if not selection:
+        return None  # Silent path: fall back to default resolution.
+    return _resolve_config_provider_selection(
+        role,
+        selection,
+        merged,
+        f"config.toml [models.{role_key}]",
+    )
 
 
 def main() -> None:
@@ -660,8 +925,15 @@ def main() -> None:
         _config_src = repo_path if _pname in _repo_providers else global_path
         _validate_provider_entry(_pname, _entry, _config_src)
 
-    # [models] override: if the user has set models.<role> in config.toml, resolve
-    # directly to that provider entry and skip the legacy roles-map lookup.
+    # External provider role override: [roles.default.<role>].runtime is the
+    # preferred TOML binding surface and stays separate from native model classes.
+    role_runtime_override = _resolve_role_runtime_override(role, merged)
+    if role_runtime_override is not None:
+        print(json.dumps(role_runtime_override))
+        return
+
+    # Compatibility fallback: older configs used [models.<role>] to select an
+    # external provider.  Preserve it, but keep it below the role runtime axis.
     override = _resolve_models_override(role, merged)
     if override is not None:
         print(json.dumps(override))

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "roles": {
-    "consultant_primary": "omp-gemini",
+    "consultant_primary": "omp-antigravity-pro",
     "consultant_secondary": "omp-codex",
     "reviewer": "codex-cli"
   },
@@ -127,13 +127,13 @@
       "model_env_var": null,
       "default_model": null
     },
-    "omp-gemini": {
+    "omp-antigravity-pro": {
       "kind": "cli",
       "command": "omp-consult.sh",
       "args_template": ["google-antigravity/gemini-3.1-pro", "--fallback", "gemini", "-p", "-", "--approval-mode", "plan", "--output-format", "text"],
       "stdin": true,
       "timeout_s": 300,
-      "model_label": "gemini-3.1-pro (omp/google-antigravity OAuth)",
+      "model_label": "Antigravity Gemini 3.1 Pro (omp/google-antigravity OAuth)",
       "model_arg_template": null,
       "model_env_var": null,
       "default_model": null
@@ -144,6 +144,7 @@
     "gemini": "gemini-cli",
     "claude": "claude-cli",
     "cursor": "cursor-cli",
-    "agy": "agy-cli"
+    "agy": "agy-cli",
+    "omp-gemini": "omp-antigravity-pro"
   }
 }

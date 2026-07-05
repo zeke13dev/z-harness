@@ -29,6 +29,14 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-05
+
+- _(auto)_ Add codex prod support and model routing _(release)_
+
+## 2026-07-04
+
+- _(auto)_ Schedule execution over known-work DAG _(intent)_
+
 ## 2026-07-03
 
 - _(auto)_ Unlock safe intent parallelism _(z-execute)_

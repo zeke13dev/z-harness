@@ -12,12 +12,16 @@ Verifies:
       (hosts=["cursor","codex","agy","pi"], strategy="" sentinel).
   (e) config.py get export.hosts / export.strategy returns the set values.
 
+  (f) 3-level model routing keys remain config-file-only and are not emitted
+      by export-env while export.* lines are still present.
+
 Invariants under test:
   - Failure class: unknown host name accepted at load time (audit m1 violation).
   - Failure class: unknown strategy enum accepted at load time.
   - Failure class: absent [export] section does not yield default host set.
   - Failure class: absent [export].strategy yields a concrete strategy instead of
     the "" sentinel, preventing per-driver defaults from taking effect.
+  - Failure class: 3-level model routing keys leak into shell env export output.
 """
 
 import json
@@ -44,7 +48,7 @@ _VALID_STRATEGIES = {"pointer", "curated", "full"}
 _SENTINEL_STRATEGY = ""
 
 # Default hosts set (the current "all" set from z-export.md line 48)
-_DEFAULT_HOSTS = ["cursor", "codex", "agy", "pi"]
+_DEFAULT_HOSTS = ["cursor", "codex", "agy", "omp", "pi"]
 # The default strategy is the empty sentinel — each driver uses its own default.
 _DEFAULT_STRATEGY = ""
 
@@ -508,6 +512,33 @@ class TestExportGetReturnsSetValues(unittest.TestCase):
         parsed = json.loads(r.stdout.strip())
         self.assertEqual(parsed, ["cursor"],
                          f"TOML-wins gate: repo TOML ['cursor'] should win over env; got {parsed!r}")
+
+
+# ---------------------------------------------------------------------------
+# (f) 3-level model routing keys are config-file-only, not export-env output
+# ---------------------------------------------------------------------------
+
+class TestExportEnvSkipsModelRouting(unittest.TestCase):
+    """export-env must skip 3-level model routing leaves while preserving export.*."""
+
+    def test_export_env_skips_model_routing_three_level_keys(self):
+        """Configured model routing leaves are readable but never emitted as env vars."""
+        toml = (
+            'schema_version = 2\n\n'
+            '[model_classes.local_fast]\n'
+            'model = "ollama/qwen3:8b"\n'
+            '\n'
+            '[model_routing.native_agents]\n'
+            'explore = "local_fast"\n'
+            '\n'
+            '[export]\n'
+            'strategy = "pointer"\n'
+        )
+        r = _run(["export-env"], repo_toml=toml)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn("Z_HARNESS_EXPORT_STRATEGY", r.stdout)
+        self.assertNotIn("Z_HARNESS_MODEL_CLASSES_", r.stdout)
+        self.assertNotIn("Z_HARNESS_MODEL_ROUTING_", r.stdout)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 ---
 name: z-learn
 disable-model-invocation: false
-description: Interactive progressive-disclosure tutor for understanding code. Replaces repetitive "explain more / tell me about X" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Supports repo-surface grounding via `--repo` / `--surface=auto|off|force`. Route completed-work reports, backtests, handoffs, and external/shareable updates to /z-report. Read-only, no cross-LLM consult.
+description: Interactive progressive-disclosure tutor for understanding code. Replaces repetitive "explain more / tell me about X" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Supports repo-surface grounding via `--repo` and `--surface` policy flags. Route completed-work reports, backtests, handoffs, and external/shareable updates to /z-report. Read-only, no cross-LLM consult.
 argument-hint: "[--repo] <target> [orientation|walkthrough|deep|audit-brief] [--surface=auto|off|force] or free-text"
 runtime: c1
 driver_features_required:

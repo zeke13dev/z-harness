@@ -461,7 +461,7 @@ fi
 
 **`IMPLEMENT_MODE=legacy` (SPEC.md present):** Continue with the existing task-dispatch loop below, unchanged. Subagents read `$BASE/SPEC.md` and `$BASE/PLAN.md` directly. This is the proven default for all in-flight and historical plans.
 
-**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 schedules over the append-only known-work DAG (`work-graph.json`): generate the initial known frontier, run ready nodes, append newly knowable work as nodes return, and checkpoint at durable DAG settle points. Levels are scheduler depths over `depends_on`, not semantic planning phases. In this mode, the frozen INTENT narrative plus approved concern flags, optional audit notes, task-to-intent mapping, known-work graph, and execution strategy metadata are the source of truth. Implementers must not invent product scope outside INTENT; if execution uncovers a new intent/product decision, halt and ask the user.
+**`IMPLEMENT_MODE=intent` (INTENT.md present, no SPEC.md):** The INTENT execution engine. Steps 1 (freeze + LEDGER bootstrap) are wired below. Step 2 schedules over the append-only known-work DAG (`work-graph.json`): generate the initial known frontier, run ready nodes, append newly knowable work as nodes return, and checkpoint at durable DAG settle points. Levels are scheduler depths over `depends_on`, not semantic planning phases. In this mode, the frozen INTENT narrative plus approved concern flags, optional audit notes, task-to-intent mapping, and execution strategy metadata are the source of truth; the known-work graph carries scheduler state. Implementers must not invent product scope outside INTENT; if execution uncovers a new intent/product decision, halt and ask the user.
 
 ```bash
 if [ "$IMPLEMENT_MODE" = "intent" ]; then
@@ -792,7 +792,7 @@ print(m.group(1).strip() if m else '')
     # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user. -->
     GENERATOR_RETURN="$(Agent(
       subagent_type="task-tree-generator",
-      description="Expand known-work DAG at scheduler depth ${CURRENT_LEVEL}",
+      description="Generate BFS level ${CURRENT_LEVEL} task batch",
       prompt="intent_snapshot_path: ${ARCHIVE_DIR}/INTENT.frozen.md
 ledger_path: ${LEDGER_FILE}
 intent_readthrough_flags_path: ${INTENT_FLAGS_FILE}
@@ -1003,6 +1003,24 @@ style_path: ${STYLE_PATH}"
     #   scripts/config.py, but never read by any dispatch path) — do not confuse them
     #   with this gate.
     #
+    # FUTURE PIPELINED TRACK CONTRACT:
+    #   This is a docs-only boundary. It DOES NOT enable runtime pipelined refill.
+    #   It DOES NOT change handoff schema/state, and preserves phase-lockstep
+    #   execution until a real durable track table exists.
+    #   clear checkpoints remain BFS-level boundaries only and must not snapshot half-written TASKS.md,
+    #   unflushed LEDGER entries, or in-memory Agent() state.
+    #
+    #   Current BFS level boundary order remains fixed: LEDGER flush,
+    #   .bfs_level_state write, coalesced remote verify, checkpoint check,
+    #   acceptance evaluation. Refill across BFS levels is forbidden; the
+    #   next level starts only after the boundary checkpoint and acceptance
+    #   evaluator have run.
+    #
+    #   Background-handle expectation: native hosts must expose a durable background handle with poll/cancel/result semantics.
+    #   A host implementation that only starts a synchronous Agent() call and stores no durable handle/state does not satisfy this contract.
+    #   It must use the drain-then-refill fallback and report that fallback in
+    #   telemetry.
+    #
     # KNOWN-WORK DAG SCHEDULER CONTRACT:
     #   Runtime refill is now allowed when the driver has durable background
     #   handles. The scheduler uses work-graph.json as an append-only known-work
@@ -1026,6 +1044,10 @@ style_path: ${STYLE_PATH}"
     #   so newly knowable follow-on nodes are appended. Refill must still obey the
     #   fan-out cap, unknown-scope serialization, dependency/file-conflict gates,
     #   and review diff-isolation rule.
+    #
+    #   Diff-isolation rule: each reviewer sees only that track's path-filtered
+    #   diff or an equivalent serialized review capture; sibling-track changes
+    #   must not leak into the gating review.
     #
     #   Fresh-session boundary: if a ready node has fresh_session_required=true,
     #   kind=handoff_required, or the graph expander returns HANDOFF_REQUIRED:true,
@@ -1261,7 +1283,7 @@ PYEOF
       done_set_hash "$LEVEL_TASKS_FILE" 2>/dev/null || echo "")"
     printf '%d %s\n' "$CURRENT_LEVEL" "$LEVEL_DONE_HASH" > "$LEVEL_STATE_FILE" 2>/dev/null || true
 
-    # ── Coalesced remote build (INTENT DAG settle point) ──────────────
+    # ── Coalesced remote build (INTENT BFS level boundary) ────────────
     # Reuses the queue-wide REMOTE_VERIFY inspection precedent (Setup step 6,
     # `Z_HARNESS_LOCAL_CARGO_CLEAN`) but scoped to just-completed level's tasks
     # instead of the whole queue. Runs AFTER the LEDGER flush (T011-LEDGER-HOOK
@@ -1343,7 +1365,7 @@ PYEOF
       "$(printf '{"base":"%s","level":%d,"done_set_hash":"%s"}' \
          "$BASE" "$CURRENT_LEVEL" "$LEVEL_DONE_HASH")" 2>/dev/null || true
 
-    # ── DAG settle-point clear-checkpoint threshold check ─────────────
+    # ── BFS boundary clear-checkpoint threshold check ─────────────────
     # Runs only after LEDGER flush + graph/TASKS done_set_hash persistence. A
     # below-threshold estimate continues to acceptance evaluation; a threshold
     # hit follows the Clear checkpoint policy protocol and exits without
@@ -1914,10 +1936,10 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
-0. **INTENT known-work serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a ready frontier from the known-work DAG), batching is default-on only after these safety checks pass:
+0. **INTENT known-work serialization gate (checked before rule 1).** When `LEVEL_EXECUTE_ACTIVE=1` (i.e. this Main loop invocation is running a ready frontier from the known-work DAG), same-level batching is default-on only after these safety checks pass:
    - `$INTENT_PARALLEL_LEVELS` is literally `"true"`; explicit false user/repo config still serializes.
-   - Every ready node/task block in the current frontier has a parseable precise `**Files:**` scope. Missing or unparseable scope serializes the affected frontier.
-   - `$BASE/workstreams.json`, when present, reports `scope_unknown: false`; `scope_unknown: true` serializes the affected INTENT frontier.
+   - Every ready node/task block in the current frontier has a parseable precise `**Files:**` scope. Every sibling task block in the current level has a parseable precise `**Files:**` scope. Missing or unparseable scope serializes the affected INTENT level.
+   - `$BASE/workstreams.json`, when present, reports `scope_unknown: false`; `scope_unknown: true` serializes the affected INTENT level.
    - `$BASE/work-graph.json`, when present, reports each selected node as ready: `status=ready` and every `depends_on` node already `done`.
    - Eligible nodes have no dependency edge, no `file_conflicts` edge, and no inline `**Files:**` overlap.
    - The dispatch set is capped or partitioned by `$INTENT_PARALLEL_FANOUT_LIMIT` (currently 3); do not launch an unbounded same-level batch.
@@ -1936,7 +1958,7 @@ The numbered steps below describe a **single task track** — one task's journey
 6. **`work-graph.json` is your known-work DAG; `workstreams.json` is conflict metadata.** Read `$BASE/work-graph.json` on every INTENT refill and `$BASE/workstreams.json` for scope/conflict safety. Use them alongside rule 2's inline `**Files:**` dedup:
    - `work-graph.json` supplies known nodes, statuses, and `depends_on`. A node is eligible only when all dependencies are `done`.
    - `workstreams.json` supplies `file_conflicts` and `scope_unknown`. It is not assumed to contain complete future work.
-   - Tasks with disjoint file sets and no dependency chain can run in parallel; in INTENT mode, still apply `$INTENT_PARALLEL_FANOUT_LIMIT` by partitioning wider eligible sets.
+   - Tasks with disjoint file sets and no dependency chain can run in parallel; in INTENT mode, still apply `$INTENT_PARALLEL_FANOUT_LIMIT` by partitioning wider eligible sets. If more siblings are eligible, partition them into chunks of at most this many task tracks.
    - `scope_unknown: true` means some task block has no parseable `**Files:**` line, making rule 2 blind for that task. In INTENT known-work mode this is a hard serialization gate for the affected frontier. Legacy mode keeps the historical risk-based behavior.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
@@ -2366,29 +2388,59 @@ The persona is a **prompt-prefix only**: the implementer still runs as the nativ
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (legacy mode: read SPEC.md / PLAN.md yourself from here; INTENT mode: SPEC.md is absent and intent_snapshot below is authoritative)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\nsubagent_model: <IMPL_MODEL>  ← include this in implement_start/implement_end event payloads\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (legacy mode: read SPEC.md / PLAN.md yourself from here; INTENT mode: SPEC.md is absent and intent_snapshot below is authoritative)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\nsubagent_model: <IMPL_MODEL>  ← include this in implement_start/implement_end event payloads\nsubagent_model_source: <IMPL_MODEL_SOURCE>\nsubagent_model_route: <IMPL_MODEL_ROUTE>\nsubagent_model_route_kind: <IMPL_MODEL_ROUTE_KIND>\nsubagent_model_override_applied: <IMPL_MODEL_APPLIED>\nsubagent_model_override_support: <IMPL_MODEL_SUPPORT>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
-**Model-on-retry signal.** If this is the second retry (cycle ≥ 2) after review blockers/majors, set env `Z_HARNESS_RETRY_UPGRADE=opus` before the `Agent()` call so the implementer knows the orchestrator wants Opus-level care for the fix. (The implementer's frontmatter declares `model: sonnet` as default; the env-var is a per-call signal for the agent to read in its prompt construction, not a model override per se. If the harness later supports per-call model override, this maps to that.)
+**Model-on-retry signal.** If this is the second retry (cycle ≥ 2) after review blockers/majors, set env `Z_HARNESS_RETRY_UPGRADE=opus` before the `Agent()` call. This signal now selects the `retry` tier in the routing layer. Native Claude `Agent()` hosts may not support a true per-call model override, so telemetry MUST record whether the resolved route was actually applied by the host or only passed as advisory prompt/metrics metadata.
 
-**`**Complexity:** high` opt-in.** If the user wrote `**Complexity:** high` in the task block, also set the upgrade signal even on first attempt.
+**`**Complexity:** high` opt-in.** If the user wrote `**Complexity:** high` in the task block, select the `high` tier even on first attempt. `low` and `medium` select their matching tiers; absent/unknown complexity falls back to `medium`.
 
-**Derive `IMPL_MODEL` for telemetry.** Immediately before the `Agent()` call, resolve the effective model label so it can be threaded into the prompt (for implement_start/end payloads) and logged via `log-subagent.sh`. The selection mirrors the two signals above:
+**Derive `IMPL_MODEL` through native model routing.** Immediately before the `Agent()` call, resolve the implementer tier through `[model_routing.implementer]`, then expand class names through `[model_classes]`. Defaults preserve current behavior: `low|medium → sonnet`, `high|retry → opus`.
 
 ```bash
-# Resolve effective implementer model label for telemetry.
-# Opus when: cycle >= 2 (retry-upgrade) OR Complexity: high in task block.
-IMPL_MODEL="sonnet"
-if [[ "${Z_HARNESS_RETRY_UPGRADE:-}" == "opus" ]] || \
-   grep -q '^\*\*Complexity:\*\* high' <(printf '%s\n' "$TASK_BLOCK") 2>/dev/null; then
-  IMPL_MODEL="opus"
+# Determine the implementer routing tier from existing /z-execute signals.
+IMPL_TIER="medium"
+TASK_COMPLEXITY="$(python3 -c '
+import re, sys
+text = sys.stdin.read()
+m = re.search(r"^\*\*Complexity:\*\*\s*(\S+)", text, re.M)
+print(m.group(1).lower() if m else "")
+' <<< "$TASK_BLOCK")"
+if [[ "${Z_HARNESS_RETRY_UPGRADE:-}" == "opus" ]] || [ "${CYCLE:-1}" -ge 2 ]; then
+  IMPL_TIER="retry"
+elif [ "$TASK_COMPLEXITY" = "high" ]; then
+  IMPL_TIER="high"
+elif [ "$TASK_COMPLEXITY" = "low" ]; then
+  IMPL_TIER="low"
 fi
+
+IMPL_ROUTE_JSON="$(python3 - "$REPO_ROOT" "$IMPL_TIER" <<'PY'
+import json, sys
+from runtime.dispatch.dispatcher import load_model_routing_config, resolve_implementer_model
+
+repo_root, tier = sys.argv[1:3]
+values = load_model_routing_config(repo_root)
+# Native Claude Agent() support for true per-call model override is host-dependent;
+# /z-execute records the resolved label as advisory unless the host later confirms application.
+resolution = resolve_implementer_model(
+    tier, values, override_applied=False, override_support="advisory"
+)
+print(json.dumps(resolution.telemetry()))
+PY
+)"
+IMPL_MODEL="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["effective_model"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_SOURCE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["source"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_ROUTE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["route"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_ROUTE_KIND="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["route_kind"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_APPLIED="$(python3 -c 'import json,sys; print("true" if json.loads(sys.argv[1])["override_applied"] else "false")' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_SUPPORT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["override_support"])' "$IMPL_ROUTE_JSON")"
+
 # IMPL_PROMPT_CHARS = character count of the full prompt string passed to Agent()
 IMPL_PROMPT_CHARS="${#IMPL_PROMPT}"   # set IMPL_PROMPT to the full prompt string before passing it
 ```
 
-Pass `subagent_model: $IMPL_MODEL` as an additional line in the implementer prompt so the implementer can include it in its `implement_start`/`implement_end` payloads. After the `Agent()` call completes, capture the response length and emit the `subagent_call` event:
+Pass `subagent_model: $IMPL_MODEL`, `subagent_model_source: $IMPL_MODEL_SOURCE`, `subagent_model_route: $IMPL_MODEL_ROUTE`, `subagent_model_route_kind: $IMPL_MODEL_ROUTE_KIND`, `subagent_model_override_applied: $IMPL_MODEL_APPLIED`, and `subagent_model_override_support: $IMPL_MODEL_SUPPORT` as additional lines in the implementer prompt so the implementer can include them in its `implement_start`/`implement_end` payloads. After the `Agent()` call completes, capture the response length and emit the `subagent_call` event with the effective model label:
 
 ```bash
 # After Agent() returns (IMPL_RESPONSE = the implementer's full returned text):
@@ -2398,13 +2450,18 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
   --role "implementer" \
   --subagent-type "implementer" \
   --subagent-model "$IMPL_MODEL" \
+  --model-source "$IMPL_MODEL_SOURCE" \
+  --model-route "$IMPL_MODEL_ROUTE" \
+  --model-route-kind "$IMPL_MODEL_ROUTE_KIND" \
+  --model-override-applied "$IMPL_MODEL_APPLIED" \
+  --model-override-support "$IMPL_MODEL_SUPPORT" \
   --prompt-chars "$IMPL_PROMPT_CHARS" \
   --response-chars "$IMPL_RESPONSE_CHARS" || true
 ```
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
-**Coalesced-path suppression (INTENT known-work mode).** When `LEVEL_EXECUTE_ACTIVE=1`, this per-task dispatch is SUPPRESSED entirely — do NOT call `remote-runner` here. The DAG scheduler instead collects the union of the settled frontier's `**REMOTE_VERIFY:**` lines and dispatches exactly ONE `remote-runner` build at the DAG settle point (see "Coalesced remote build (INTENT DAG settle point)" above). Per-task `cargo check` early feedback is intentionally dropped under the coalesced path — this is the full-coalesce option from the INTENT ("Consider for this" decision (a): recommended as the biggest win with the simplest failure-attribution story). Legacy/non-INTENT callers (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are UNCHANGED and still dispatch per-task below.
+**Coalesced-path suppression (INTENT BFS).** In known-work mode with `LEVEL_EXECUTE_ACTIVE=1`, this per-task dispatch is SUPPRESSED entirely — do NOT call `remote-runner` here. The DAG scheduler instead collects the union of the settled frontier's `**REMOTE_VERIFY:**` lines and dispatches exactly ONE `remote-runner` build at the BFS level boundary (see "Coalesced remote build (INTENT BFS level boundary)" above). Per-task `cargo check` early feedback is intentionally dropped under the coalesced path — this is the full-coalesce option from the INTENT ("Consider for this" decision (a): recommended as the biggest win with the simplest failure-attribution story). Legacy/non-INTENT callers (`LEVEL_EXECUTE_ACTIVE` unset or `0`) are UNCHANGED and still dispatch per-task below.
 
 ```bash
 if [ "${LEVEL_EXECUTE_ACTIVE:-0}" -eq 0 ]; then
@@ -3523,8 +3580,8 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `task_start` | Track begins | `id`, `attempt` (1 on first try, increments on user "Defer + resume") |
 | `precheck_start` | Just before spawning `spec-precheck` | `id` |
 | `precheck_end` | Precheck returned | `id`, `status` (`ok`/`spec_problem`), `references_checked`, `wall_ms` |
-| `implement_start` | Just before spawning `implementer` (each retry counts) | `id`, `retry` (0=first, 1=retry), `subagent_model` (`sonnet` or `opus`) |
-| `implement_end` | Implementer returned | `id`, `retry`, `status`, `files_changed_count`, `wall_ms`, `subagent_model` |
+| `implement_start` | Just before spawning `implementer` (each retry counts) | `id`, `retry` (0=first, 1=retry), `subagent_model` (effective label), `subagent_model_source`, `subagent_model_route`, `subagent_model_route_kind`, `subagent_model_override_applied`, `subagent_model_override_support` |
+| `implement_end` | Implementer returned | `id`, `retry`, `status`, `files_changed_count`, `wall_ms`, `subagent_model`, `subagent_model_source`, `subagent_model_override_applied`, `subagent_model_override_support` |
 | `diff_capture` | After `git diff` | `id`, `diff_bytes` |
 | `review_start` | Just before spawning `reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
 | `review_end` | Reviewer returned | `id`, `cycle`, `wall_ms`, `response_chars`, `blockers`, `majors` |

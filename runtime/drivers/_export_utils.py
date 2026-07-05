@@ -6,8 +6,8 @@ Shared helpers for the multi-IDE export pipeline.  Strict port of
 Any quirk preserved from the legacy script is noted with a
 ``# preserved quirk:`` comment.
 
-Importable directly (no importlib-by-path hack needed). Release-surface
-filtering intentionally imports the CLI manifest from ``z_harness_cli``.
+Release-surface filtering imports the neutral ``runtime.release_surface``
+contract shared by CLI and runtime consumers.
 
 Public surface
 --------------
@@ -53,7 +53,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from z_harness_cli import release_surface
+
+from runtime import release_surface
 
 
 # ---------------------------------------------------------------------------

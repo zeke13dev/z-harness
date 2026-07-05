@@ -2006,6 +2006,20 @@ class TestThreeLevelNesting(unittest.TestCase):
         self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
         self.assertIn("hyphenated", r.stderr)
 
+    def test_uppercase_role_table_segment_exits_2(self):
+        """Dynamic role table segments must be rejected during TOML load."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.Z_Plan.consultant_primary]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "notify.level"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
+        self.assertIn("non-canonical key segment", r.stderr)
+
     def test_four_level_nesting_in_toml_exits_2(self):
         """4-level TOML table nesting (>3 levels) must be rejected with exit 2."""
         repo_cfg = write_repo_config(
@@ -3053,7 +3067,7 @@ class TestExportEnvEgress(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestModelsSection(unittest.TestCase):
-    """T006: [models] config section — per-role model overrides."""
+    """[models] role overrides plus local model routing schema."""
 
     # All expected role keys in the [models] section.
     _EXPECTED_ROLES = (
@@ -3063,6 +3077,26 @@ class TestModelsSection(unittest.TestCase):
         "implementer",
         "pre_reviewer",
     )
+    _EXPECTED_MODEL_CLASS_KEYS = (
+        "model_classes.cheap.model",
+        "model_classes.cheap.thinking",
+        "model_classes.cheap.reasoning",
+        "model_classes.standard.model",
+        "model_classes.standard.thinking",
+        "model_classes.standard.reasoning",
+        "model_classes.deep.model",
+        "model_classes.deep.thinking",
+        "model_classes.deep.reasoning",
+    )
+
+    _EXPECTED_MODEL_ROUTING_DEFAULTS = {
+        "model_routing.native_agents.default": "",
+        "model_routing.implementer.low": "sonnet",
+        "model_routing.implementer.medium": "sonnet",
+        "model_routing.implementer.high": "opus",
+        "model_routing.implementer.retry": "opus",
+    }
+
 
     def setUp(self):
         self.xdg = make_xdg()
@@ -3093,6 +3127,31 @@ class TestModelsSection(unittest.TestCase):
                 dotted, VALIDATORS,
                 f"VALIDATORS is missing key {dotted!r}",
             )
+
+    def test_default_model_class_keys_present_in_defaults_and_validators(self):
+        """Built-in model classes must be readable 3-level config leaves."""
+        from config import DEFAULTS, VALIDATORS
+        flat_defaults = {
+            f"model_classes.{class_name}.{field}": value
+            for class_name, fields in DEFAULTS.get("model_classes", {}).items()
+            for field, value in fields.items()
+        }
+        for dotted in self._EXPECTED_MODEL_CLASS_KEYS:
+            self.assertIn(dotted, flat_defaults)
+            self.assertIn(dotted, VALIDATORS)
+
+    def test_model_routing_defaults_present_in_defaults_and_validators(self):
+        """Model routing defaults must reproduce current implementer labels."""
+        from config import DEFAULTS, VALIDATORS
+        flat_defaults = {
+            f"model_routing.{group}.{field}": value
+            for group, fields in DEFAULTS.get("model_routing", {}).items()
+            for field, value in fields.items()
+        }
+        for dotted, expected in self._EXPECTED_MODEL_ROUTING_DEFAULTS.items():
+            self.assertEqual(flat_defaults.get(dotted), expected)
+            self.assertIn(dotted, VALIDATORS)
+
 
     # (b) Validator accepts any string (including empty and arbitrary strings)
     def test_validator_accepts_empty_string(self):
@@ -3145,6 +3204,258 @@ class TestModelsSection(unittest.TestCase):
                 r.stdout.strip(), "",
                 f"models.{role} default must be empty string (absent sentinel), got {r.stdout.strip()!r}",
             )
+
+    def test_default_model_classes_are_readable(self):
+        """Absent config still exposes explicit cheap/standard/deep class defaults."""
+        for key, expected in (
+            ("model_classes.cheap.model", "haiku"),
+            ("model_classes.standard.model", "sonnet"),
+            ("model_classes.deep.model", "opus"),
+            ("model_routing.implementer.low", "sonnet"),
+            ("model_routing.implementer.medium", "sonnet"),
+            ("model_routing.implementer.high", "opus"),
+            ("model_routing.implementer.retry", "opus"),
+        ):
+            r = run(["get", key], env=self.env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
+            self.assertEqual(r.stdout.strip(), expected, f"unexpected default for {key}")
+
+    def test_native_agent_default_route_inherits_frontmatter(self):
+        """The native default route stays empty so checked-in agent model pins survive."""
+        r = run(["get", "model_routing.native_agents.default"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_global_config_can_define_model_class_and_native_agent_route(self):
+        """User-global config can define a custom class and route an agent to it."""
+        write_global_config(
+            self.xdg,
+            "[model_classes.local_fast]\n"
+            "model = \"ollama/qwen3:8b\"\n"
+            "thinking = \"low\"\n"
+            "reasoning = \"effort=low\"\n"
+            "\n"
+            "[model_routing.native_agents]\n"
+            "explore = \"local_fast\"\n",
+        )
+        for key, expected in (
+            ("model_classes.local_fast.model", "ollama/qwen3:8b"),
+            ("model_classes.local_fast.thinking", "low"),
+            ("model_classes.local_fast.reasoning", "effort=low"),
+            ("model_routing.native_agents.explore", "local_fast"),
+        ):
+            r = run(["get", key], env=self.env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
+            self.assertEqual(r.stdout.strip(), expected)
+
+    def test_custom_model_class_omitted_metadata_reads_empty(self):
+        """Custom class thinking/reasoning metadata is optional and defaults empty."""
+        write_global_config(
+            self.xdg,
+            "[model_classes.local_plain]\n"
+            "model = \"llama-3.3-70b\"\n",
+        )
+        for key in (
+            "model_classes.local_plain.thinking",
+            "model_classes.local_plain.reasoning",
+        ):
+            r = run(["get", key], env=self.env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
+            self.assertEqual(r.stdout.strip(), "")
+
+    def test_repo_config_can_override_implementer_route_with_exact_model(self):
+        """Repo config can map a tier directly to an exact model override."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-routing-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_routing.implementer]\n"
+                "high = \"claude-opus-4-1\"\n",
+            )
+            r = run(
+                ["get", "model_routing.implementer.high"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+            self.assertEqual(r.stdout.strip(), "claude-opus-4-1")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_empty_model_class_model(self):
+        """Custom model_classes.*.model must be non-empty."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-class-invalid-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.bad]\n"
+                "model = \"\"\n",
+            )
+            r = run(
+                ["get", "model_classes.bad.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_nested_implementer_route_leaf(self):
+        """Scalar implementer routes must not accept nested table leaves."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-routing-shape-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_routing.implementer.high]\n"
+                "foo = \"bar\"\n",
+            )
+            r = run(
+                ["get", "model_routing.implementer.high"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("unsupported nested table", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_nested_model_class_field(self):
+        """Scalar model class fields must not accept nested table leaves."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-class-shape-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.local_fast.model]\n"
+                "foo = \"bar\"\n",
+            )
+            r = run(
+                ["get", "model_classes.local_fast.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("unsupported nested table", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_global_config_rejects_unsupported_model_class_leaf(self):
+        """Unsupported dynamic model class leaves hard-fail at TOML load."""
+        write_global_config(
+            self.xdg,
+            "[model_classes.local_fast]\n"
+            "model = \"haiku\"\n"
+            "foo = \"bar\"\n",
+        )
+        r = run(["get", "model_classes.local_fast.model"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("unsupported model routing key", r.stderr)
+
+    def test_repo_config_rejects_unsupported_model_class_leaf(self):
+        """Unsupported dynamic model class leaves hard-fail in repo TOML."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-class-leaf-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.local_fast]\n"
+                "model = \"haiku\"\n"
+                "foo = \"bar\"\n",
+            )
+            r = run(
+                ["get", "model_classes.local_fast.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("unsupported model routing key", r.stderr)
+            self.assertIn("model_classes.local_fast.foo", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_unsupported_model_routing_direct_leaf(self):
+        """Unsupported direct leaves in dynamic sections must hard-fail in repo TOML."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-routing-leaf-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_routing]\n"
+                "unexpected = \"cheap\"\n",
+            )
+            r = run(
+                ["get", "model_routing.implementer.high"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("unsupported model routing key", r.stderr)
+            self.assertIn("model_routing.unexpected", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_scalar_dynamic_section(self):
+        """Dynamic model config sections must be TOML tables, not scalar leaves."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-section-scalar-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "model_classes = \"cheap\"\n",
+            )
+            r = run(
+                ["get", "model_classes.cheap.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("unsupported model routing key", r.stderr)
+            self.assertIn("model_classes", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_uppercase_model_class_name(self):
+        """Dynamic model class names must use canonical lowercase segments."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-model-class-case-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.LocalFast]\n"
+                "model = \"haiku\"\n",
+            )
+            r = run(
+                ["get", "model_classes.LocalFast.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("non-canonical key segment", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_uppercase_native_agent_id(self):
+        """Dynamic native-agent route ids must use canonical lowercase segments."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-native-agent-case-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_routing.native_agents]\n"
+                "Explore = \"cheap\"\n",
+            )
+            r = run(
+                ["get", "model_routing.native_agents.Explore"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("non-canonical key segment", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_uppercase_implementer_tier(self):
+        """Dynamic implementer tier keys must use canonical lowercase segments."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-implementer-case-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_routing.implementer]\n"
+                "High = \"deep\"\n",
+            )
+            r = run(
+                ["get", "model_routing.implementer.High"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("non-canonical key segment", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
 
     # (d) config.py get models.reviewer returns a set value
     def test_get_models_reviewer_returns_set_value_from_toml(self):

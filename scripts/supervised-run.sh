@@ -3,7 +3,8 @@
 #
 # Usage:
 #   supervised-run.sh --run <run_id> --type <type> --timeout <secs> \
-#                     [--dispatch-id <id>] [--grace <secs>] -- <cmd> [args...]
+#                     [--dispatch-id <id>] [--grace <secs>] \
+#                     [--provider-role <role>] -- <cmd> [args...]
 #
 # Arguments:
 #   --run         run id (passed to log-event.sh)
@@ -12,6 +13,7 @@
 #                 watchdog.timeout_secs.<type> (default 600 if type unknown)
 #   --dispatch-id optional; generated as <run>-<type>-<epoch_ms>-<rand4> if absent
 #   --grace       SIGTERM→SIGKILL grace seconds; default from watchdog.kill_grace_secs (10)
+#   --provider-role optional provider role propagated to child provider shims
 #   --            separator: everything after is the command to run
 #
 # Behaviour:
@@ -58,7 +60,7 @@ source "${SCRIPT_DIR}/check-timeout.sh"
 # ---------------------------------------------------------------------------
 
 _usage() {
-  printf 'Usage: supervised-run.sh --run R --type T --timeout N [--dispatch-id D] [--grace G] -- cmd [args...]\n' >&2
+  printf 'Usage: supervised-run.sh --run R --type T --timeout N [--dispatch-id D] [--grace G] [--provider-role ROLE] -- cmd [args...]\n' >&2
   exit 2
 }
 
@@ -250,6 +252,7 @@ TYPE=""
 TIMEOUT_S=""
 DISPATCH_ID=""
 GRACE_S=""
+PROVIDER_ROLE=""
 FOUND_DASHDASH=0
 CMD_ARGS=()
 
@@ -260,6 +263,7 @@ while [[ $# -gt 0 ]]; do
     --timeout)   TIMEOUT_S="${2:-}";   shift 2 ;;
     --dispatch-id) DISPATCH_ID="${2:-}"; shift 2 ;;
     --grace)     GRACE_S="${2:-}";     shift 2 ;;
+    --provider-role) PROVIDER_ROLE="${2:-}"; shift 2 ;;
     --)
       FOUND_DASHDASH=1
       shift
@@ -304,6 +308,20 @@ fi
 
 if [[ -z "$GRACE_S" ]]; then
   GRACE_S="$(_resolve_grace)"
+fi
+
+# Provider child metadata. `omp-consult.sh` and similar provider shims use this
+# for actionable preflight/fallback telemetry. Keep it out of event payloads.
+if [[ -z "$PROVIDER_ROLE" ]]; then
+  case "$TYPE" in
+    reviewer|pre_reviewer|consultant_primary|consultant_secondary)
+      PROVIDER_ROLE="$TYPE"
+      ;;
+  esac
+fi
+export Z_HARNESS_RUN_ID="$RUN"
+if [[ -n "$PROVIDER_ROLE" ]]; then
+  export Z_HARNESS_PROVIDER_ROLE="$PROVIDER_ROLE"
 fi
 
 # ---------------------------------------------------------------------------

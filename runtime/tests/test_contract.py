@@ -118,3 +118,23 @@ def test_allow_cross_vendor_env_rejects_non_boolean():
     provider["allow_cross_vendor_env"] = "yes"  # wrong type
     with pytest.raises(jsonschema.ValidationError):
         validate("provider", instance)
+
+
+def test_agent_schema_accepts_exact_model_label():
+    """Agent frontmatter can represent an exact native host model fallback."""
+    fixture_path = _FIXTURES_DIR / "agent_valid.json"
+    with fixture_path.open("r", encoding="utf-8") as fh:
+        instance = json.load(fh)
+    instance["model"] = "anthropic/claude-sonnet-4.5"
+    validate("agent", instance)
+
+
+def test_agent_schema_accepts_optional_model_routing_metadata():
+    """Agent schema can represent class routing and thinking metadata."""
+    fixture_path = _FIXTURES_DIR / "agent_valid.json"
+    with fixture_path.open("r", encoding="utf-8") as fh:
+        instance = json.load(fh)
+    instance["model_class"] = "deep"
+    instance["thinking"] = "budget:high"
+    instance["reasoning"] = "effort:high"
+    validate("agent", instance)

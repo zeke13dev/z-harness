@@ -27,6 +27,7 @@ __pycache__/
 /.agent/
 /.pi/
 /.omp/z-harness/
+/.hermes/
 /.codex-plugin/
 /.claude/scheduled_tasks.lock
 

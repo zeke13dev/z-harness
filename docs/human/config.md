@@ -150,7 +150,7 @@ All preference env vars and their config.toml equivalents:
 | `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; under an unattended hard cost gate (`Z_HARNESS_NO_ASK=halt`), the gate halts with `cost_budget_missing`. |
 | `runtime.env_strict` | bool | `false` | `true` \| `false` | When `true`, detecting any preference-class `Z_HARNESS_*` env var in the raw environment becomes a **hard error** (exit 2) instead of a warning. Set this in `config.toml` (NOT as a raw env var) to enforce the migration in CI. Default `false` (grace period — warning only). |
 
-For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[changelog]`, `[models]`, and `[export]` knobs, see the sections below.
+For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[changelog]`, `[models]`, `[model_classes]`, `[model_routing]`, and `[export]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -196,6 +196,11 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `workflow.memory_stale_days` | `Z_HARNESS_MEMORY_STALE_DAYS` (alias — no `WORKFLOW_` prefix) |
 | `docs.staleness_threshold` | `Z_HARNESS_DOC_STALENESS_THRESHOLD` (alias — uses `DOC` not `DOCS`) |
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOM_EXTRACT` (alias — completely different legacy name) |
+| `models.consultant_primary` | `Z_HARNESS_MODELS_CONSULTANT_PRIMARY` |
+| `models.consultant_secondary` | `Z_HARNESS_MODELS_CONSULTANT_SECONDARY` |
+| `models.reviewer` | `Z_HARNESS_MODELS_REVIEWER` |
+| `models.implementer` | `Z_HARNESS_MODELS_IMPLEMENTER` |
+| `models.pre_reviewer` | `Z_HARNESS_MODELS_PRE_REVIEWER` |
 | `export.hosts` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array string) |
 | `export.strategy` | `Z_HARNESS_EXPORT_STRATEGY` |
 
@@ -210,9 +215,12 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 > its own unrelated `hermes-config.yaml` `[concurrency]` keys.
 
 For followup and experiment keys, the rule applies identically (no alias exceptions).
+Three-level model-class and model-routing keys, such as `model_classes.local_fast.model` and
+`model_routing.native_agents.explore`, are config-file-only and are not exported as env vars.
 
-Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
-Nested keys >2 levels exit 2.  Empty env vars are treated as missing.
+Keys must match 2-4 lowercase underscore/digit segments (for example `notify.level`,
+`model_classes.local_fast.model`, or `roles.z_plan.consultant_primary.model`). Hyphens exit 2.
+Empty env vars are treated as missing.
 
 ## CLI reference (Loader API)
 
@@ -572,17 +580,79 @@ The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md
 | `changelog.file` | string | `"CHANGELOG.md"` | Changelog path, relative to repo root. |
 | `changelog.repos` | array\<string\> | `["*"]` | Repo-ID allowlist; `"*"` means every repo. |
 
-## The knobs ([models] section)
+## The knobs ([models], [model_classes], and [model_routing] sections)
 
-The `[models]` section provides per-role model overrides. An empty string (the default for all keys) means "use the provider's `default_model`". Validity of the model/vendor string is cross-checked against `providers.json` at RESOLVE time (not at config-load time), so invalid models are caught only when the role is dispatched.
+`[models]` remains the legacy external-provider role override section. These keys are separate from native-agent model routing so `models.reviewer = "codex-cli"` is never confused with a native class such as `cheap` or `standard`. An empty string (the default for all `[models]` keys) means "use the provider's `default_model`". Validity of the model/vendor string is cross-checked against `providers.json` at RESOLVE time (not at config-load time), so invalid models are caught only when the role is dispatched.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `models.consultant_primary` | string | `""` | Model override for the primary consultant role. Empty = use provider default. |
-| `models.consultant_secondary` | string | `""` | Model override for the secondary consultant role. Empty = use provider default. |
-| `models.reviewer` | string | `""` | Model override for the reviewer role. Empty = use provider default. |
-| `models.implementer` | string | `""` | Model override for the implementer role. Empty = use provider default. |
+| `models.consultant_primary` | string | `""` | Model override for the primary external consultant role. Empty = use provider default. |
+| `models.consultant_secondary` | string | `""` | Model override for the secondary external consultant role. Empty = use provider default. |
+| `models.reviewer` | string | `""` | Model override for the external reviewer role. Empty = use provider default. |
+| `models.implementer` | string | `""` | Model override for an external implementer provider role. Empty = use provider default. |
 | `models.pre_reviewer` | string | `""` | Model override for the pre-reviewer role. Empty = use provider default. |
+
+`[model_classes.<name>]` defines local native-model classes. Built-in classes reproduce current labels: `cheap → haiku`, `standard → sonnet`, and `deep → opus`. Custom class names must use lowercase/underscore TOML keys. `model` is required and non-empty; `thinking` and `reasoning` are optional string metadata that later dispatch layers may render only for hosts that support them.
+
+| Key pattern | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `model_classes.cheap.model` | string | `"haiku"` | Built-in cheap native class. |
+| `model_classes.standard.model` | string | `"sonnet"` | Built-in standard native class. |
+| `model_classes.deep.model` | string | `"opus"` | Built-in deep native class. |
+| `model_classes.<name>.model` | string | _(custom)_ | Exact native model label for a local class. |
+| `model_classes.<name>.thinking` | string | `""` | Optional host-specific thinking metadata. |
+| `model_classes.<name>.reasoning` | string | `""` | Optional host-specific reasoning metadata. |
+
+`[model_routing]` maps native agents and implementer tiers to either a named class or an exact model label. `model_routing.native_agents.default = ""` intentionally inherits each agent's checked-in frontmatter model, preserving cheap Haiku agents and standard Sonnet agents when no override is configured. Implementer tier defaults reproduce the current `/z-execute` labels.
+
+| Key pattern | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `model_routing.native_agents.default` | string | `""` | Empty sentinel = inherit each native agent's frontmatter model. |
+| `model_routing.native_agents.<agent_id>` | string | _(unset)_ | Route a native agent id (underscore key form) to a class name such as `cheap` or an exact model label. |
+| `model_routing.implementer.low` | string | `"sonnet"` | Low-complexity implementer route. |
+| `model_routing.implementer.medium` | string | `"sonnet"` | Medium-complexity implementer route. |
+| `model_routing.implementer.high` | string | `"opus"` | High-complexity implementer route. |
+| `model_routing.implementer.retry` | string | `"opus"` | Retry implementer route. |
+
+Example:
+
+```toml
+[model_classes.local_fast]
+model = "ollama/qwen3:8b"
+thinking = "low"
+reasoning = "effort=low"
+
+[model_classes.claude_deep]
+model = "claude-opus-4-1"
+thinking = "high"
+
+[model_routing.native_agents]
+explore = "local_fast"           # named class
+auditor = "claude-sonnet-4-5"    # exact native model override
+
+[model_routing.implementer]
+low = "sonnet"                    # exact current label
+medium = "standard"               # named class also allowed
+high = "claude_deep"
+retry = "claude-opus-4-1"        # exact override also allowed
+
+[models]
+reviewer = ""                    # external provider role; empty = provider default
+```
+
+### Model/config ownership and precedence
+
+Several files can mention models, but they own different layers:
+
+1. **Native agent frontmatter** (`agents/*.md` in z-harness source, exported to host-specific agent locations such as `.claude/agents/*.md`) owns the checked-in default model for a native agent. `model_routing.native_agents.default = ""` means "do not override this frontmatter".
+2. **`CLAUDE.md`** owns human/process instructions and repository policy. It is not a model routing file; do not put per-role model overrides there.
+3. **`.omp/config.yml`** owns Oh My Pi host/plugin configuration. It may affect harness runtime availability, but it does not override z-harness role routes.
+4. **z-harness TOML config** (`~/.config/z-harness/config.toml` and `.z-harness/config.toml`) owns user/repo preferences such as `[models]`, `[model_classes]`, and `[model_routing]`. Repo TOML overrides global TOML; TOML overrides preference env vars when set.
+5. **`.z-harness/providers.json`** owns external provider registry details (`runtime`, `default_model`, argv templates, and legacy provider-role fallback). It is consulted when resolving external `[models]` roles, after any TOML `[models.<role>]` override.
+
+In short: frontmatter is the native-agent default, TOML is the preferred override layer, and `providers.json` is the external-provider registry/fallback. `CLAUDE.md` and `.omp/config.yml` are policy/runtime surfaces, not role-routing override layers.
+
+Native-agent model precedence is exact `model_routing.native_agents.<agent_id>`, then `model_routing.native_agents.default` when non-empty, then the source agent frontmatter. External-provider role precedence is TOML `[models.<role>]`, then `.z-harness/providers.json` role fallback/default model. `CLAUDE.md` and `.omp/config.yml` never participate in those override chains.
 
 ## The knobs ([export] section)
 
@@ -598,36 +668,36 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `scripts/config.py:61` — `DEFAULTS` — built-in defaults for all config sections including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[runtime]`, `[cost]`, `[models]`, `[export]`, `[changelog]` (layer 1)
-- `scripts/config.py:296` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost, models, export keys
-- `scripts/config.py:360` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
-- `scripts/config.py:492` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys (6 workflow.* + pre_run_cost_gate); validated against VALIDATORS at module load by `_run_startup_guards`
-- `scripts/config.py:580` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist: `{workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}`
-- `scripts/config.py:586` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
-- `scripts/config.py:615` — `_run_startup_guards` — module-load consistency check: asserts `QUESTION_IDS <= VALIDATORS`, every qid has skill_default and halt_category, RESULT_MAP references only valid choices; raises `SystemExit(2)` on violation
-- `scripts/config.py:707` — `_ENV_VAR_ALIASES` — dotted keys whose exported env var name differs from the mechanical `_dotted_to_env()` mapping (e.g. `runtime.consult` → `Z_HARNESS_CONSULT`)
-- `scripts/config.py:750` — `_INGRESS_LEGACY_ALIASES` — ingress fallback map including all `_ENV_VAR_ALIASES` plus ingress-only legacies (e.g. `notify.level` → `Z_HARNESS_NOTIFY`, `runtime.max_parallel` → `HERMES_MAX_PARALLEL`)
-- `scripts/config.py:780` — `LEGAL_ENV_KEYS` / `LEGAL_ENV_PREFIXES` — allowlist of plumbing and unattended-entry env vars that never trigger the deprecation warning
-- `scripts/config.py:1065` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts; TOML wins over env for preference-class vars
-- `scripts/config.py:1303` — `cmd_get` — resolve and print single dotted-key value; exits 3 on unknown or meta key
-- `scripts/config.py:1334` — `cmd_get_batch` — resolve multiple keys in one process; output JSON object; unknown/meta keys → null + stderr; always exits 0
-- `scripts/config.py:1426` — `cmd_export_env` — print export+unset lines for all user knobs; emit `config_resolved` once per run; emit `config_env_deprecated` per deprecated var
-- `scripts/config.py:1484` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent; never overwrites existing file
-- `scripts/config.py:1561` — `cmd_explain` — print effective value and source layer for one key
-- `scripts/config.py:1593` — `cmd_list_question_ids` — print sorted JSON array of registered question IDs
-- `scripts/config.py:1598` — `cmd_resolve_halt_category` — print `halt_category` tag for a question ID (`decision|risk|shortcut|archiving|mechanical_proceed`) or `ask` for unknown IDs; always exits 0
-- `scripts/config.py:2071` — `_load_axiom_store_module` — dynamically load `scripts/axiom-store.py` via importlib (hyphen in filename); cached per process; returns None when absent or fails
-- `scripts/config.py:2109` — `_load_axiom_matches` — load graph-valid approved axioms for a question_id; gated on `axioms.enabled`; returns `[]` when disabled or store absent
-- `scripts/config.py:2208` — `_resolve_memory_matches` — merge memory match list; highest strength wins on agreement; returns `(None, 'conflict', sources)` when entries disagree
-- `scripts/config.py:2244` — `_resolve_config_memory_envelope` — pre-axiom resolution: config + routing-pref memory; returns 7-tuple including `resolved_value` and `memory_silent` signals for axiom layer
-- `scripts/config.py:2475` — `_build_resolve_envelope` — full resolver: apply axiom layer on top of config+memory envelope; agree/gap-fill/direct-conflict axiom outcomes; returns 5-tuple
-- `scripts/config.py:2622` — `cmd_resolve_question` — consult 4-layer config + memory + axioms + overnight overrides; return JSON `{result, default, source, rule_id, strength, reason, sources[]}`; stdout reserved for JSON
-- `scripts/config.py:2879` — `cmd_check_no_ask` — overnight-gate checker with cost-gate delegation path (`--range-high`/`--severity`); returns `{result: halt|proceed|auto_proceed|unhandled_gate, question_id, rule_id}`; always exits 0
-- `scripts/config.py:3148` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success
-- `scripts/config.py:3262` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`; not settable via TOML
-- `scripts/config.py:3311` — `cmd_inspect_all` — print all config knobs with value/source/persistence_class; covers DEFAULTS keys + QUESTION_IDS + ENV_ONLY_KNOBS; `--json` for machine-parseable output
-- `scripts/config.py:3456` — `cmd_should_notify` — print `yes|no` for a given event kind; always exits 0; exits 2 on unknown event; valid kinds: `approval`, `phase_end`, `error`
-- `scripts/config.py:3547` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` to `-cli` suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error
+- `scripts/config.py:61` — `DEFAULTS` — built-in defaults for all config sections including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[runtime]`, `[cost]`, `[models]`, `[model_classes]`, `[model_routing]`, `[export]`, `[changelog]` (layer 1)
+- `scripts/config.py:523` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost, models, model_classes, model_routing, export keys
+- `scripts/config.py:618` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
+- `scripts/config.py:785` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys (6 workflow.* + pre_run_cost_gate); validated against VALIDATORS at module load by `_run_startup_guards`
+- `scripts/config.py:860` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist: `{workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}`
+- `scripts/config.py:866` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
+- `scripts/config.py:891` — `_run_startup_guards` — module-load consistency check: asserts `QUESTION_IDS <= VALIDATORS`, every qid has skill_default and halt_category, RESULT_MAP references only valid choices; raises `SystemExit(2)` on violation
+- `scripts/config.py:988` — `_ENV_VAR_ALIASES` — dotted keys whose exported env var name differs from the mechanical `_dotted_to_env()` mapping (e.g. `runtime.consult` → `Z_HARNESS_CONSULT`)
+- `scripts/config.py:1031` — `_INGRESS_LEGACY_ALIASES` — ingress fallback map including all `_ENV_VAR_ALIASES` plus ingress-only legacies (e.g. `notify.level` → `Z_HARNESS_NOTIFY`, `runtime.max_parallel` → `HERMES_MAX_PARALLEL`)
+- `scripts/config.py:1061` — `LEGAL_ENV_KEYS` / `LEGAL_ENV_PREFIXES` — allowlist of plumbing and unattended-entry env vars that never trigger the deprecation warning
+- `scripts/config.py:1379` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts; TOML wins over env for preference-class vars
+- `scripts/config.py:1711` — `cmd_get` — resolve and print single dotted-key value; exits 3 on unknown or meta key
+- `scripts/config.py:1742` — `cmd_get_batch` — resolve multiple keys in one process; output JSON object; unknown/meta keys → null + stderr; always exits 0
+- `scripts/config.py:1837` — `cmd_export_env` — print export+unset lines for all user knobs; emit `config_resolved` once per run; emit `config_env_deprecated` per deprecated var
+- `scripts/config.py:1900` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent; never overwrites existing file
+- `scripts/config.py:1977` — `cmd_explain` — print effective value and source layer for one key
+- `scripts/config.py:2009` — `cmd_list_question_ids` — print sorted JSON array of registered question IDs
+- `scripts/config.py:2014` — `cmd_resolve_halt_category` — print `halt_category` tag for a question ID (`decision|risk|shortcut|archiving|mechanical_proceed`) or `ask` for unknown IDs; always exits 0
+- `scripts/config.py:2524` — `_load_axiom_store_module` — dynamically load `scripts/axiom-store.py` via importlib (hyphen in filename); cached per process; returns None when absent or fails
+- `scripts/config.py:2562` — `_load_axiom_matches` — load graph-valid approved axioms for a question_id; gated on `axioms.enabled`; returns `[]` when disabled or store absent
+- `scripts/config.py:2661` — `_resolve_memory_matches` — merge memory match list; highest strength wins on agreement; returns `(None, 'conflict', sources)` when entries disagree
+- `scripts/config.py:2697` — `_resolve_config_memory_envelope` — pre-axiom resolution: config + routing-pref memory; returns 7-tuple including `resolved_value` and `memory_silent` signals for axiom layer
+- `scripts/config.py:2928` — `_build_resolve_envelope` — full resolver: apply axiom layer on top of config+memory envelope; agree/gap-fill/direct-conflict axiom outcomes; returns 5-tuple
+- `scripts/config.py:3075` — `cmd_resolve_question` — consult 4-layer config + memory + axioms + overnight overrides; return JSON `{result, default, source, rule_id, strength, reason, sources[]}`; stdout reserved for JSON
+- `scripts/config.py:3364` — `cmd_check_no_ask` — overnight-gate checker with cost-gate delegation path (`--range-high`/`--severity`); returns `{result: halt|proceed|auto_proceed|unhandled_gate, question_id, rule_id}`; always exits 0
+- `scripts/config.py:3633` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success
+- `scripts/config.py:3747` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`; not settable via TOML
+- `scripts/config.py:3796` — `cmd_inspect_all` — print all config knobs with value/source/persistence_class; covers DEFAULTS keys + QUESTION_IDS + ENV_ONLY_KNOBS; `--json` for machine-parseable output
+- `scripts/config.py:3941` — `cmd_should_notify` — print `yes|no` for a given event kind; always exits 0; exits 2 on unknown event; valid kinds: `approval`, `phase_end`, `error`
+- `scripts/config.py:4034` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` to `-cli` suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error
 - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walk `metrics.jsonl` for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others

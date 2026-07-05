@@ -20,6 +20,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -27,7 +28,13 @@ from pathlib import Path
 import pytest
 
 from runtime.dispatch.driver import DispatchHandle, HostDriver
-from runtime.dispatch.dispatcher import Dispatcher, _compose_argv
+from runtime.dispatch.dispatcher import (
+    Dispatcher,
+    _compose_argv,
+    resolve_implementer_model,
+    resolve_model_route,
+    resolve_native_agent_model,
+)
 from runtime.dispatch.env import build_env
 from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError, TimeoutReaper
@@ -861,6 +868,164 @@ def test_dispatcher_run_null_model_arg_template_unaffected(monkeypatch, tmp_path
     )
 
 
+
+def test_dispatcher_provider_preflight_ok_emitted(monkeypatch, tmp_path):
+    captured = _capture_events(monkeypatch)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "fake-llm"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    provider_config = {
+        "provider": "codex-cli",
+        "command": "fake-llm",
+        "args_template": ["exec", "-"],
+        "model_arg_template": None,
+        "default_model": None,
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-review",
+        [],
+        provider_config,
+        role="reviewer",
+        runtime="codex-cli",
+        model="gpt-5-codex",
+    )
+
+    preflight = [p for kind, p in captured if kind == "provider_preflight_ok"]
+    assert len(preflight) == 1
+    payload = preflight[0]
+    assert payload["role"] == "reviewer"
+    assert payload["provider"] == "codex-cli"
+    assert payload["attempted_model"] == "gpt-5-codex"
+    assert payload["auth_backend"] == "cli-managed"
+    assert payload["auth_ready"] == "not_required"
+
+
+def test_dispatcher_provider_preflight_missing_command_fails(monkeypatch, tmp_path):
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "provider": "missing-provider",
+        "command": "definitely-not-on-path-zh",
+        "args_template": [],
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    with pytest.raises(RuntimeError, match="provider_preflight_failed"):
+        dispatcher.run(
+            driver,
+            "z-review",
+            [],
+            provider_config,
+            role="reviewer",
+            runtime="missing-provider",
+        )
+
+    failed = [p for kind, p in captured if kind == "provider_preflight_failed"]
+    assert len(failed) == 1
+    assert failed[0]["role"] == "reviewer"
+    assert failed[0]["provider"] == "missing-provider"
+    assert "not on PATH" in failed[0]["reason"]
+
+
+@pytest.mark.parametrize("command_value", [None, ""])
+def test_dispatcher_provider_preflight_empty_command_fails(
+    command_value, monkeypatch, tmp_path
+):
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "provider": "empty-command-provider",
+        "args_template": [],
+    }
+    if command_value is not None:
+        provider_config["command"] = command_value
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    with pytest.raises(RuntimeError, match="provider_preflight_failed"):
+        dispatcher.run(
+            driver,
+            "z-review",
+            [],
+            provider_config,
+            role="reviewer",
+            runtime="empty-command-provider",
+        )
+
+    failed = [p for kind, p in captured if kind == "provider_preflight_failed"]
+    assert len(failed) == 1
+    assert failed[0]["role"] == "reviewer"
+    assert failed[0]["provider"] == "empty-command-provider"
+    assert "provider command is empty" in failed[0]["reason"]
+
+
+def test_dispatcher_provider_preflight_model_composition_failure_emitted(
+    monkeypatch, tmp_path
+):
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "provider": "drifted",
+        "args_template": [],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": None,
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    with pytest.raises(ValueError, match="default_model"):
+        dispatcher.run(driver, "z-review", [], provider_config, role="reviewer")
+
+    failed = [p for kind, p in captured if kind == "provider_preflight_failed"]
+    assert len(failed) == 1
+    assert failed[0]["provider"] == "drifted"
+    assert "argv/model composition failed" in failed[0]["reason"]
+
+
+def test_dispatcher_provider_metadata_env_reaches_driver(monkeypatch, tmp_path):
+    captured = _capture_events(monkeypatch)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "fake-llm"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    provider_config = {
+        "provider": "codex-cli",
+        "command": "fake-llm",
+        "args_template": [],
+        "model_arg_template": None,
+        "default_model": None,
+    }
+    driver = _EnvCapturingDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-review",
+        [],
+        provider_config,
+        role="reviewer",
+        runtime="codex-cli",
+    )
+
+    assert driver._captured_env is not None
+    assert driver._captured_env["Z_HARNESS_RUN_ID"] == "test-run-001"
+    assert driver._captured_env["Z_HARNESS_PROVIDER_ROLE"] == "reviewer"
+    assert [kind for kind, _payload in captured].count("provider_preflight_ok") == 1
+
 # ---------------------------------------------------------------------------
 # T007: persona_bound attribution tuple extension
 # ---------------------------------------------------------------------------
@@ -1066,3 +1231,194 @@ def test_reviewer_participant_invalid_value_raises(monkeypatch, tmp_path):
             driver, "z-review", [], provider_config,
             reviewer_participant="base_codex_arm",  # typo / invalid value
         )
+
+
+# ---------------------------------------------------------------------------
+# T002 model routing resolver
+# ---------------------------------------------------------------------------
+
+
+def _routing_defaults() -> dict[str, object]:
+    return {
+        "model_classes.cheap.model": "haiku",
+        "model_classes.cheap.thinking": "",
+        "model_classes.cheap.reasoning": "",
+        "model_classes.standard.model": "sonnet",
+        "model_classes.standard.thinking": "",
+        "model_classes.standard.reasoning": "",
+        "model_classes.deep.model": "opus",
+        "model_classes.deep.thinking": "max",
+        "model_classes.deep.reasoning": "extended",
+        "model_routing.native_agents.default": "",
+        "model_routing.implementer.low": "sonnet",
+        "model_routing.implementer.medium": "sonnet",
+        "model_routing.implementer.high": "opus",
+        "model_routing.implementer.retry": "opus",
+    }
+
+
+def test_model_route_class_expands_model_and_metadata():
+    values = _routing_defaults()
+    values["model_classes.local_deep.model"] = "claude-opus-4.5"
+    values["model_classes.local_deep.thinking"] = "budget:high"
+    values["model_classes.local_deep.reasoning"] = "effort:high"
+
+    resolved = resolve_model_route("local_deep", values, source="test")
+
+    assert resolved.effective_model == "claude-opus-4.5"
+    assert resolved.route_kind == "class"
+    assert resolved.thinking == "budget:high"
+    assert resolved.reasoning == "effort:high"
+
+
+def test_model_route_exact_model_returns_itself():
+    resolved = resolve_model_route(
+        "anthropic/claude-sonnet-4.5",
+        _routing_defaults(),
+        source="model_routing.native_agents.explore",
+    )
+
+    assert resolved.effective_model == "anthropic/claude-sonnet-4.5"
+    assert resolved.route_kind == "exact"
+    assert resolved.source == "model_routing.native_agents.explore"
+
+
+def test_implementer_tier_defaults_preserve_current_labels():
+    values = _routing_defaults()
+
+    assert resolve_implementer_model("low", values).effective_model == "sonnet"
+    assert resolve_implementer_model("medium", values).effective_model == "sonnet"
+    assert resolve_implementer_model("high", values).effective_model == "opus"
+    assert resolve_implementer_model("retry", values).effective_model == "opus"
+
+
+def test_implementer_tier_can_route_through_class():
+    values = _routing_defaults()
+    values["model_routing.implementer.high"] = "deep"
+
+    resolved = resolve_implementer_model("high", values)
+
+    assert resolved.effective_model == "opus"
+    assert resolved.source == "model_routing.implementer.high"
+    assert resolved.route == "deep"
+    assert resolved.route_kind == "class"
+
+
+def test_native_agent_exact_default_and_frontmatter_precedence():
+    values = _routing_defaults()
+    values["model_classes.local_fast.model"] = "ollama/qwen3:8b"
+    values["model_classes.local_fast.thinking"] = ""
+    values["model_classes.local_fast.reasoning"] = ""
+    values["model_routing.native_agents.default"] = "cheap"
+    values["model_routing.native_agents.explore"] = "local_fast"
+
+    exact = resolve_native_agent_model("explore", "haiku", values)
+    via_default = resolve_native_agent_model("reviewer", "sonnet", values)
+
+    assert exact.effective_model == "ollama/qwen3:8b"
+    assert exact.source == "model_routing.native_agents.explore"
+    values["model_routing.native_agents.auditor"] = "anthropic/claude-sonnet-4.5"
+    exact_model = resolve_native_agent_model("auditor", "sonnet", values)
+    assert exact_model.effective_model == "anthropic/claude-sonnet-4.5"
+    assert exact_model.route_kind == "exact"
+    assert exact_model.source == "model_routing.native_agents.auditor"
+
+    assert exact.route_kind == "class"
+    assert via_default.effective_model == "haiku"
+    assert via_default.source == "model_routing.native_agents.default"
+
+    values["model_routing.native_agents.default"] = ""
+    fallback = resolve_native_agent_model("reviewer", "sonnet", values)
+    assert fallback.effective_model == "sonnet"
+    assert fallback.source == "frontmatter"
+    assert fallback.override_applied is False
+    assert fallback.override_support == "frontmatter"
+    values["model_routing.native_agents.doc_fetcher"] = "deep"
+    hyphen_id = resolve_native_agent_model("doc-fetcher", "haiku", values)
+    assert hyphen_id.effective_model == "opus"
+    assert hyphen_id.source == "model_routing.native_agents.doc_fetcher"
+
+
+
+def test_dispatcher_model_resolved_telemetry_source_and_applied(monkeypatch, tmp_path):
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "args_template": [],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": "sonnet",
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-subagent-dispatch",
+        [],
+        provider_config,
+        model="claude-opus-4.5",
+        model_source="model_routing.native_agents.implementer",
+        model_route="deep",
+        model_route_kind="class",
+        model_override_applied=True,
+        model_override_support="applied",
+    )
+
+    model_events = [payload for kind, payload in captured if kind == "model_resolved"]
+    assert len(model_events) == 1
+    payload = model_events[0]
+    assert payload["effective_model"] == "claude-opus-4.5"
+    assert payload["source"] == "model_routing.native_agents.implementer"
+    assert payload["route"] == "deep"
+    assert payload["route_kind"] == "class"
+    assert payload["override_applied"] is True
+    assert payload["override_support"] == "applied"
+
+
+def test_dispatcher_model_resolved_telemetry_advisory_when_host_cannot_apply(
+    monkeypatch, tmp_path
+):
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "args_template": [],
+        "model_arg_template": None,
+        "default_model": None,
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-subagent-dispatch",
+        [],
+        provider_config,
+        model="claude-opus-4.5",
+        model_source="model_routing.implementer.retry",
+    )
+
+    payload = [p for kind, p in captured if kind == "model_resolved"][0]
+    assert payload["source"] == "model_routing.implementer.retry"
+    assert payload["override_applied"] is False
+    assert payload["override_support"] == "advisory"
+
+
+def test_routed_model_source_does_not_emit_legacy_override_event(monkeypatch, tmp_path):
+    captured = _capture_events(monkeypatch)
+    provider_config = {"args_template": []}
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-subagent-dispatch",
+        [],
+        provider_config,
+        model="sonnet",
+        model_source="frontmatter",
+    )
+
+    assert "persona_override_used" not in [kind for kind, _payload in captured]
+    model_payload = [p for kind, p in captured if kind == "model_resolved"][0]
+    assert model_payload["source"] == "frontmatter"

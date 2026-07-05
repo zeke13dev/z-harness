@@ -566,11 +566,61 @@ def _needs_input(text: str) -> bool:
 #: Navigation-footer phrases that mark a selection menu but carry no answer
 #: value themselves — dropped from the extracted context.
 _MENU_FOOTER_HINTS = ("up/down", "enter select", "esc cancel", "tab ")
+_FOOTER_ANCHOR_HINTS = ("enter select", "esc cancel")
+_LEADING_PUA = re.compile("^[\ue000-\uf8ff\U000f0000-\U0010fffd]+")
+_MENU_GLYPHS = ("●", "○", "◉", "◯", "☑", "☐", "✓", "✔", "❯")
+_MENU_PUA_GLYPHS = ("", "")
+_TUI_CHROME_PREFIXES = ("╭", "╰", "├", "└", "┌", "┐", "┘", "┴", "┬", "┤", "╞", "╪")
+_SHELL_NOISE_PREFIXES = (
+    "$ ",
+    "BASE=",
+    "RUN=",
+    "bash scripts/",
+    "cat >>",
+    "cp ",
+    "diff ",
+    "git ",
+    "EOF",
+    "python -m",
+    "python3 -m",
+    "python3 -c",
+    "print(json.dumps",
+    "sed -n",
+    "set -",
+    "tmux ",
+    "wc ",
+)
+_TOOL_OUTPUT_NOISE = {"(no output)"}
 
 
 def _is_rule(stripped: str) -> bool:
     """True for a pure box-drawing separator rule (─, —, -, =, _)."""
     return bool(stripped) and all(ch in "─—-=_" for ch in stripped)
+
+
+def _is_tui_chrome(stripped: str) -> bool:
+    """True for terminal UI frame/prompt lines that are not answer context."""
+    if stripped.startswith(_TUI_CHROME_PREFIXES):
+        return True
+    if "⟨Wall:" in stripped or "Ctrl+O: Expand" in stripped:
+        return True
+    return False
+
+
+def _is_shell_noise(stripped: str) -> bool:
+    """True for command transcript lines that should not appear in alerts."""
+    return stripped.startswith(_SHELL_NOISE_PREFIXES)
+
+
+def _has_menu_footer(text: str) -> bool:
+    return any(hint in text.lower() for hint in _FOOTER_ANCHOR_HINTS)
+
+
+def _has_menu_marker(label: str) -> bool:
+    stripped = label.strip()
+    return bool(stripped) and (
+        stripped.startswith(_MENU_GLYPHS) or stripped.startswith(_MENU_PUA_GLYPHS)
+    )
 
 
 def _extract_needs_input_context(text: str, *, limit: int = 1600) -> str:
@@ -590,12 +640,14 @@ def _extract_needs_input_context(text: str, *, limit: int = 1600) -> str:
         stripped = raw.strip()
         if not stripped or _is_rule(stripped):
             continue
+        if _is_tui_chrome(stripped) or _is_shell_noise(stripped):
+            continue
         low = stripped.lower()
         if any(hint in low for hint in _MENU_FOOTER_HINTS):
             continue
         # Unwrap box rows: strip leading/trailing vertical borders + padding.
         inner = stripped.strip("│|").strip()
-        if inner:
+        if inner and not _is_shell_noise(inner) and inner not in _TOOL_OUTPUT_NOISE:
             cleaned.append(inner)
     summary = "\n".join(cleaned).strip()
     if not summary:
@@ -612,9 +664,12 @@ def _extract_menu_options(text: str) -> list[str]:
     ``│    description │`` row directly below them. Only the flush label rows
     are option text — indented rows, separator rules, the nav footer, and any
     question prose above the box are not options. Returns ``[]`` when the pane
-    has no box-drawn menu (e.g. a bare ``❯`` prompt).
+    has no real menu evidence (footer/selectable marker), even if it contains
+    box-drawn status rows.
     """
+    has_footer = _has_menu_footer(text)
     options: list[str] = []
+    marker_seen = False
     for raw in text.strip("\n").splitlines():
         stripped = raw.strip()
         if not stripped or _is_rule(stripped):
@@ -633,7 +688,11 @@ def _extract_menu_options(text: str) -> list[str]:
             continue
         label = inner.strip()
         if label:
+            marker_seen = marker_seen or _has_menu_marker(label)
+            label = _LEADING_PUA.sub("", label).strip()
             options.append(label)
+    if not has_footer and not marker_seen:
+        return []
     return options
 
 
@@ -970,13 +1029,12 @@ def navigate_so_session(
     runner: Optional[CommandRunner] = None,
     store: Optional[SoSessionStore] = None,
 ) -> SoSessionRecord:
-    """Drive a reaction-index selection into the session's tmux pane.
+    """Select an SO menu option by zero-based reaction index.
 
-    Re-reads the pane and only sends keystrokes if it is CURRENTLY at a menu
-    (``_extract_menu_options`` non-empty) and ``option_index`` is in range.
-    Otherwise this is a benign no-op — the reaction may have landed after the
-    menu moved on, and stray keystrokes into a non-menu pane would be worse
-    than doing nothing.
+    The tmux pane is captured first and parsed for the current box-drawn menu.
+    If the pane is no longer showing a selectable menu, or the requested index
+    is stale/out of range, no keys are sent and the stored record is left
+    unchanged.
     """
     runner = runner or SubprocessCommandRunner()
     store = store or SoSessionStore.from_config(config)

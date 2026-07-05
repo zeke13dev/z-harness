@@ -115,7 +115,7 @@
       "line": 195,
       "symbol": "export",
       "kind": "fn",
-      "summary": "Emit Codex prompt files and consolidated AGENTS.md; validate prompts; fidelity=flattened"
+      "summary": "Emit Codex skills/<id>/SKILL.md files, .codex-plugin/plugin.json, and consolidated AGENTS.md; validate exported skills/manifest; fidelity=flattened"
     },
     {
       "file": "runtime/drivers/codex/export.py",
@@ -127,9 +127,9 @@
     {
       "file": "runtime/drivers/codex/export.py",
       "line": 85,
-      "symbol": "_render_prompt",
+      "symbol": "_render_native_skill",
       "kind": "fn",
-      "summary": "Render command or skill as Codex prompt with # /<id> header"
+      "summary": "Render a source skill into Codex's native skills/<id>/SKILL.md plugin layout"
     },
     {
       "file": "runtime/drivers/codex/export.py",
@@ -295,7 +295,7 @@
     "output_path_for intentionally omits agy — the agy exporter owns a dual layout (.agent/ + prompts/) that cannot be expressed as a single path",
     "/z-export uses exports/<target>/ as the canonical mirror destination. --in-place still writes into cwd for live workspace install, and lower-level --out <dest> remains available for ad hoc exports.",
     "inline_includes accepts base_dir for API symmetry but never uses it; resolution is always relative to repo_root (preserved quirk from legacy export-common.py)",
-    "Codex consolidates all agents into AGENTS.md — no per-agent prompt files are emitted",
+    "Codex exports skills as native skills/<id>/SKILL.md files discovered through .codex-plugin/plugin.json; agents consolidate into AGENTS.md and no per-agent prompt files are emitted",
     "agy _ALWAYS_ON_AGENTS is defined in _export_utils.py and imported by antigravity/export.py (not redefined there); single source of truth covers implementer, reviewer, auditor, mr-reviewer, remote-runner",
     "agy-plugin.yaml is a z-harness convention manifest; Antigravity does not read it natively",
     "Antigravity workflow bodies have an ~12,000 character limit; several z-harness commands exceed it",

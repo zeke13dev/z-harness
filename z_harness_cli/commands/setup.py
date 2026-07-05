@@ -151,7 +151,7 @@ def _next_steps(targets: list[str]) -> None:
     if "cursor" in targets:
         typer.echo("- Cursor (dev/advanced export-only): export `.cursor/skills`/rules into a project, then open Cursor Agent there.")
     if "codex" in targets:
-        typer.echo("- Codex (dev/source plugin): restart Codex after plugin install; MCP registration is global and removable with `doctor --clear-mcp`.")
+        typer.echo("- Codex: restart Codex after plugin install; MCP registration is global and removable with `doctor --clear-mcp`.")
     typer.echo("- Deep config remains in-harness: run `/z-setup wizard` from your chosen harness.")
 
 
@@ -169,7 +169,7 @@ def run(
     targets = _normalize_targets(target, surface=surface)
     selected = set(targets)
 
-    typer.echo("z-harness setup — release defaults: Claude Code plugin + OMP package/export")
+    typer.echo("z-harness setup — release defaults: Claude Code plugin + OMP package/export + Codex plugin")
     _print_host_summary(_detect_hosts(selected, surface=surface), selected)
 
     _echo_section("Plan")

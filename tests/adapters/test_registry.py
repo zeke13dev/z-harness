@@ -272,19 +272,26 @@ class TestSelectAuto(unittest.TestCase):
         self.assertEqual(adapter.name, "claude")
 
 
-    def test_prod_auto_select_ignores_non_core_installed_hosts(self):
-        """Installed prod auto-selection defaults to Claude/OMP only."""
+    def test_prod_auto_select_uses_public_release_order(self):
+        """Installed prod auto-selection defaults to the public release host order."""
         with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), _patch_all_detect({"codex", "omp"}):
             adapter, result = select(interactive=False)
         self.assertEqual(adapter.name, "omp")
         self.assertTrue(result.installed)
 
-    def test_prod_auto_select_errors_when_only_advanced_hosts_installed(self):
+    def test_prod_auto_select_accepts_codex_without_claude_or_omp(self):
         with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), _patch_all_detect({"cursor", "codex"}):
+            adapter, result = select(interactive=False)
+        self.assertEqual(adapter.name, "codex")
+        self.assertTrue(result.installed)
+
+    def test_prod_auto_select_errors_when_only_advanced_hosts_installed(self):
+        with patch.dict(os.environ, {"Z_HARNESS_RELEASE_SURFACE": "prod"}, clear=False), _patch_all_detect({"cursor"}):
             with self.assertRaises(NoHostInstalledError) as ctx:
                 select(interactive=False)
         self.assertIn("claude", str(ctx.exception))
         self.assertIn("omp", str(ctx.exception))
+        self.assertIn("codex", str(ctx.exception))
     def test_multiple_installed_interactive_calls_picker(self):
         """With interactive=True and multiple installed, the Rich picker is invoked."""
         # We patch _rich_picker_rich to avoid needing a real terminal, and verify it's called.

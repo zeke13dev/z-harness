@@ -291,7 +291,7 @@ def run(
                 typer.echo("Error: no installed hosts found.", err=True)
             else:
                 typer.echo(
-                    "Error: no installed release-supported hosts found (Claude or OMP). "
+                    "Error: no installed release-supported hosts found (Claude, OMP, or Codex). "
                     "Use --host with an explicit dev/advanced target if needed.",
                     err=True,
                 )
@@ -317,7 +317,7 @@ def run(
         if resolved_surface == "prod" and host not in release_surface.public_release_hosts():
             typer.echo(
                 f"warning: {host} is an explicit dev/advanced or export-only target; "
-                "prod defaults are Claude and OMP.",
+                "prod defaults are Claude, OMP, and Codex.",
                 err=True,
             )
         # Single explicit host — write directly to dest, no sub-directory.

@@ -97,6 +97,9 @@ class AgentDef:
     description: str
     model: str
     tools: list[str] = field(default_factory=list)
+    model_class: str = ""
+    thinking: str = ""
+    reasoning: str = ""
     prompt_template: str = ""
 
 
@@ -139,7 +142,9 @@ def _load_agent(name: str) -> AgentDef:
 
     return AgentDef(
         name=fm["name"], description=fm.get("description", ""),
-        model=fm.get("model", ""), tools=tools_list, prompt_template=body,
+        model=fm.get("model", ""), model_class=fm.get("model_class", ""),
+        thinking=fm.get("thinking", ""), reasoning=fm.get("reasoning", ""),
+        tools=tools_list, prompt_template=body,
     )
 
 
@@ -339,6 +344,13 @@ class MCPDispatcher:
                 result = dispatcher.run(
                     driver=driver, command_id=cmd_id, caller_args=caller_args,
                     provider_config=provider_config, model=self._args.get("model"),
+                    model_source=self._args.get("model_source"),
+                    model_route=self._args.get("model_route"),
+                    model_route_kind=self._args.get("model_route_kind"),
+                    model_thinking=self._args.get("model_thinking"),
+                    model_reasoning=self._args.get("model_reasoning"),
+                    model_override_applied=self._args.get("model_override_applied"),
+                    model_override_support=self._args.get("model_override_support"),
                 )
             except Exception as exc:
                 return ToolResult.error(f"Dispatch error: {exc}")
@@ -695,10 +707,43 @@ def _handle_subagent_dispatch(args: dict[str, Any], progress_callback: Any) -> T
     except RuntimeError as exc:
         return ToolResult.error(str(exc))
 
-    # Use the subagent dispatch tool name for provider resolution.
+    try:
+        from runtime.dispatch.dispatcher import (
+            load_model_routing_config,
+            resolve_model_route,
+            resolve_native_agent_model,
+        )
+        config_values = load_model_routing_config(repo_root)
+        if args.get("model"):
+            route = resolve_model_route(
+                str(args["model"]),
+                config_values,
+                source="caller",
+                override_applied=False,
+                override_support="advisory",
+            )
+        else:
+            route = resolve_native_agent_model(
+                agent_def.name,
+                agent_def.model_class or agent_def.model,
+                config_values,
+                override_applied=False,
+                override_support="advisory",
+            )
+    except Exception as exc:
+        return ToolResult.error(f"Model routing failed for agent '{agent_name}': {exc}")
+
+    # Use the subagent dispatch tool name for provider resolution. Native MCP
+    # subagent routing resolves the effective label here; Dispatcher telemetry
+    # infers whether the selected provider can apply the model or only record it.
     enriched_args = {
         "prompt": full_prompt,
-        "model": args.get("model") or agent_def.model,
+        "model": route.effective_model,
+        "model_source": route.source,
+        "model_route": route.route,
+        "model_route_kind": route.route_kind,
+        "model_thinking": route.thinking,
+        "model_reasoning": route.reasoning,
         "slug": args.get("slug"),
     }
     dispatcher = MCPDispatcher(repo_root, "z_subagent_dispatch", enriched_args, progress_callback)

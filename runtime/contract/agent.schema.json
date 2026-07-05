@@ -27,12 +27,21 @@
     },
     "model": {
       "type": "string",
-      "enum": [
-        "haiku",
-        "sonnet",
-        "opus"
-      ],
-      "description": "Claude model tier to use for this agent."
+      "minLength": 1,
+      "description": "Native model fallback label from frontmatter. May be a built-in tier (haiku, sonnet, opus) or an exact host model label; model_routing.native_agents can override it by agent id."
+    },
+    "model_class": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional model class route name. When present, native dispatch may resolve it through model_classes.<class>.model before falling back to model."
+    },
+    "thinking": {
+      "type": "string",
+      "description": "Optional host-specific thinking metadata for this agent's frontmatter fallback."
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Optional host-specific reasoning metadata for this agent's frontmatter fallback."
     },
     "tools": {
       "type": "array",

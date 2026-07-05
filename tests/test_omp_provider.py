@@ -1,8 +1,8 @@
 """
 Tests for the oh-my-pi (omp) consult-arm provider entries.
 
-Covers the pi-first-class plan: the `omp-codex` / `omp-gemini` provider entries dispatch
-through the `omp-consult.sh` stdin->arg adapter, the consultant roles resolve to them, and
+Covers the pi-first-class plan: the `omp-codex` provider and `omp-gemini` alias dispatch
+through the `omp-consult.sh` stdin->arg adapter, the consultant roles resolve through them, and
 the reviewer role stays on native codex (D2 — reviewer gate is not routed through omp).
 
 These tests are fully isolated from the live repo config: both Z_HARNESS_REPO_PROVIDERS
@@ -34,6 +34,10 @@ def setUpModule() -> None:
         with open(p, "w") as fh:
             fh.write("#!/bin/sh\nexit 0\n")
         os.chmod(p, 0o755)
+    omp = os.path.join(_STUB_BIN, "omp")
+    with open(omp, "w") as fh:
+        fh.write("#!/bin/sh\nif [ \"$1\" = token ]; then exit \"${OMP_TOKEN_RC:-0}\"; fi\nexit 0\n")
+    os.chmod(omp, 0o755)
 
 
 def tearDownModule() -> None:
@@ -75,9 +79,9 @@ class TestOmpProvider(unittest.TestCase):
                         "omp-codex": _omp_provider(
                             "openai-codex/gpt-5.5", "gpt-5.5 (omp/openai-codex OAuth)"
                         ),
-                        "omp-gemini": _omp_provider(
+                        "omp-antigravity-pro": _omp_provider(
                             "google-antigravity/gemini-3.1-pro",
-                            "gemini-3.1-pro (omp/google-antigravity OAuth)",
+                            "Antigravity Gemini 3.1 Pro (omp/google-antigravity OAuth)",
                         ),
                         "codex-cli": {
                             "kind": "cli",
@@ -91,6 +95,7 @@ class TestOmpProvider(unittest.TestCase):
                             "default_model": None,
                         },
                     },
+                    "aliases": {"omp-gemini": "omp-antigravity-pro"},
                 },
                 fh,
             )
@@ -102,24 +107,28 @@ class TestOmpProvider(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def _run(self, role: str) -> subprocess.CompletedProcess:
+    def _run(self, role: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:
         env = {
             **os.environ,
             "Z_HARNESS_REPO_PROVIDERS": self._providers,
             "Z_HARNESS_REPO_CONFIG": self._config,
         }
+        if extra_env:
+            env.update(extra_env)
         env["PATH"] = _STUB_BIN + os.pathsep + env.get("PATH", "")
         return subprocess.run(
             [sys.executable, SCRIPT, role], env=env, capture_output=True, text=True
         )
 
-    def test_consultant_primary_resolves_omp_gemini(self):
+    def test_consultant_primary_resolves_omp_gemini_alias(self):
         r = self._run("consultant_primary")
         self.assertEqual(r.returncode, 0, r.stderr)
         d = json.loads(r.stdout)
-        self.assertEqual(d["provider"], "omp-gemini")
+        self.assertEqual(d["provider"], "omp-antigravity-pro")
         self.assertEqual(d["command"], "omp-consult.sh")
         self.assertEqual(d["args_template"], ["google-antigravity/gemini-3.1-pro"])
+        self.assertEqual(d["auth_backend"], "OMP OAuth / Antigravity")
+        self.assertEqual(d["auth_provider"], "google-antigravity")
         self.assertTrue(d["stdin"])
 
     def test_consultant_secondary_resolves_omp_codex(self):
@@ -128,7 +137,18 @@ class TestOmpProvider(unittest.TestCase):
         d = json.loads(r.stdout)
         self.assertEqual(d["provider"], "omp-codex")
         self.assertEqual(d["command"], "omp-consult.sh")
+        self.assertEqual(d["auth_backend"], "OMP OAuth / Codex")
+        self.assertEqual(d["auth_provider"], "openai-codex")
         self.assertEqual(d["args_template"], ["openai-codex/gpt-5.5"])
+
+    def test_omp_auth_failure_fails_preflight_actionably(self):
+        r = self._run("consultant_secondary", {"OMP_TOKEN_RC": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("provider_preflight_failed", r.stderr)
+        self.assertIn("role=consultant_secondary", r.stderr)
+        self.assertIn("provider=omp-codex", r.stderr)
+        self.assertIn("auth_backend=OMP OAuth / Codex", r.stderr)
+        self.assertIn("auth not ready", r.stderr)
 
     def test_reviewer_stays_native_codex(self):
         """D2: the blocking reviewer gate is NOT routed through omp."""
@@ -155,17 +175,24 @@ class TestOmpAdapterFallback(unittest.TestCase):
 
     def setUp(self):
         self._bin = tempfile.mkdtemp(prefix="zh-omp-fb-")
-        # Stub `omp` that always fails, so the adapter must take the fallback path.
+        # Stub `omp`: auth token succeeds by default, but print mode fails so
+        # fallback behavior is exercised without a real OMP install.
         omp = os.path.join(self._bin, "omp")
         with open(omp, "w") as fh:
-            fh.write("#!/bin/sh\nexit 1\n")
+            fh.write(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = token ]; then exit \"${OMP_TOKEN_RC:-0}\"; fi\n"
+                "exit 1\n"
+            )
         os.chmod(omp, 0o755)
 
     def tearDown(self):
         shutil.rmtree(self._bin, ignore_errors=True)
 
-    def _run(self, args, prompt):
+    def _run(self, args, prompt, extra_env=None):
         env = {**os.environ, "PATH": self._bin + os.pathsep + os.environ.get("PATH", "")}
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             ["bash", self.ADAPTER, *args],
             input=prompt,
@@ -181,9 +208,114 @@ class TestOmpAdapterFallback(unittest.TestCase):
         self.assertIn("PROMPT_BODY_42", r.stdout)
         self.assertIn("DEGRADED", r.stderr)
 
+    def test_fallback_emits_provider_fallback_used_without_prompt(self):
+        base = tempfile.mkdtemp(prefix="zh-omp-events-")
+        try:
+            r = self._run(
+                ["openai-codex/gpt-5.5", "--fallback", "cat"],
+                "PROMPT_BODY_42",
+                {
+                    "Z_HARNESS_BASE_DIR": base,
+                    "Z_HARNESS_RUN_ID": "test-fallback-run",
+                    "Z_HARNESS_SLUG": "",
+                    "Z_HARNESS_PROVIDER_ROLE": "consultant_secondary",
+                },
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            metrics = Path(base) / "metrics.jsonl"
+            rows = [
+                json.loads(line)
+                for line in metrics.read_text().splitlines()
+                if line.strip()
+            ]
+            event = next(row for row in rows if row.get("kind") == "provider_fallback_used")
+            self.assertEqual(event["role"], "consultant_secondary")
+            self.assertEqual(event["provider"], "omp-codex")
+            self.assertEqual(event["attempted_model"], "openai-codex/gpt-5.5")
+            self.assertEqual(event["auth_backend"], "OMP OAuth / Codex")
+            self.assertEqual(event["fallback_provider"], "cat")
+            self.assertNotIn("PROMPT_BODY_42", json.dumps(event))
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
     def test_fails_loud_when_omp_fails_and_no_fallback(self):
         r = self._run(["bogus/model"], "PROMPT_BODY_42")
         self.assertEqual(r.returncode, 3)
+        self.assertIn("no --fallback configured", r.stderr)
+
+    def test_auth_failure_does_not_fallback(self):
+        base = tempfile.mkdtemp(prefix="zh-omp-auth-events-")
+        try:
+            r = self._run(
+                ["openai-codex/gpt-5.5", "--fallback", "cat"],
+                "PROMPT_BODY_42",
+                {
+                    "OMP_TOKEN_RC": "1",
+                    "Z_HARNESS_BASE_DIR": base,
+                    "Z_HARNESS_RUN_ID": "test-auth-failure-run",
+                    "Z_HARNESS_SLUG": "",
+                    "Z_HARNESS_PROVIDER_ROLE": "consultant_secondary",
+                },
+            )
+            self.assertEqual(r.returncode, 3)
+            self.assertEqual(r.stdout, "")
+            self.assertIn("auth not ready", r.stderr)
+            self.assertNotIn("DEGRADED", r.stderr)
+            rows = [
+                json.loads(line)
+                for line in (Path(base) / "metrics.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            event = next(row for row in rows if row.get("kind") == "provider_preflight_failed")
+            self.assertEqual(event["role"], "consultant_secondary")
+            self.assertEqual(event["provider"], "omp-codex")
+            self.assertEqual(event["auth_backend"], "OMP OAuth / Codex")
+            self.assertIn("auth not ready", event["reason"])
+            self.assertNotIn("PROMPT_BODY_42", json.dumps(event))
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_primary_auth_session_failure_does_not_fallback(self):
+        omp = os.path.join(self._bin, "omp")
+        with open(omp, "w") as fh:
+            fh.write(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = token ]; then exit 0; fi\n"
+                "printf '%s\\n' 'Cloud Code Assist API error (404): Requested entity was not found' >&2\n"
+                "exit 1\n"
+            )
+        os.chmod(omp, 0o755)
+
+        base = tempfile.mkdtemp(prefix="zh-omp-primary-auth-events-")
+        try:
+            r = self._run(
+                ["openai-codex/gpt-5.5", "--fallback", "cat"],
+                "PROMPT_BODY_42",
+                {
+                    "Z_HARNESS_BASE_DIR": base,
+                    "Z_HARNESS_RUN_ID": "test-primary-auth-failure-run",
+                    "Z_HARNESS_SLUG": "",
+                    "Z_HARNESS_PROVIDER_ROLE": "consultant_secondary",
+                },
+            )
+            self.assertEqual(r.returncode, 3)
+            self.assertEqual(r.stdout, "")
+            self.assertIn("provider_preflight_failed", r.stderr)
+            self.assertIn("auth/session not ready", r.stderr)
+            self.assertNotIn("DEGRADED", r.stderr)
+            rows = [
+                json.loads(line)
+                for line in (Path(base) / "metrics.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            event = next(row for row in rows if row.get("kind") == "provider_preflight_failed")
+            self.assertEqual(event["role"], "consultant_secondary")
+            self.assertEqual(event["provider"], "omp-codex")
+            self.assertEqual(event["auth_backend"], "OMP OAuth / Codex")
+            self.assertIn("auth/session not ready", event["reason"])
+            self.assertNotIn("PROMPT_BODY_42", json.dumps(event))
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
 
     def test_empty_prompt_rejected(self):
         r = self._run(["bogus/model", "--fallback", "cat"], "   \n")
@@ -194,7 +326,7 @@ class TestOmpAdapterFallback(unittest.TestCase):
         # omp from loading them when it is used as a lightweight consult shim.
         omp = os.path.join(self._bin, "omp")
         with open(omp, "w") as fh:
-            fh.write("#!/bin/sh\nprintf '%s\\n' \"$*\"\n")
+            fh.write("#!/bin/sh\nif [ \"$1\" = token ]; then exit 0; fi\nprintf '%s\\n' \"$*\"\n")
         os.chmod(omp, 0o755)
 
         r = self._run(["bogus/model"], "PROMPT_BODY_42")
@@ -209,8 +341,12 @@ class TestOmpLiveEntries(unittest.TestCase):
 
     def test_live_omp_entries_carry_fallback(self):
         cfg = Path(__file__).parent.parent / ".z-harness" / "providers.json"
-        providers = json.loads(cfg.read_text())["providers"]
-        for name, native in (("omp-codex", "codex"), ("omp-gemini", "gemini")):
+        data = json.loads(cfg.read_text())
+        providers = data["providers"]
+        aliases = data.get("aliases", {})
+
+        self.assertEqual(aliases.get("omp-gemini"), "omp-antigravity-pro")
+        for name, native in (("omp-codex", "codex"), (aliases["omp-gemini"], "gemini")):
             self.assertIn(name, providers, f"{name} missing from providers.json")
             argt = providers[name]["args_template"]
             self.assertEqual(providers[name]["command"], "omp-consult.sh")
@@ -235,6 +371,107 @@ class TestOmpLiveEntries(unittest.TestCase):
         self.assertLess(len(body), 5000)
         self.assertIn("intentionally small", body)
         self.assertNotIn("## auditor", body)
+
+
+class TestOmpSupervisedProviderPath(unittest.TestCase):
+    """Integration coverage for resolve-provider -> supervised-run -> omp-consult."""
+
+    SUPERVISED_RUN = str(Path(__file__).parent.parent / "scripts" / "supervised-run.sh")
+    ADAPTER = str(Path(__file__).parent.parent / "scripts" / "omp-consult.sh")
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="zh-omp-supervised-")
+        self._providers = os.path.join(self._tmp, "providers.json")
+        with open(self._providers, "w") as fh:
+            json.dump(
+                {
+                    "version": 2,
+                    "roles": {"consultant_secondary": "omp-codex"},
+                    "providers": {
+                        "omp-codex": {
+                            **_omp_provider(
+                                "openai-codex/gpt-5.5",
+                                "gpt-5.5 (omp/openai-codex OAuth)",
+                            ),
+                            "command": self.ADAPTER,
+                            "args_template": [
+                                "openai-codex/gpt-5.5",
+                                "--fallback",
+                                "cat",
+                            ],
+                        }
+                    },
+                },
+                fh,
+            )
+        self._config = os.path.join(self._tmp, "config.toml")
+        with open(self._config, "w") as fh:
+            fh.write('schema_version = 2\n\n[runtime]\nconsult = "on"\n')
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_supervised_run_propagates_provider_metadata_to_omp_adapter(self):
+        base = tempfile.mkdtemp(prefix="zh-omp-supervised-events-")
+        slug = "supervised-omp"
+        run_id = "test-supervised-omp-run"
+        try:
+            Path(base, "plans", slug, "archive", run_id).mkdir(parents=True)
+            env = {
+                **os.environ,
+                "Z_HARNESS_BASE_DIR": base,
+                "Z_HARNESS_SLUG": slug,
+                "Z_HARNESS_PLANS_DIR": str(Path(base) / "plans"),
+                "Z_HARNESS_REPO_PROVIDERS": self._providers,
+                "Z_HARNESS_REPO_CONFIG": self._config,
+                "PATH": _STUB_BIN + os.pathsep + os.environ.get("PATH", ""),
+            }
+            env.pop("Z_HARNESS_RUN_ID", None)
+            env.pop("Z_HARNESS_PROVIDER_ROLE", None)
+
+            resolved = subprocess.run(
+                [sys.executable, SCRIPT, "consultant_secondary"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(resolved.returncode, 0, resolved.stderr)
+            descriptor = json.loads(resolved.stdout)
+            command = [descriptor["command"], *descriptor["args_template"]]
+
+            r = subprocess.run(
+                [
+                    "bash",
+                    self.SUPERVISED_RUN,
+                    "--run",
+                    run_id,
+                    "--type",
+                    "consultant_secondary",
+                    "--timeout",
+                    "5",
+                    "--",
+                    *command,
+                ],
+                input="PROMPT_BODY_42",
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("PROMPT_BODY_42", r.stdout)
+
+            events = Path(base) / "plans" / slug / "archive" / run_id / "events.jsonl"
+            rows = [json.loads(line) for line in events.read_text().splitlines() if line.strip()]
+            event = next(row for row in rows if row.get("kind") == "provider_fallback_used")
+            self.assertEqual(event["run"], run_id)
+            self.assertEqual(event["role"], "consultant_secondary")
+            self.assertEqual(event["provider"], "omp-codex")
+            self.assertEqual(event["attempted_model"], "openai-codex/gpt-5.5")
+            self.assertEqual(event["auth_backend"], "OMP OAuth / Codex")
+            self.assertEqual(event["fallback_provider"], "cat")
+            self.assertNotIn("PROMPT_BODY_42", json.dumps(event))
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -190,6 +190,41 @@ DEFAULTS: dict = {
         "implementer":          "",   # model for the implementer role
         "pre_reviewer":         "",   # model for the pre-reviewer role
     },
+    "model_classes": {
+        # Local model classes for native-agent routing.  The route resolver (added
+        # in later tasks) may interpret thinking/reasoning metadata per host; the
+        # config loader only stores validated strings.
+        "cheap": {
+            "model": "haiku",
+            "thinking": "",
+            "reasoning": "",
+        },
+        "standard": {
+            "model": "sonnet",
+            "thinking": "",
+            "reasoning": "",
+        },
+        "deep": {
+            "model": "opus",
+            "thinking": "",
+            "reasoning": "",
+        },
+    },
+    "model_routing": {
+        # Native agents default to their checked-in frontmatter model unless a
+        # specific agent key is configured under [model_routing.native_agents].
+        # This preserves cheap Haiku and standard Sonnet agent defaults exactly.
+        "native_agents": {
+            "default": "",
+        },
+        # Implementer tiers reproduce the current /z-execute model labels.
+        "implementer": {
+            "low": "sonnet",
+            "medium": "sonnet",
+            "high": "opus",
+            "retry": "opus",
+        },
+    },
     "export": {
         # Which export hosts to target.  Absent → all four current defaults.
         # Closed set: adapter names {claude, antigravity, cursor, codex} ∪
@@ -295,6 +330,156 @@ def _validate_nonempty_string(value: object) -> bool:
     return isinstance(value, str) and len(value) > 0
 
 
+def _validate_model_class_model(value: object) -> bool:
+    """Accept any non-empty string model label for a model class."""
+    return isinstance(value, str) and len(value) > 0
+
+
+def _validate_model_metadata(value: object) -> bool:
+    """Accept string metadata values; empty string means unspecified."""
+    return isinstance(value, str)
+
+
+def _validate_model_route(value: object) -> bool:
+    """Accept a non-empty model class name or exact model label."""
+    return isinstance(value, str) and len(value) > 0
+
+
+def _validate_model_route_or_empty(value: object) -> bool:
+    """Accept a model route, or empty inherit sentinel for native default."""
+    return isinstance(value, str)
+
+
+_MODEL_CLASS_FIELDS: frozenset[str] = frozenset({"model", "thinking", "reasoning"})
+_MODEL_IMPLEMENTER_TIERS: frozenset[str] = frozenset({"low", "medium", "high", "retry"})
+_DYNAMIC_MODEL_CONFIG_SECTIONS: frozenset[str] = frozenset({"model_classes", "model_routing"})
+
+
+def _reject_dynamic_model_config_nested_table(
+    section: str,
+    group: str,
+    source_label: str,
+) -> None:
+    """Reject dict/table leaves under dynamic model config sections."""
+    if section not in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+        return
+    print(
+        f"[config] {source_label}: unsupported nested table "
+        f"{section}.{group}; expected scalar route leaves",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
+def _validate_dynamic_model_config_key_shape(
+    dotted_key: str,
+    source_label: str,
+) -> None:
+    """Enforce canonical lowercase/underscore segments on dynamic model keys."""
+    for segment in dotted_key.split("."):
+        if _KEY_SEGMENT_RE.match(segment):
+            continue
+        if "-" in segment:
+            print(
+                f"[config] {source_label}: hyphenated key {dotted_key!r} is not "
+                "allowed (use underscores)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[config] {source_label}: non-canonical key segment {segment!r} "
+                f"in {dotted_key!r}; use lowercase letters, digits, and underscores",
+                file=sys.stderr,
+            )
+        sys.exit(2)
+
+
+def _reject_unsupported_dynamic_model_config_key(
+    dotted_key: str,
+    source_label: str,
+) -> None:
+    """Reject unsupported direct leaves under dynamic model config sections."""
+    print(
+        f"[config] {source_label}: unsupported model routing key {dotted_key!r}",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
+
+def _dynamic_model_config_validator(section: str, group: str, leaf: str):
+    """Return a validator for dynamic model routing keys, or None if unsupported."""
+    if section == "model_classes" and leaf in _MODEL_CLASS_FIELDS:
+        return _validate_model_class_model if leaf == "model" else _validate_model_metadata
+    if section == "model_routing":
+        if group == "native_agents":
+            return _validate_model_route_or_empty if leaf == "default" else _validate_model_route
+        if group == "implementer" and leaf in _MODEL_IMPLEMENTER_TIERS:
+            return _validate_model_route
+    return None
+
+
+def _model_class_table_has_model(
+    class_name: str,
+    fields: dict,
+    values: dict[str, object],
+    source_label: str,
+    is_global: bool,
+) -> bool:
+    """Require custom model classes to define model unless a lower layer did."""
+    if class_name in DEFAULTS.get("model_classes", {}):
+        return True
+    if "model" in fields:
+        if _validate_model_class_model(fields["model"]):
+            return True
+        msg = (
+            f"[config] {source_label}: invalid value for "
+            f"'model_classes.{class_name}.model': {fields['model']!r} — "
+            f"allowed: {_describe_allowed(_validate_model_class_model)}"
+        )
+        if is_global:
+            print(f"WARNING: {msg}; skipping class", file=sys.stderr)
+            return False
+        print(msg, file=sys.stderr)
+        sys.exit(2)
+    if f"model_classes.{class_name}.model" in values:
+        return True
+
+    msg = (
+        f"[config] {source_label}: model class {class_name!r} must define "
+        "'model' before optional thinking/reasoning metadata"
+    )
+    if is_global:
+        print(f"WARNING: {msg}; skipping class", file=sys.stderr)
+        return False
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def _fill_model_class_optional_metadata(
+    class_name: str,
+    values: dict[str, object],
+    sources: dict[str, str],
+    source_label: str,
+) -> None:
+    """Expose omitted optional metadata for custom classes as empty strings."""
+    for leaf in ("thinking", "reasoning"):
+        dotted = f"model_classes.{class_name}.{leaf}"
+        if dotted not in values:
+            values[dotted] = ""
+            sources[dotted] = source_label
+
+
+def _default_for_dotted_key(dotted_key: str) -> object:
+    """Return the DEFAULTS leaf for a 2+ segment dotted key."""
+    current: object = DEFAULTS
+    for segment in dotted_key.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            raise KeyError(dotted_key)
+        current = current[segment]
+    return current
+
+
 # Closed set of valid export host names:
 #   adapter names (handled by z_harness_cli adapters)
 #   export-only driver names (handled by runtime/drivers/<name>/export.py)
@@ -391,6 +576,22 @@ VALIDATORS: dict = {
     "models.reviewer":             _validate_any_string,
     "models.implementer":          _validate_any_string,
     "models.pre_reviewer":         _validate_any_string,
+    # model_classes.* — named classes for native-agent routing; dynamic class names allowed.
+    "model_classes.cheap.model":      _validate_model_class_model,
+    "model_classes.cheap.thinking":   _validate_model_metadata,
+    "model_classes.cheap.reasoning":  _validate_model_metadata,
+    "model_classes.standard.model":   _validate_model_class_model,
+    "model_classes.standard.thinking": _validate_model_metadata,
+    "model_classes.standard.reasoning": _validate_model_metadata,
+    "model_classes.deep.model":       _validate_model_class_model,
+    "model_classes.deep.thinking":    _validate_model_metadata,
+    "model_classes.deep.reasoning":   _validate_model_metadata,
+    # model_routing.* — config-file-only routing values; dynamic native agent keys allowed.
+    "model_routing.native_agents.default": _validate_model_route_or_empty,
+    "model_routing.implementer.low":       _validate_model_route,
+    "model_routing.implementer.medium":    _validate_model_route,
+    "model_routing.implementer.high":      _validate_model_route,
+    "model_routing.implementer.retry":     _validate_model_route,
     # export.* — closed-set validation at load time (T008)
     "export.hosts":    _validate_export_hosts,
     # "" is the sentinel meaning "defer to per-driver default".
@@ -742,6 +943,7 @@ _NOTIFY_EVENTS: set = {"approval", "phase_end", "error", "watchdog_stall", "watc
 # Valid: notify.level, roles.z_plan.consultant_primary, roles.z_plan.consultant_primary.persona
 # Invalid: roles..foo (empty segment), roles.z_plan.role.field.extra (5 segments), uppercase or hyphens
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$")
+_KEY_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -908,65 +1110,51 @@ def _is_legal_env(var_name: str) -> bool:
 
 def _validate_toml_keys(data: dict, path: str) -> None:
     """
-    Reject hyphenated keys and keys with >3-level table nesting (i.e. no dict
-    values at depth ≥4 from the root).
+    Reject non-canonical TOML key segments and table nesting deeper than the
+    supported dotted-key shape.
 
     Supported nesting depth (as TOML table headers):
       [section]                             — depth 1 (e.g. [notify])
       [section.subsection]                  — depth 2 (e.g. [workflow])
       [section.subsection.role]             — depth 3 (e.g. [roles.z_plan.consultant_primary])
 
-    Leaf values (strings, ints, etc.) may appear at any supported depth.
+    Leaf values (strings, ints, etc.) may appear at any supported depth.  Every
+    segment must use the same lowercase/underscore form enforced by _KEY_RE so
+    dynamic TOML keys cannot bypass canonical dotted-key validation.
     """
-    for top_key, value in data.items():
-        if "-" in top_key:
+
+    def reject_noncanonical(dotted: str, segment: str) -> None:
+        if "-" in segment:
             print(
-                f"[config] {path}: hyphenated key {top_key!r} is not allowed "
+                f"[config] {path}: hyphenated key {dotted!r} is not allowed "
                 "(use underscores)",
                 file=sys.stderr,
             )
-            sys.exit(2)
-        if isinstance(value, dict):
-            for sub_key, sub_val in value.items():
-                if "-" in sub_key:
+        else:
+            print(
+                f"[config] {path}: non-canonical key segment {segment!r} in "
+                f"{dotted!r}; use lowercase letters, digits, and underscores",
+                file=sys.stderr,
+            )
+        sys.exit(2)
+
+    def walk(node: dict, prefix: tuple[str, ...]) -> None:
+        for key, value in node.items():
+            dotted_parts = (*prefix, key)
+            dotted = ".".join(dotted_parts)
+            if not _KEY_SEGMENT_RE.match(key):
+                reject_noncanonical(dotted, key)
+            if isinstance(value, dict):
+                if len(dotted_parts) >= 4:
                     print(
-                        f"[config] {path}: hyphenated key {top_key!r}.{sub_key!r} "
-                        "is not allowed (use underscores)",
+                        f"[config] {path}: key {dotted!r} has >3-level "
+                        "nesting; not supported",
                         file=sys.stderr,
                     )
                     sys.exit(2)
-                if isinstance(sub_val, dict):
-                    # 3-level table nesting is allowed: [section.subsection.role]
-                    for role_key, role_val in sub_val.items():
-                        if "-" in role_key:
-                            print(
-                                f"[config] {path}: hyphenated key "
-                                f"{top_key!r}.{sub_key!r}.{role_key!r} "
-                                "is not allowed (use underscores)",
-                                file=sys.stderr,
-                            )
-                            sys.exit(2)
-                        if isinstance(role_val, dict):
-                            # role_val is a dict — this is the leaf table (depth 4)
-                            # containing actual key=value pairs; check leaf keys for hyphens
-                            # and reject any deeper nesting (depth 5+)
-                            for leaf_key, leaf_val in role_val.items():
-                                if "-" in leaf_key:
-                                    print(
-                                        f"[config] {path}: hyphenated key "
-                                        f"{top_key!r}.{sub_key!r}.{role_key!r}.{leaf_key!r} "
-                                        "is not allowed (use underscores)",
-                                        file=sys.stderr,
-                                    )
-                                    sys.exit(2)
-                                if isinstance(leaf_val, dict):
-                                    print(
-                                        f"[config] {path}: key "
-                                        f"{top_key!r}.{sub_key!r}.{role_key!r}.{leaf_key!r} "
-                                        "has >3-level nesting; not supported",
-                                        file=sys.stderr,
-                                    )
-                                    sys.exit(2)
+                walk(value, dotted_parts)
+
+    walk(data, ())
 
 
 # ---------------------------------------------------------------------------
@@ -1078,9 +1266,7 @@ def _validate_enum(dotted_key: str, value: object, source_label: str, is_global:
         )
         if is_global:
             print(f"WARNING: {msg}; falling back to default", file=sys.stderr)
-            # Get default value for this key
-            section, key = dotted_key.split(".", 1)
-            return DEFAULTS[section][key]
+            return _default_for_dotted_key(dotted_key)
         else:
             print(msg, file=sys.stderr)
             sys.exit(2)
@@ -1124,6 +1310,40 @@ def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_
         else:
             print(msg, file=sys.stderr)
             sys.exit(2)
+    return value
+
+
+def _validate_dynamic_model_config_value(
+    dotted_key: str,
+    value: object,
+    source_label: str,
+    is_global: bool,
+) -> Optional[object]:
+    """Validate supported dynamic model_classes/model_routing 3-level keys."""
+    _validate_dynamic_model_config_key_shape(dotted_key, source_label)
+    section, group, leaf = dotted_key.split(".", 2)
+    validator = _dynamic_model_config_validator(section, group, leaf)
+    if validator is None:
+        if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+            print(
+                f"[config] {source_label}: unsupported model routing key "
+                f"{dotted_key!r}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        return None
+    valid = validator(value)
+    if not valid:
+        allowed_desc = _describe_allowed(validator)
+        msg = (
+            f"[config] {source_label}: invalid value for {dotted_key!r}: "
+            f"{value!r} — allowed: {allowed_desc}"
+        )
+        if is_global:
+            print(f"WARNING: {msg}; skipping key", file=sys.stderr)
+            return None
+        print(msg, file=sys.stderr)
+        sys.exit(2)
     return value
 
 
@@ -1183,24 +1403,50 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
             if section in META_KEYS:
                 continue
             if not isinstance(sv, dict):
+                if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+                    _reject_unsupported_dynamic_model_config_key(
+                        section, str(global_path)
+                    )
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
+                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS and any(
+                        isinstance(subv, dict) for subv in v.values()
+                    ):
+                        _reject_dynamic_model_config_nested_table(
+                            section, k, str(global_path)
+                        )
                     # 3-level table nesting: two sub-cases:
                     # (a) watchdog.timeout_secs — dict of scalar leaves (section.k.subk)
                     # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
                     is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
                     if is_scalar_dict:
+                        if (
+                            section == "model_classes"
+                            and not _model_class_table_has_model(
+                                k, v, values, str(global_path), is_global=True
+                            )
+                        ):
+                            continue
                         # Case (a): expand each leaf as a 3-level dotted key.
                         for subk, subv in v.items():
                             dotted = f"{section}.{k}.{subk}"
-                            if dotted not in flat_defaults:
-                                continue
-                            subv = _validate_enum(dotted, subv, str(global_path), is_global=True)
+                            if dotted in flat_defaults:
+                                subv = _validate_enum(dotted, subv, str(global_path), is_global=True)
+                            else:
+                                subv = _validate_dynamic_model_config_value(
+                                    dotted, subv, str(global_path), is_global=True
+                                )
+                                if subv is None:
+                                    continue
                             if dotted in _COERCERS:
                                 subv = _COERCERS[dotted](subv)
                             values[dotted] = subv
                             sources[dotted] = str(global_path)
+                        if section == "model_classes":
+                            _fill_model_class_optional_metadata(
+                                k, values, sources, str(global_path)
+                            )
                     else:
                         # Case (b): roles-style 4-level nesting
                         # sv[k] == {"consultant_primary": {"persona": "X", ...}}
@@ -1217,6 +1463,10 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                                     sources[dotted] = str(global_path)
                 else:
                     dotted = f"{section}.{k}"
+                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+                        _reject_unsupported_dynamic_model_config_key(
+                            dotted, str(global_path)
+                        )
                     # Silently ignore unknown 2-level keys for forward compatibility.
                     if dotted not in flat_defaults:
                         continue
@@ -1236,24 +1486,50 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
             if section in META_KEYS:
                 continue
             if not isinstance(sv, dict):
+                if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+                    _reject_unsupported_dynamic_model_config_key(
+                        section, str(repo_path)
+                    )
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
+                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS and any(
+                        isinstance(subv, dict) for subv in v.values()
+                    ):
+                        _reject_dynamic_model_config_nested_table(
+                            section, k, str(repo_path)
+                        )
                     # 3-level table nesting: two sub-cases:
                     # (a) watchdog.timeout_secs — dict of scalar leaves (section.k.subk)
                     # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
                     is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
                     if is_scalar_dict:
+                        if (
+                            section == "model_classes"
+                            and not _model_class_table_has_model(
+                                k, v, values, str(repo_path), is_global=False
+                            )
+                        ):
+                            continue
                         # Case (a): expand each leaf as a 3-level dotted key.
                         for subk, subv in v.items():
                             dotted = f"{section}.{k}.{subk}"
-                            if dotted not in flat_defaults:
-                                continue
-                            subv = _validate_enum(dotted, subv, str(repo_path), is_global=False)
+                            if dotted in flat_defaults:
+                                subv = _validate_enum(dotted, subv, str(repo_path), is_global=False)
+                            else:
+                                subv = _validate_dynamic_model_config_value(
+                                    dotted, subv, str(repo_path), is_global=False
+                                )
+                                if subv is None:
+                                    continue
                             if dotted in _COERCERS:
                                 subv = _COERCERS[dotted](subv)
                             values[dotted] = subv
                             sources[dotted] = str(repo_path)
+                        if section == "model_classes":
+                            _fill_model_class_optional_metadata(
+                                k, values, sources, str(repo_path)
+                            )
                     else:
                         # Case (b): roles-style 4-level nesting
                         # sv[k] == {"consultant_primary": {"persona": "X", ...}}
@@ -1270,6 +1546,10 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                                     sources[dotted] = str(repo_path)
                 else:
                     dotted = f"{section}.{k}"
+                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
+                        _reject_unsupported_dynamic_model_config_key(
+                            dotted, str(repo_path)
+                        )
                     # Silently ignore unknown 2-level keys for forward compatibility.
                     if dotted not in flat_defaults:
                         continue

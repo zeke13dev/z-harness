@@ -54,6 +54,12 @@ valid events.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+import os
+import shutil
+import subprocess
+import importlib.util
 import json
 import threading
 import time
@@ -107,6 +113,199 @@ def _compose_argv(provider_config: dict, effective_model: str | None) -> list[st
     return argv
 
 
+@dataclass(frozen=True)
+class ModelRouteResolution:
+    """Resolved native-model route plus telemetry metadata."""
+
+    effective_model: str
+    source: str
+    route: str
+    route_kind: str
+    thinking: str = ""
+    reasoning: str = ""
+    override_applied: bool = False
+    override_support: str = "advisory"
+
+    def telemetry(self) -> dict:
+        """Return JSON-serialisable telemetry fields for model routing events."""
+        payload: dict = {
+            "effective_model": self.effective_model,
+            "source": self.source,
+            "route": self.route,
+            "route_kind": self.route_kind,
+            "override_applied": self.override_applied,
+            "override_support": self.override_support,
+        }
+        if self.thinking:
+            payload["thinking"] = self.thinking
+        if self.reasoning:
+            payload["reasoning"] = self.reasoning
+        return payload
+
+
+def _class_model(config_values: dict[str, object], class_name: str) -> str:
+    value = config_values.get(f"model_classes.{class_name}.model")
+    return value if isinstance(value, str) else ""
+
+
+def resolve_model_route(
+    route: str,
+    config_values: dict[str, object],
+    *,
+    source: str,
+    override_applied: bool = False,
+    override_support: str = "advisory",
+) -> ModelRouteResolution:
+    """Resolve a class name or exact model label to an effective model."""
+    if not isinstance(route, str) or not route:
+        raise ValueError("model route must be a non-empty string")
+
+    class_model = _class_model(config_values, route)
+    if class_model:
+        return ModelRouteResolution(
+            effective_model=class_model,
+            source=source,
+            route=route,
+            route_kind="class",
+            thinking=str(config_values.get(f"model_classes.{route}.thinking") or ""),
+            reasoning=str(config_values.get(f"model_classes.{route}.reasoning") or ""),
+            override_applied=override_applied,
+            override_support=override_support,
+        )
+
+    return ModelRouteResolution(
+        effective_model=route,
+        source=source,
+        route=route,
+        route_kind="exact",
+        override_applied=override_applied,
+        override_support=override_support,
+    )
+
+
+def resolve_implementer_model(
+    tier: str,
+    config_values: dict[str, object],
+    *,
+    override_applied: bool = False,
+    override_support: str = "advisory",
+) -> ModelRouteResolution:
+    """Resolve /z-execute implementer tier low|medium|high|retry."""
+    key = f"model_routing.implementer.{tier}"
+    route = config_values.get(key)
+    if not isinstance(route, str) or not route:
+        raise ValueError(f"missing implementer model route for tier {tier!r}")
+    return resolve_model_route(
+        route,
+        config_values,
+        source=key,
+        override_applied=override_applied,
+        override_support=override_support,
+    )
+
+
+def resolve_native_agent_model(
+    agent_id: str,
+    frontmatter_model: str,
+    config_values: dict[str, object],
+    *,
+    override_applied: bool = False,
+    override_support: str = "advisory",
+) -> ModelRouteResolution:
+    """Resolve a native agent by exact agent id, default route, then frontmatter."""
+    if not agent_id:
+        raise ValueError("agent_id must be non-empty")
+
+    route_agent_id = agent_id.replace("-", "_")
+    exact_key = f"model_routing.native_agents.{route_agent_id}"
+    exact_route = config_values.get(exact_key)
+    if isinstance(exact_route, str) and exact_route:
+        return resolve_model_route(
+            exact_route,
+            config_values,
+            source=exact_key,
+            override_applied=override_applied,
+            override_support=override_support,
+        )
+
+    default_key = "model_routing.native_agents.default"
+    default_route = config_values.get(default_key)
+    if isinstance(default_route, str) and default_route:
+        return resolve_model_route(
+            default_route,
+            config_values,
+            source=default_key,
+            override_applied=override_applied,
+            override_support=override_support,
+        )
+
+    if not frontmatter_model:
+        raise ValueError(f"native agent {agent_id!r} has no frontmatter model fallback")
+    return resolve_model_route(
+        frontmatter_model,
+        config_values,
+        source="frontmatter",
+        override_applied=False,
+        override_support="frontmatter",
+    )
+
+
+def load_model_routing_config(repo_root: str | Path) -> dict[str, object]:
+    """Load flattened config values from ``scripts/config.py`` for routing."""
+    config_path = Path(repo_root) / "scripts" / "config.py"
+    spec = importlib.util.spec_from_file_location("z_harness_config_for_routing", config_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import config.py from {config_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    values, _sources = module.load_config()
+    return values
+
+
+def provider_applies_model_override(provider_config: dict) -> bool:
+    """Return whether this provider has a concrete model transport."""
+    return bool(provider_config.get("model_arg_template") or provider_config.get("model_env_var"))
+
+
+def _omp_provider_from_argv(argv: list[str]) -> str:
+    if not argv:
+        return ""
+    first = argv[0]
+    if "/" not in first:
+        return ""
+    return first.split("/", 1)[0]
+
+
+def _auth_backend_for_provider(provider_config: dict, argv: list[str]) -> tuple[str, str]:
+    command = os.path.basename(str(provider_config.get("command") or ""))
+    omp_provider = _omp_provider_from_argv(argv)
+    if command == "omp-consult.sh" or omp_provider:
+        if omp_provider == "google-antigravity":
+            return "OMP OAuth / Antigravity", omp_provider
+        if omp_provider == "openai-codex":
+            return "OMP OAuth / Codex", omp_provider
+        if omp_provider:
+            return f"OMP OAuth / {omp_provider}", omp_provider
+        return "OMP OAuth", ""
+    if provider_config.get("auth_env"):
+        return f"env:{provider_config['auth_env']}", ""
+    return "cli-managed", ""
+
+
+def _attempted_model_for_provider(
+    provider_config: dict,
+    argv: list[str],
+    effective_model: str | None,
+) -> str:
+    if effective_model:
+        return effective_model
+    if provider_config.get("default_model"):
+        return str(provider_config["default_model"])
+    if argv and "/" in argv[0]:
+        return argv[0]
+    return str(provider_config.get("model_label") or "")
+
+
 class Dispatcher:
     """Coordinates argument composition, env hygiene, event streaming, and
     telemetry bracketing for a single ``HostDriver.dispatch()`` call.
@@ -152,6 +351,13 @@ class Dispatcher:
         selection_source: str | None = None,
         draw_id: str | None = None,
         reviewer_participant: str | None = None,
+        model_source: str | None = None,
+        model_route: str | None = None,
+        model_route_kind: str | None = None,
+        model_thinking: str | None = None,
+        model_reasoning: str | None = None,
+        model_override_applied: bool | None = None,
+        model_override_support: str | None = None,
     ) -> DispatchResult:
         """Execute a command via *driver* and return the final result.
 
@@ -224,6 +430,19 @@ class Dispatcher:
                 dispatches — must be one of ``"base_codex"`` or ``"random_arm"``
                 when provided.  Included in ``persona_bound`` when provided.
                 Raises :exc:`ValueError` on an invalid value.
+            model_source: Optional routing source label for model telemetry,
+                e.g. ``"model_routing.native_agents.explore"`` or
+                ``"frontmatter"``.  Defaults to the legacy override/provider
+                source calculation.
+            model_route: Optional configured route before class expansion.
+            model_route_kind: Optional ``"class"`` or ``"exact"`` discriminator.
+            model_thinking: Optional class thinking metadata.
+            model_reasoning: Optional class reasoning metadata.
+            model_override_applied: Whether the host actually received a concrete
+                model override transport.  When omitted, inferred from provider
+                support for model args/env.
+            model_override_support: Human-readable support state, usually
+                ``"applied"`` or ``"advisory"``.
 
         Returns:
             :class:`~runtime.dispatch.result.DispatchResult` from
@@ -240,11 +459,35 @@ class Dispatcher:
         driver_name = type(driver).__name__
         timeout_s: float = float(provider_config.get("timeout_s", 300))
 
-        # 1. Compose final argv (B3).
-        # Determine the effective model early (caller kwarg wins over provider_config).
-        # Model is needed here for {model} substitution in model_arg_template.
+        # 1. Compose final argv (B3) and preflight provider dispatch before
+        # any driver call.  Model is needed here for {model} substitution in
+        # model_arg_template.
         _early_model: str | None = model if model is not None else provider_config.get("model")
-        final_args: list[str] = _compose_argv(provider_config, _early_model) + list(caller_args)
+        try:
+            base_args: list[str] = _compose_argv(provider_config, _early_model)
+        except ValueError as exc:
+            self._emit_provider_preflight_failed(
+                command_id=command_id,
+                role=role,
+                runtime=runtime,
+                provider_config=provider_config,
+                argv=[],
+                effective_model=_early_model,
+                reason=(
+                    f"argv/model composition failed: {exc}; set default_model "
+                    "or configure a concrete model"
+                ),
+            )
+            raise
+        self._preflight_provider(
+            command_id=command_id,
+            role=role,
+            runtime=runtime,
+            provider_config=provider_config,
+            argv=base_args,
+            effective_model=_early_model,
+        )
+        final_args: list[str] = base_args + list(caller_args)
 
         # 3. Emit dispatch_start (payload MUST NOT include env fields).
         t0 = time.monotonic()
@@ -268,7 +511,7 @@ class Dispatcher:
                 "value": persona,
                 "original": _pc_persona,
             })
-        if model is not None:
+        if model is not None and model_source is None:
             self._emit("persona_override_used", {
                 "command": command_id,
                 "override_field": "model",
@@ -283,15 +526,6 @@ class Dispatcher:
                 "original": _pc_runtime,
             })
 
-        # Build the resolved triple (explicit kwargs win over provider_config).
-        _resolved_persona = persona if persona is not None else _pc_persona
-        _resolved_model = model if model is not None else _pc_model
-        _resolved_runtime = runtime if runtime is not None else _pc_runtime
-
-        # 2. Build env AFTER resolving _resolved_model so model_env_var is set
-        #    correctly (SPEC Invariant #7: env dict is never logged).
-        env = build_env(provider_config, effective_model=_resolved_model)
-
         # Determine source per axis for telemetry.
         def _axis_source(override_val: str | None, pc_val: str | None) -> str:
             if override_val is not None:
@@ -299,6 +533,28 @@ class Dispatcher:
             if pc_val is not None:
                 return "provider_config"
             return "none"
+
+        # Build the resolved triple (explicit kwargs win over provider_config).
+        _resolved_persona = persona if persona is not None else _pc_persona
+        _resolved_model = model if model is not None else _pc_model
+        _resolved_runtime = runtime if runtime is not None else _pc_runtime
+
+        _resolved_model_source = model_source or _axis_source(model, _pc_model)
+        if model_override_applied is None:
+            model_override_applied = (
+                _resolved_model is not None and provider_applies_model_override(provider_config)
+            )
+        _resolved_model_support = model_override_support or (
+            "applied" if model_override_applied else "advisory"
+        )
+
+        # 2. Build env AFTER resolving _resolved_model so model_env_var is set
+        #    correctly (SPEC Invariant #7: env dict is never logged).
+        env = build_env(provider_config, effective_model=_resolved_model)
+        env["Z_HARNESS_RUN_ID"] = self._run_id
+        if role:
+            env["Z_HARNESS_PROVIDER_ROLE"] = role
+
 
         # Validate reviewer_participant before emitting into telemetry.
         _REVIEWER_PARTICIPANT_VALUES = {"base_codex", "random_arm"}
@@ -323,9 +579,11 @@ class Dispatcher:
             "runtime": _resolved_runtime,
             "source": {
                 "persona": _axis_source(persona, _pc_persona),
-                "model": _axis_source(model, _pc_model),
+                "model": _resolved_model_source,
                 "runtime": _axis_source(runtime, _pc_runtime),
             },
+            "model_override_applied": model_override_applied,
+            "model_override_support": _resolved_model_support,
         }
         # Attribution tuple fields — include only when provided by the caller.
         if role is not None:
@@ -342,12 +600,24 @@ class Dispatcher:
             _persona_bound_payload["reviewer_participant"] = reviewer_participant
         self._emit("persona_bound", _persona_bound_payload)
 
-        self._emit("model_resolved", {
+        _model_resolved_payload = {
             "command": command_id,
             "model": _resolved_model,
+            "effective_model": _resolved_model,
             "runtime": _resolved_runtime,
-            "source": _axis_source(model, _pc_model),
-        })
+            "source": _resolved_model_source,
+            "override_applied": model_override_applied,
+            "override_support": _resolved_model_support,
+        }
+        if model_route is not None:
+            _model_resolved_payload["route"] = model_route
+        if model_route_kind is not None:
+            _model_resolved_payload["route_kind"] = model_route_kind
+        if model_thinking:
+            _model_resolved_payload["thinking"] = model_thinking
+        if model_reasoning:
+            _model_resolved_payload["reasoning"] = model_reasoning
+        self._emit("model_resolved", _model_resolved_payload)
 
         # 4. Call driver.dispatch.
         handle = driver.dispatch(command_id, final_args, env)
@@ -493,6 +763,193 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _provider_name(self, runtime: str | None, provider_config: dict) -> str:
+        return str(provider_config.get("provider") or runtime or provider_config.get("runtime") or "")
+
+    def _preflight_payload(
+        self,
+        *,
+        command_id: str,
+        role: str | None,
+        runtime: str | None,
+        provider_config: dict,
+        argv: list[str],
+        effective_model: str | None,
+        reason: str | None = None,
+    ) -> dict:
+        auth_backend, _omp_provider = _auth_backend_for_provider(provider_config, argv)
+        payload: dict = {
+            "command": command_id,
+            "role": role,
+            "provider": self._provider_name(runtime, provider_config),
+            "runtime": runtime or provider_config.get("runtime"),
+            "cli_command": provider_config.get("command"),
+            "attempted_model": _attempted_model_for_provider(
+                provider_config,
+                argv,
+                effective_model,
+            ),
+            "auth_backend": auth_backend,
+            "argv_argc": len(argv),
+        }
+        if reason is not None:
+            payload["auth_ready"] = False
+            payload["reason"] = reason
+        return payload
+
+    def _emit_provider_preflight_failed(
+        self,
+        *,
+        command_id: str,
+        role: str | None,
+        runtime: str | None,
+        provider_config: dict,
+        argv: list[str],
+        effective_model: str | None,
+        reason: str,
+    ) -> None:
+        self._emit(
+            "provider_preflight_failed",
+            self._preflight_payload(
+                command_id=command_id,
+                role=role,
+                runtime=runtime,
+                provider_config=provider_config,
+                argv=argv,
+                effective_model=effective_model,
+                reason=reason,
+            ),
+        )
+
+    def _fail_provider_preflight(
+        self,
+        *,
+        command_id: str,
+        role: str | None,
+        runtime: str | None,
+        provider_config: dict,
+        argv: list[str],
+        effective_model: str | None,
+        reason: str,
+    ) -> None:
+        self._emit_provider_preflight_failed(
+            command_id=command_id,
+            role=role,
+            runtime=runtime,
+            provider_config=provider_config,
+            argv=argv,
+            effective_model=effective_model,
+            reason=reason,
+        )
+        provider = self._provider_name(runtime, provider_config) or "<unknown>"
+        model = _attempted_model_for_provider(provider_config, argv, effective_model)
+        auth_backend, _omp_provider = _auth_backend_for_provider(provider_config, argv)
+        raise RuntimeError(
+            f"provider_preflight_failed: role={role or '<unknown>'}, "
+            f"provider={provider}, model={model}, auth_backend={auth_backend} — {reason}"
+        )
+
+    def _preflight_provider(
+        self,
+        *,
+        command_id: str,
+        role: str | None,
+        runtime: str | None,
+        provider_config: dict,
+        argv: list[str],
+        effective_model: str | None,
+    ) -> None:
+        command_value = provider_config.get("command")
+        command = str(command_value).strip() if isinstance(command_value, str) else ""
+        requires_command = (
+            "command" in provider_config
+            or bool(provider_config.get("provider"))
+        )
+        if requires_command and not command:
+            self._fail_provider_preflight(
+                command_id=command_id,
+                role=role,
+                runtime=runtime,
+                provider_config=provider_config,
+                argv=argv,
+                effective_model=effective_model,
+                reason="provider command is empty — fix providers.json command",
+            )
+        if command and not shutil.which(command):
+            self._fail_provider_preflight(
+                command_id=command_id,
+                role=role,
+                runtime=runtime,
+                provider_config=provider_config,
+                argv=argv,
+                effective_model=effective_model,
+                reason=f"command={command} not on PATH — install the CLI or update PATH",
+            )
+
+        auth_env = provider_config.get("auth_env")
+        if auth_env and not os.environ.get(str(auth_env)):
+            self._fail_provider_preflight(
+                command_id=command_id,
+                role=role,
+                runtime=runtime,
+                provider_config=provider_config,
+                argv=argv,
+                effective_model=effective_model,
+                reason=f"auth env var {auth_env} is not set",
+            )
+
+        auth_backend, omp_provider = _auth_backend_for_provider(provider_config, argv)
+        auth_ready: bool | str = True if auth_env else "not_required"
+        if omp_provider:
+            if not shutil.which("omp"):
+                self._fail_provider_preflight(
+                    command_id=command_id,
+                    role=role,
+                    runtime=runtime,
+                    provider_config=provider_config,
+                    argv=argv,
+                    effective_model=effective_model,
+                    reason="'omp' is not on PATH — install oh-my-pi or choose a direct CLI provider",
+                )
+            timeout_s = float(os.environ.get("Z_HARNESS_PROVIDER_PREFLIGHT_TIMEOUT_S", "25"))
+            try:
+                token = subprocess.run(
+                    ["omp", "token", omp_provider],
+                    capture_output=True,
+                    text=False,
+                    timeout=timeout_s,
+                    check=False,
+                )
+                token_ok = token.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                token_ok = False
+            if not token_ok:
+                self._fail_provider_preflight(
+                    command_id=command_id,
+                    role=role,
+                    runtime=runtime,
+                    provider_config=provider_config,
+                    argv=argv,
+                    effective_model=effective_model,
+                    reason=(
+                        f"auth not ready for {omp_provider}; run 'omp', then '/login' "
+                        "for that provider before retrying"
+                    ),
+                )
+            auth_ready = True
+
+        payload = self._preflight_payload(
+            command_id=command_id,
+            role=role,
+            runtime=runtime,
+            provider_config=provider_config,
+            argv=argv,
+            effective_model=effective_model,
+        )
+        payload["auth_backend"] = auth_backend
+        payload["auth_ready"] = auth_ready
+        self._emit("provider_preflight_ok", payload)
 
     def _emit(self, kind: str, payload: dict) -> None:
         """Emit a structured event via ``runtime.compat.log_event``.

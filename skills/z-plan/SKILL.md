@@ -2711,7 +2711,7 @@ PYEOF
       "$Z_HARNESS_SLUG" "$WORK_GRAPH_FILE")" 2>/dev/null || true
 
   # Execution strategy metadata for intent-mode /z-execute.
-  # This is derived from TASKS.md + work-graph.json + validated workstreams.json; it is not static boilerplate.
+  # This is derived from TASKS.md + validated workstreams.json, with work-graph.json carrying scheduler state.
   EXECUTION_STRATEGY_OUT="$(python3 - "$Z_HARNESS_PLAN_DIR" "$RUN" 2>&1 <<'PYEOF'
 from __future__ import annotations
 import json, re, sys

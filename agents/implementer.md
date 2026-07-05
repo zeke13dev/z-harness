@@ -2,7 +2,7 @@
 name: implementer
 description: "Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-execute once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot + LEDGER + durable tier (KERNEL/INVARIANTS/STYLE)."
 tools: Bash, Read, Edit, Write, Grep, Glob
-model: sonnet
+model: gpt-5.5:low
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
@@ -43,9 +43,11 @@ You implement **exactly one task** from the task block the orchestrator passes y
 
 - **`relevant_docs`** (paths, may be empty) — list of `docs/llm/<concept>.json` and `docs/human/<concept>.md` files relevant to this task (discovered by the orchestrator via `**DOCS:**` tags and source-file overlap with `docs/llm/INDEX.json`). **Read each LLM-tier JSON first** — they're small (1-3 KB), state invariants, cross-references, gotchas, and "consumed_by" relationships you may not see by just reading the task's own files. The human-tier markdown is supplementary if the JSON is unclear. If your edits invalidate any claim in a relevant doc, flag it in your `ISSUES:` return so `/z-maintain-docs` can refresh that concept.
 - **`tests_md_path`** (path, may be empty) — `$BASE/TESTS.md` if `/z-test` was run for this plan. If the task block contains a `**Tests:** TEST-001, TEST-004, ...` line, **read TESTS.md** and grep for each listed `## TEST-NNN` heading. Each TEST-NNN entry specifies an `Invariant:`, a `Failure class:`, a `Target file:`, a `Setup:`, and an `Assertion:`. You must produce actual test code at `Target file:` that implements the entry's `Assertion:` against the production code you're writing in this same task. The test must fail if a code change violates the named invariant / failure class — not just pass on the current implementation. If the target file does not yet exist in a recognized test directory, create it following the repo's existing test conventions (look at neighboring tests for fixture patterns).
-- Optional: **prior-attempt reviewer feedback** if this is a retry. On retry the orchestrator dispatches you with `Agent(model="opus")` directly — your in-prompt header will say `RETRY v<N>` and your effective model is already Opus; apply Opus-level care to the fix.
-- **`**Complexity:** <tier>`** line in the task block — the orchestrator stamps this at plan-time (via the `complexity-classifier` Haiku subagent) and uses it to pick your model on the `Agent(...)` call: `low|medium` → Sonnet, `high` → Opus. Users may also hand-author or hand-edit this line as an override. You do not need to act on the tier yourself — the orchestrator has already chosen your model — but if your in-prompt header indicates `high`, treat it as confirmation that the task warrants harder reasoning.
-- **`subagent_model: <label>`** — the orchestrator passes the resolved model label (`sonnet` or `opus`) as a named input. Include this value in the `implement_start` and `implement_end` event payloads (see step 0).
+- Optional: **prior-attempt reviewer feedback** if this is a retry. On retry the orchestrator selects the `retry` implementer tier through the native model routing layer; your in-prompt header will say `RETRY v<N>`.
+- **`**Complexity:** <tier>`** line in the task block — the orchestrator stamps this at plan-time (via the `complexity-classifier` Haiku subagent) and uses it to select a routing tier: `low`, `medium`, `high`, or `retry`. Users may also hand-author or hand-edit this line as an override. You do not need to resolve the tier yourself — the orchestrator has already chosen your effective model.
+- **`subagent_model: <label>`** — the routed effective model label. Include this value in the `implement_start` and `implement_end` event payloads (see step 0).
+- **`subagent_model_source:` / `subagent_model_route:` / `subagent_model_route_kind:`** — routing provenance. Source is the config key or `frontmatter`; route kind is `class` or `exact`.
+- **`subagent_model_override_applied:` / `subagent_model_override_support:`** — whether the host actually applied a per-call override or only received advisory prompt/telemetry metadata. Preserve these fields in telemetry exactly as passed.
 
 ## Mode detection
 
@@ -60,19 +62,22 @@ orchestrator mis-configured the call.
 0. **Emit an `implement_start` event** before doing anything else, and an `implement_end` event before returning. Use the helper:
 
 ```bash
-# SUBAGENT_MODEL is the value passed by the orchestrator as `subagent_model: <label>` in the prompt.
-# Read it from the caller input. Default to "sonnet" if absent (safe fallback).
+# SUBAGENT_MODEL and routing fields are passed by the orchestrator.
 SUBAGENT_MODEL="<subagent_model from caller input, or 'sonnet' if absent>"
+SUBAGENT_MODEL_SOURCE="<subagent_model_source from caller input, or 'frontmatter' if absent>"
+SUBAGENT_MODEL_ROUTE="<subagent_model_route from caller input, or SUBAGENT_MODEL if absent>"
+SUBAGENT_MODEL_ROUTE_KIND="<subagent_model_route_kind from caller input, or 'exact' if absent>"
+SUBAGENT_MODEL_OVERRIDE_APPLIED="<subagent_model_override_applied from caller input, or 'false' if absent>"
+SUBAGENT_MODEL_OVERRIDE_SUPPORT="<subagent_model_override_support from caller input, or 'advisory' if absent>"
 
 TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
-  "$(printf '{"id":"%s","retry":%d,"subagent_model":"%s"}' "<task-id>" "<0 on first try, N on retry>" "$SUBAGENT_MODEL")")"
+  "$(python3 -c 'import json,sys; print(json.dumps({"id":sys.argv[1],"retry":int(sys.argv[2]),"subagent_model":sys.argv[3],"subagent_model_source":sys.argv[4],"subagent_model_route":sys.argv[5],"subagent_model_route_kind":sys.argv[6],"subagent_model_override_applied":sys.argv[7].lower()=="true","subagent_model_override_support":sys.argv[8]}))' "<task-id>" "<0 on first try, N on retry>" "$SUBAGENT_MODEL" "$SUBAGENT_MODEL_SOURCE" "$SUBAGENT_MODEL_ROUTE" "$SUBAGENT_MODEL_ROUTE_KIND" "$SUBAGENT_MODEL_OVERRIDE_APPLIED" "$SUBAGENT_MODEL_OVERRIDE_SUPPORT")")"
 # ... do the work below ...
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
-  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d,"subagent_model":"%s"}' \
-     "<task-id>" "<retry>" "<status>" "$N_CHANGED" "$SUBAGENT_MODEL")"
+  "$(python3 -c 'import json,sys; print(json.dumps({"id":sys.argv[1],"retry":int(sys.argv[2]),"status":sys.argv[3],"files_changed_count":int(sys.argv[4]),"subagent_model":sys.argv[5],"subagent_model_source":sys.argv[6],"subagent_model_override_applied":sys.argv[7].lower()=="true","subagent_model_override_support":sys.argv[8]}))' "<task-id>" "<retry>" "<status>" "$N_CHANGED" "$SUBAGENT_MODEL" "$SUBAGENT_MODEL_SOURCE" "$SUBAGENT_MODEL_OVERRIDE_APPLIED" "$SUBAGENT_MODEL_OVERRIDE_SUPPORT")"
 ```
 
-This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can compute implementer wall_ms, retry rate, and files-changed distribution.
+This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can compute implementer wall_ms, retry rate, files-changed distribution, effective model, route source, and applied-vs-advisory support.
 
 1. Read each file in the task's "Files" list (Read tool).
 2. **Context read — mode-dependent:**

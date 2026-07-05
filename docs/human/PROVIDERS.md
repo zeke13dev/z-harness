@@ -1,6 +1,6 @@
 # PROVIDERS — Runtime Registry Guide
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-03
 > Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, skills/z-providers-discover/SKILL.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, scripts/omp-consult.sh, .z-harness/providers.json
 
 ## Overview
@@ -89,13 +89,22 @@ any file instead of the actual repo config.  Useful in CI or test scripts.
 ### `roles` map — legacy fallback only
 
 `providers.json` may still contain a `roles` map for backward compatibility.
-**This is no longer the canonical place to bind roles.**  The preferred
-approach is `[roles.*.*]` tables in `config.toml` — see
-[PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
+**This is no longer the canonical place to bind roles.**  External provider
+roles are bound separately from native model classes through the TOML runtime
+axis. Command-specific bindings win over defaults:
 
-When `providers.json` `roles` is the only binding present, z-harness uses it
-and emits a `legacy_provider_roles_used` event as a reminder to migrate.  The
-TOML binding always takes precedence if both exist.
+```toml
+[roles.z_plan.consultant_primary]
+runtime = "omp-antigravity-pro"
+
+[roles.default.consultant_primary]
+runtime = "omp-antigravity-pro"
+```
+
+`[models.*]` provider selectors are still accepted as a lower-priority
+compatibility path, but new config should use `[roles.*.*].runtime`.  When
+`providers.json` `roles` is the only binding present, z-harness uses it and
+emits a `legacy_provider_roles_used` event as a reminder to migrate.
 
 ---
 
@@ -140,7 +149,7 @@ summary line and emits a `provider_resolution_skipped` event with payload
 
 Normal summary (consult on):
 ```
-[providers] consultant_primary=gemini-cli(gemini-2.5-pro)  consultant_secondary=codex-cli(gpt-5-codex)  reviewer=codex-cli(gpt-5-codex)
+[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-codex(gpt-5.5)  reviewer=codex-cli(gpt-5-codex)
 ```
 
 Single-model summary (consult off):
@@ -160,9 +169,9 @@ Leave `Z_HARNESS_CONSULT` unset (or set to `on`) for normal multi-model operatio
 
 ### OMP consult-provider compatibility
 
-OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The wrapper adapts provider-registry prompt handling to `omp -p --no-session --no-rules --model ... <prompt>` and remains separate from OMP adapter/export support and native command dispatch.
+OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The current default external consult arms are `omp-antigravity-pro` for Antigravity-backed Gemini 3.1 Pro and `omp-codex` for OMP Codex GPT-5.5. The legacy name `omp-gemini` remains an alias for `omp-antigravity-pro`.
 
-Do not treat `omp-gemini`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current OMP adapter/export support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports native adapter/export fidelity, and bounds command-family native claims to the capabilities parity matrix: `/z-execute`, `/z-consult`, `/z-gate`, and `/z-panel` are native with T008 evidence; other families remain degraded until promoted by parity evidence.
+Do not treat `omp-antigravity-pro`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current OMP adapter/export support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports native adapter/export fidelity, and bounds command-family native claims to the capabilities parity matrix: `/z-execute`, `/z-consult`, `/z-gate`, and `/z-panel` are native with T008 evidence; other families remain degraded until promoted by parity evidence. Direct `gemini-cli` remains available as an explicitly named direct provider or as an explicit fallback command inside an OMP provider entry; it is not the Gemini-labeled OMP consult provider.
 
 ---
 
@@ -182,6 +191,33 @@ Rules:
    is also injected into the subprocess environment.
 4. Empty `effective_model` string → use `default_model`.  If `default_model` is
    also null, the resolver halts with an actionable error.
+
+
+### Provider preflight and auth classification
+
+Before a provider descriptor is returned or dispatched, z-harness preflights:
+
+1. the role binding resolves to a defined provider;
+2. the provider command is available on `PATH`;
+3. `args_template + model_arg_template` can compose a concrete argv/model; and
+4. auth is ready when the provider declares a checkable backend.
+
+OMP consult providers are classified by the model prefix in `args_template`:
+
+| Provider | Model prefix | Auth backend |
+|----------|--------------|--------------|
+| `omp-antigravity-pro` | `google-antigravity/...` | OMP OAuth / Antigravity |
+| `omp-codex` | `openai-codex/...` | OMP OAuth / Codex |
+
+OMP auth readiness is checked with `omp token <provider>` and never logs token
+values. If auth is missing, resolution/dispatch fails loudly with the role,
+provider, attempted model, auth backend, and a re-auth hint. Capturing browser
+login links is handled by the later re-auth assistance flow; preflight only
+classifies readiness and stops before dispatch.
+
+Explicit native fallbacks in `omp-consult.sh --fallback ...` are used only after
+OMP auth preflight succeeds and the OMP model call itself produces no usable
+output. Auth failures do not fall back silently.
 
 ---
 
@@ -203,14 +239,16 @@ No file changes required for existing v1 configs.
 
 ## Provider naming
 
-Current canonical names use a `-cli` suffix to distinguish the CLI runtime
-from the model family:
+Current canonical direct-CLI names use a `-cli` suffix to distinguish the CLI
+runtime from the model family. OMP consult providers use explicit backend names
+when the label would otherwise imply a direct vendor CLI:
 
-| Canonical name | Command | Replaces |
-|----------------|---------|---------|
+| Canonical name | Command | Replaces / compatibility name |
+|----------------|---------|-------------------------------|
 | `codex-cli` | `codex` | `codex` (v1) |
-| `gemini-cli` | `gemini` | `gemini` (v1) |
+| `gemini-cli` | `gemini` | `gemini` (v1); direct Gemini CLI only |
 | `claude-cli` | `claude` | `claude` (v1) |
+| `omp-antigravity-pro` | `omp-consult.sh` | `omp-gemini` |
 
 Old names continue to work via the `aliases` map.  Each use emits a
 one-time `provider_alias_used` deprecation event.  To migrate old names
@@ -251,12 +289,24 @@ config files.
       "default_model": "gemini-2.5-pro",
       "stdin": false,
       "timeout_s": 240,
-      "model_label": "Gemini CLI"
+      "model_label": "Direct Gemini CLI"
+    },
+    "omp-antigravity-pro": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": ["google-antigravity/gemini-3.1-pro", "--fallback", "gemini", "-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "Antigravity Gemini 3.1 Pro",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
     }
   },
   "aliases": {
-    "codex":  "codex-cli",
-    "gemini": "gemini-cli"
+    "codex": "codex-cli",
+    "gemini": "gemini-cli",
+    "omp-gemini": "omp-antigravity-pro"
   }
 }
 ```
@@ -284,7 +334,7 @@ above.
    prints the response to stdout.  Exit 0 on success, nonzero on failure.
 2. Put it on your `PATH` (or supply an absolute path as `command`).
 3. Add a stanza under `providers` in your `~/.config/z-harness/providers.json`.
-4. Bind a role in `config.toml` via `[roles.default.<role>] runtime = "<name>"`.
+4. Bind a role in `config.toml` with `[roles.<command>.<role>]` or `[roles.default.<role>]` and `runtime = "<name>"`.
    See [PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
 
 Example wrapper skeleton:
@@ -302,11 +352,12 @@ my-llm-api call --prompt "$PROMPT"
 
 | Message | Cause | Fix |
 |---------|-------|-----|
-| `[providers] role=<r> unbound — run /z-providers-discover` | No runtime bound for role | Add a `[roles.default.<r>]` entry to `config.toml` or run `/z-providers-discover`. |
-| `[providers] role=<r>, provider=<p>, command=<c> not on PATH` | CLI missing from shell `PATH` | Install the CLI or update `PATH`. |
+| `[providers] provider_preflight_failed: role=<r> ... role is unbound` | No runtime bound for role | Add a `[roles.<command>.<r>]` or `[roles.default.<r>]` entry to `config.toml`, or run `/z-providers-discover`. |
+| `[providers] provider_preflight_failed: role=<r>, provider=<p> ... command=<c> not on PATH` | CLI missing from shell `PATH` | Install the CLI or update `PATH`. |
 | `[providers] schema version must be 1 or 2` | `version` field wrong or missing | Set `"version": 2` in your config. |
 | `[providers] consultant_primary and consultant_secondary must resolve to DISTINCT providers` | Both consultant roles point to the same provider | Bind them to different providers. |
-| `[providers] no model resolved for provider <p>` | `model_arg_template` present but no model resolved, `default_model` is null | Set `default_model` in the provider or bind a model in `config.toml`. |
+| `[providers] provider_preflight_failed ... argv/model composition failed` | `model_arg_template` present but no model resolved, `default_model` is null | Set `default_model` in the provider or bind a model in `config.toml`. |
+| `[providers] provider_preflight_failed ... auth not ready for openai-codex/google-antigravity` | OMP OAuth token is missing or expired | Run `omp`, then `/login` for the named provider; retry after `omp token <provider>` succeeds. |
 
 ---
 
@@ -316,10 +367,15 @@ Every command that dispatches a consultant or reviewer calls
 `scripts/log-providers.sh` at start-up.  It prints a one-line summary:
 
 ```
-[providers] consultant_primary=codex-cli(gpt-5-codex)  consultant_secondary=gemini-cli(gemini-2.5-pro)  reviewer=codex-cli(gpt-5-codex)
+[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-codex(gpt-5.5)  reviewer=codex-cli(gpt-5-codex)
 ```
 
-…and emits a `provider_resolved` event per role to `metrics.jsonl`.
+…and emits a `provider_resolved` event per role to `metrics.jsonl`. Provider
+resolution and runtime dispatch also emit `provider_preflight_ok` or
+`provider_preflight_failed`. If an explicit OMP native fallback is actually
+used, `omp-consult.sh` emits `provider_fallback_used` with role, provider,
+attempted model, auth backend, and fallback provider; token values, env values,
+and stderr dumps are never logged.
 
 For full role resolution details (including persona and model), see the
 `persona_bound` and `model_resolved` events documented in

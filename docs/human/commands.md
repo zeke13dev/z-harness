@@ -63,7 +63,7 @@ This inventory spans the source tree. Entries labeled "Source/dev-only" are pres
 - `skills/z-evaluate/SKILL.md:1` — `z-evaluate` — Read-only single-phase command. Evaluates a completed z-harness session archive via `scripts/evaluate-session.py` for patterns worth preserving as memories or skills. Surfaces candidates to user with `/z-suggest-memory` recommendation.
 - `skills/z-explain/SKILL.md:1` — `z-explain` — One-shot structured code/system explanation at a chosen depth lens (orientation/walkthrough/deep/audit-brief). Supports `/z-explain --repo orientation` for one-answer repo orientation via bounded surface mapping; `--surface=off` preserves current grounding path. For installed prod packages, pair `/z-explain` with `/z-learn` for user-facing understanding; `/z-explore` is source/dev-only terrain discovery. File:line citations required. Handoff to `/z-learn` when interactive exploration warranted; route completed-work reporting to `/z-report`. Telemetry: `explain_run_start` / `explain_run_end`.
 - `skills/z-explore/SKILL.md:1` — `z-explore` — Source/dev-only active depth-scaled codebase terrain discovery; excluded from prod release artifacts and MCP tool lists. `/z-map` is legacy source/dev compatibility only.
-- `skills/z-export/SKILL.md:1` — `z-export` — Exports skill/agent/persona sources through runtime drivers. Public prod defaults center Claude + OMP; non-core hosts remain explicit dev/advanced/export-only targets. Generated mirrors belong under scratch output such as `temp/exports/`, not release source.
+- `skills/z-export/SKILL.md:1` — `z-export` — Exports skill/agent/persona sources through runtime drivers. Public prod defaults center Claude, OMP, and Codex; non-core hosts remain explicit dev/advanced/export-only targets. Generated mirrors belong under scratch output such as `temp/exports/`, not release source.
 - `skills/z-fix/SKILL.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check; `check-no-ask` halt branch emitting `fix_halt`. Advisory eval-reviewer (`personas.review_eval`, default ON).
 - `skills/z-followup-confirm/SKILL.md:1` — `z-followup-confirm` — verify→done transition via human approval (`--via=human`) or 11-point audit evidence validation (`--via=audit --evidence=<path>`). Nest-guarded.
 - `skills/z-followup-dismiss/SKILL.md:1` — `z-followup-dismiss` — Any-state → dismissed; requires `--reason`; terminal. Nest-guarded.
@@ -173,7 +173,7 @@ The catalogue below is manifest-aligned with `z_harness_cli.release_surface` for
 
 ### Multi-IDE export
 
-- **`/z-export [--target=<cursor|codex|agy|omp|pi|windsurf|kiro|cline|copilot|all>]`** — Export skill, agent, and persona sources through runtime drivers. Public release defaults center Claude + OMP; non-core hosts are explicit dev/advanced/export-only paths. See MULTI-IDE.md.
+- **`/z-export [--target=<cursor|codex|agy|omp|pi|windsurf|kiro|cline|copilot|all>]`** — Export skill, agent, and persona sources through runtime drivers. Public release defaults center Claude, OMP, and Codex; non-core hosts are explicit dev/advanced/export-only paths. See MULTI-IDE.md.
 
 ### Providers and setup
 

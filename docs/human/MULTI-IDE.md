@@ -5,24 +5,24 @@
 
 ## Overview
 
-The public release defaults are intentionally narrow: Claude Code is the primary plugin surface, and OMP is the first-class package/export target. The broader multi-IDE export pipeline remains in source for explicit dev/advanced use and translates z-harness source files (`skills/<id>/SKILL.md`, `agents/`, and `personas/builtin/`) into target-specific files under the requested output directory (the repo default is gitignored `temp/exports/`).
+The public release defaults are intentionally narrow: Claude Code is the primary native plugin surface, OMP is the first-class package/export target, and Codex is a first-class flattened plugin/export target. The broader multi-IDE export pipeline remains in source for explicit dev/advanced use and translates z-harness source files (`skills/<id>/SKILL.md`, `agents/`, and `personas/builtin/`) into target-specific files under the requested output directory (the repo default is gitignored `temp/exports/`).
 
 OMP is a **first-class native host** as of T009. The parity gate (`z_harness_cli/adapters/omp_parity_gate.py`) has resolved: `OmpAdapter.fidelity_tier` and `ExportResult.fidelity` are both `"native"`, and four command families — `/z-execute`, `/z-consult`, `/z-gate`, `/z-panel` — are `native`. All other command families are `degraded` (not blocked). Claude Code is the behavioral ground truth; OMP native parity is bounded to the four families with T008 evidence.
 
 OMP export layout is a first-class OMP package under `.omp/z-harness/` with `manifest.yml`, `skills/<id>/SKILL.md`, `rules/<id>.md`, `agents/<id>.md`, and `profiles/<name>.yml`. This is not a pi export variant and must not call `runtime/drivers/pi/export.py` or pi line-rewrite helpers. The checked-in `.omp/config.yml` is never modified by z-harness — it keeps `skills.enableAgentsProject: false` to avoid auto-loading the large root `AGENTS.md`. OMP discovery uses `OMP_PLUGIN_ROOT` pointing at the session-scoped (gitignored) `.omp/z-harness/` package root.
 
-Cursor, Codex, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explicit dev/advanced or export-only targets. Installed prod `setup --target all`, prod export auto-selection, and public help text must present Claude + OMP as the release-supported defaults instead of treating every exporter as first-class.
+Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explicit dev/advanced or export-only targets. Installed prod `setup --target all`, prod export auto-selection, and public help text must present Claude, OMP, and Codex as the release-supported defaults instead of treating every exporter as first-class.
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
 - `runtime/drivers/cursor/export.py` — `export` — Emit and validate Cursor `.mdc` rules; append `-skill` suffix on ID collision.
-- `runtime/drivers/codex/export.py` — `export` — Emit Codex prompts and `AGENTS.md`; validate prompts.
+- `runtime/drivers/codex/export.py` — `export` — Emit Codex `skills/<id>/SKILL.md`, `.codex-plugin/plugin.json`, and `AGENTS.md`; validate exported skills/manifest.
 - `runtime/drivers/antigravity/export.py` — `export` — Emit and validate all agy surfaces: workflows, rules, skills, prompts, manifest, CAPABILITIES.md, README.md.
 - `runtime/drivers/pi/export.py` — `export` — Emit pi agent files, prompts, vendored subagent extension, and AGENTS.md index (export-only; no adapter host).
 - `scripts/audit-tarball.sh:90` — `_audit_fail` — Exit 1 immediately when a forbidden tarball pattern is matched.
 - `scripts/audit-tarball.sh:98` — `_check_pattern` — Search tarball listing for one forbidden pattern (fixed-string or regex).
-- `skills/z-export/SKILL.md:11` — `/z-export` — Entry point: `python3 -m z_harness_cli export --host omp` for the public OMP package; cursor/codex/antigravity remain explicit dev/advanced `--surface dev` exports, and pi export runs via direct import of `runtime.drivers.pi.export`.
+- `skills/z-export/SKILL.md:11` — `/z-export` — Entry point: `python3 -m z_harness_cli export --all` for public first-class hosts; cursor/antigravity remain explicit dev/advanced `--surface dev` exports, and pi export runs via direct import of `runtime.drivers.pi.export`.
 - `runtime/drivers/cursor/persona_export.py` — `export_persona` — Write persona as `.cursor/personas/<name>.mdc` (context-injection rule; not native to Cursor).
 - `runtime/drivers/antigravity/persona_export.py` — `export_persona` — Write persona as `.agent/personas/<name>.md` (native agy persona format).
 - `runtime/drivers/codex/persona_export.py` — `export_persona` — Write persona for Codex CLI target.
@@ -60,9 +60,9 @@ Cursor, Codex, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explic
 ## Examples
 
 - `python3 -m z_harness_cli export --host omp --out temp/exports/omp --force` — native OMP export (T009); regenerates `temp/exports/omp/.omp/z-harness/` package files with `ExportResult(fidelity="native")`.
-- `Z_HARNESS_RELEASE_SURFACE=prod python3 -m z_harness_cli export --all` — exports installed release-supported adapter hosts (Claude/OMP) only.
+- `Z_HARNESS_RELEASE_SURFACE=prod python3 -m z_harness_cli export --all` — exports installed release-supported adapter hosts (Claude/OMP/Codex) only.
 - `python3 -m z_harness_cli export --host cursor --surface dev` — explicit dev/advanced Cursor export.
-- `python3 -m z_harness_cli export --host codex --surface dev` — explicit dev/advanced Codex export.
+- `python3 -m z_harness_cli export --host codex --surface prod` — first-class flattened Codex export.
 - `python3 -m z_harness_cli export --host antigravity --surface dev` — explicit dev/advanced Antigravity export.
 - `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('temp/exports/pi'))"` — regenerates the full `temp/exports/pi/` tree (pi is export-only; no launch/inject host support).
 - `python3 -m pytest tests/adapters/test_omp_adapter.py tests/drivers/test_omp_export_driver.py runtime/tests/test_omp_driver.py runtime/tests/test_omp_parity.py runtime/tests/test_omp_export.py tests/conformance/test_strict.py -q` — run the full OMP adapter/export/runtime/orchestration test suite (all must pass).

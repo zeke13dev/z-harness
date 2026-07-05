@@ -410,6 +410,26 @@ def test_extract_menu_options_empty_for_bare_prompt():
     assert _extract_menu_options("Proceed?\n❯") == []
 
 
+def test_extract_menu_options_empty_for_task_status_box():
+    from hermes.mcp_hermes_orchestrator import _extract_menu_options
+
+    pane = (
+        "│ Contract │\n"
+        "│ T004 acceptance: provider preflight checks command/model/auth readiness │\n"
+        "├────────────────────────────────────────┤\n"
+        "│  FixT004Review2Retry: Retry T004 blocker fix ⟨failed⟩ │\n"
+        "╰────────────────────────────────────────╯\n"
+        "\n"
+        " 1 job settled 1 failed\n"
+        "     Cloud Code Assist API error (404): Requested entity was not found.\n"
+        " Error: Request was aborted\n"
+        "╭── GPT-5.5 ──╮\n"
+        "╰─            ─╯"
+    )
+
+    assert _extract_menu_options(pane) == []
+
+
 def test_drain_tolerates_legacy_signal_without_options_key(tmp_path):
     # Simulate a signal line written before `options` existed: no such key at
     # all. drain() must not choke, and downstream consumers reading via
