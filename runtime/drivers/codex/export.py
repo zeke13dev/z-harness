@@ -14,9 +14,13 @@ export(repo_root, export_root, *, options=None) -> ExportResult
     - ``skills/<id>/SKILL.md``    — one file per skill, copied VERBATIM from
                                     the source SKILL.md (frontmatter + body
                                     preserved; no transliteration).
+    - ``.codex/agents/<id>.toml`` — one native Codex custom-agent TOML file
+                                    per source agent.
     - ``AGENTS.md``               — consolidated agent reference document.
     - ``.codex-plugin/plugin.json``— generated manifest declaring skills path
                                     so Codex CLI discovers the skills directory.
+    - ``mcp_config.json``         — installable MCP server config consumed by
+                                    the Codex adapter registration path.
 
 ExportResult is imported from runtime.drivers._export_utils (BLOCKER-1).
 Fidelity is read from the Codex parity gate when available, with a conservative
@@ -39,6 +43,7 @@ from runtime.drivers._export_utils import (
     rewrite_unsupported_call_blocks,
     export_resume_runtime_scripts,
 )
+from runtime.drivers.codex.agent_export import export_native_agents
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +184,8 @@ _CODEX_PLUGIN_MANIFEST: dict[str, Any] = {
     "skills": "./skills/",
 }
 
+_MCP_SERVER_NAME = "z-harness"
+
 
 def _resolve_version(repo_root: Path) -> str | None:
     """Read the stamped version from the committed Claude plugin manifest.
@@ -206,6 +213,29 @@ def _render_plugin_manifest(repo_root: Path) -> str:
     return json.dumps(manifest, indent=2) + "\n"
 
 
+def _render_mcp_config(repo_root: Path) -> str:
+    """Return the MCP config JSON consumed by Codex adapter registration."""
+    payload = {
+        "mcpServers": {
+            _MCP_SERVER_NAME: {
+                "command": "python3",
+                "args": [
+                    "-m",
+                    "z_harness_cli",
+                    "serve",
+                    "--transport",
+                    "stdio",
+                ],
+                "env": {
+                    "PYTHONPATH": str(repo_root),
+                    "CLAUDE_PLUGIN_ROOT": str(repo_root),
+                },
+            },
+        },
+    }
+    return json.dumps(payload, indent=2) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Public export function
 # ---------------------------------------------------------------------------
@@ -227,9 +257,11 @@ def export(
     export_root:
         Destination directory for exported files.  Skills are written verbatim
         to ``<export_root>/skills/<id>/SKILL.md`` (frontmatter preserved, no
-        transliteration).  The consolidated agent reference is written to
-        ``<export_root>/AGENTS.md``.  A Codex CLI discovery manifest is written
-        to ``<export_root>/.codex-plugin/plugin.json``.
+        transliteration).  Native Codex custom agents are written under
+        ``<export_root>/.codex/agents/``.  The consolidated agent reference is
+        written to ``<export_root>/AGENTS.md``.  A Codex CLI discovery manifest
+        is written to ``<export_root>/.codex-plugin/plugin.json``.  MCP
+        registration config is written to ``<export_root>/mcp_config.json``.
     options:
         Reserved for future use.  Currently unused; pass ``None`` or omit.
 
@@ -269,6 +301,11 @@ def export(
         out_path.write_text(skill_text, encoding="utf-8")
         emitted.append(out_path)
 
+    # --- Emit native Codex custom-agent TOML files ---
+    native_agent_result = export_native_agents(sources["agents"], export_root)
+    emitted.extend(native_agent_result.files)
+    warnings.extend(native_agent_result.warnings)
+
     # --- Emit consolidated AGENTS.md ---
     agents_path = export_root / "AGENTS.md"
     agents_path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,6 +317,10 @@ def export(
     plugin_dir.mkdir(parents=True, exist_ok=True)
     plugin_manifest_path = plugin_dir / "plugin.json"
     plugin_manifest_path.write_text(_render_plugin_manifest(repo_root), encoding="utf-8")
+
+    # --- Emit MCP config consumed by CodexAdapter.inject default registration path ---
+    mcp_config_path = export_root / "mcp_config.json"
+    mcp_config_path.write_text(_render_mcp_config(repo_root), encoding="utf-8")
 
     emitted.extend(export_resume_runtime_scripts(repo_root, export_root))
 
@@ -297,7 +338,7 @@ def export(
 
     return ExportResult(
         dest=export_root,
-        files=emitted + [agents_path, plugin_manifest_path],
+        files=emitted + [agents_path, plugin_manifest_path, mcp_config_path],
         fidelity=fidelity,
         warnings=warnings,
     )

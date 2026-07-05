@@ -35,6 +35,21 @@ _SCHEMA_FIXTURES: list[tuple[str, str, str]] = [
 ]
 
 
+def _load_fixture(schema_name: str, fixture_file: str) -> dict:
+    fixture_path = _FIXTURES_DIR / fixture_file
+    assert fixture_path.exists(), f"Fixture not found: {fixture_path}"
+    with fixture_path.open("r", encoding="utf-8") as fh:
+        instance = json.load(fh)
+    if schema_name == "agent":
+        # Source agent fixtures model frontmatter; native payload validation also
+        # includes the Markdown body as developer_instructions.
+        instance.setdefault(
+            "developer_instructions",
+            "Read the relevant docs and return concise cited context.",
+        )
+    return instance
+
+
 # ---------------------------------------------------------------------------
 # Meta-schema tests
 # ---------------------------------------------------------------------------
@@ -60,10 +75,7 @@ def test_all_schemas_pass_draft7_meta_schema():
 @pytest.mark.parametrize("schema_name,fixture_file,_required_field", _SCHEMA_FIXTURES)
 def test_valid_fixture_passes(schema_name, fixture_file, _required_field):
     """Valid fixture for each schema validates without error."""
-    fixture_path = _FIXTURES_DIR / fixture_file
-    assert fixture_path.exists(), f"Fixture not found: {fixture_path}"
-    with fixture_path.open("r", encoding="utf-8") as fh:
-        instance = json.load(fh)
+    instance = _load_fixture(schema_name, fixture_file)
     # Must not raise
     validate(schema_name, instance)
 
@@ -78,9 +90,7 @@ def test_invalid_fixture_missing_required_field_raises(
     schema_name, fixture_file, required_field
 ):
     """Removing a required field causes validate() to raise ValidationError."""
-    fixture_path = _FIXTURES_DIR / fixture_file
-    with fixture_path.open("r", encoding="utf-8") as fh:
-        instance = json.load(fh)
+    instance = _load_fixture(schema_name, fixture_file)
 
     # Remove the required field — instance is now invalid
     assert required_field in instance, (
@@ -122,19 +132,45 @@ def test_allow_cross_vendor_env_rejects_non_boolean():
 
 def test_agent_schema_accepts_exact_model_label():
     """Agent frontmatter can represent an exact native host model fallback."""
-    fixture_path = _FIXTURES_DIR / "agent_valid.json"
-    with fixture_path.open("r", encoding="utf-8") as fh:
-        instance = json.load(fh)
+    instance = _load_fixture("agent", "agent_valid.json")
     instance["model"] = "anthropic/claude-sonnet-4.5"
     validate("agent", instance)
 
 
 def test_agent_schema_accepts_optional_model_routing_metadata():
     """Agent schema can represent class routing and thinking metadata."""
-    fixture_path = _FIXTURES_DIR / "agent_valid.json"
-    with fixture_path.open("r", encoding="utf-8") as fh:
-        instance = json.load(fh)
+    instance = _load_fixture("agent", "agent_valid.json")
     instance["model_class"] = "deep"
     instance["thinking"] = "budget:high"
     instance["reasoning"] = "effort:high"
     validate("agent", instance)
+
+
+def test_agent_schema_accepts_source_shape_with_instructions():
+    """Source agent frontmatter plus body instructions validates."""
+    instance = _load_fixture("agent", "agent_valid.json")
+    del instance["schema_version"]
+    validate("agent", instance)
+
+
+def test_agent_schema_accepts_native_agent_without_model():
+    """Codex custom-agent model is optional when instructions are present."""
+    instance = _load_fixture("agent", "agent_valid.json")
+    del instance["model"]
+    validate("agent", instance)
+
+
+def test_agent_schema_rejects_missing_developer_instructions():
+    """Native-agent instruction text is required by the agent contract."""
+    instance = _load_fixture("agent", "agent_valid.json")
+    del instance["developer_instructions"]
+    with pytest.raises(jsonschema.ValidationError):
+        validate("agent", instance)
+
+
+def test_agent_schema_rejects_empty_developer_instructions():
+    """Native-agent instruction text must not be empty."""
+    instance = _load_fixture("agent", "agent_valid.json")
+    instance["developer_instructions"] = ""
+    with pytest.raises(jsonschema.ValidationError):
+        validate("agent", instance)

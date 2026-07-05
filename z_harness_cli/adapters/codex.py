@@ -141,6 +141,25 @@ Run `z-harness export --host codex` to populate the full prompt library.
 """.format
 
 
+def _write_default_mcp_config(harness_root: Path) -> str | None:
+    """Write a generated Codex MCP config to the user cache and return its path."""
+    try:
+        from runtime.drivers.codex.export import _render_mcp_config  # noqa: PLC0415
+
+        cache_base = Path(
+            os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+        )
+        mcp_config_path = cache_base / "z-harness" / "codex" / "mcp_config.json"
+        mcp_config_path.parent.mkdir(parents=True, exist_ok=True)
+        mcp_config_path.write_text(
+            _render_mcp_config(harness_root),
+            encoding="utf-8",
+        )
+        return str(mcp_config_path)
+    except Exception:  # noqa: BLE001 - MCP registration is best-effort.
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Command-capability matrix registration
 # ---------------------------------------------------------------------------
@@ -404,9 +423,9 @@ class CodexAdapter:
         project:
             Absolute path to the user's project repo root.
         mcp_config_path:
-            Optional path to the MCP config file to pass to ``codex mcp add``.
-            When None the adapter uses a built-in default path derived from
-            the harness root (``<harness_root>/exports/codex/mcp_config.json``).
+            Optional path to the exported MCP JSON config consumed by
+            ``runtime.drivers.codex.mcp.ensure_mcp_registered()``.  When None
+            the adapter generates a fresh default config in the user cache.
             Callers can override this for testing or custom layouts.
 
         Returns
@@ -465,30 +484,29 @@ class CodexAdapter:
             resolved_mcp_config = (
                 mcp_config_path
                 if mcp_config_path is not None
-                else str(
-                    Path(harness_root) / "exports" / "codex" / "mcp_config.json"
-                )
+                else _write_default_mcp_config(Path(harness_root))
             )
-            try:
-                from runtime.drivers.codex.mcp import (  # noqa: PLC0415
-                    McpRegistrationError,
-                    ensure_mcp_registered,
-                )
+            if resolved_mcp_config is not None:
                 try:
-                    ensure_mcp_registered(
-                        mcp_config_path=resolved_mcp_config,
-                        server_name=_MCP_SERVER_NAME,
-                        codex_path=codex_binary,
+                    from runtime.drivers.codex.mcp import (  # noqa: PLC0415
+                        McpRegistrationError,
+                        ensure_mcp_registered,
                     )
-                except McpRegistrationError:
-                    # `codex mcp add` exited non-zero (e.g. codex binary absent
-                    # or config dir unwritable).  Best-effort per F4: AGENTS.md
-                    # is already written; continue the session without MCP.
+                    try:
+                        ensure_mcp_registered(
+                            mcp_config_path=resolved_mcp_config,
+                            server_name=_MCP_SERVER_NAME,
+                            codex_path=codex_binary,
+                        )
+                    except (McpRegistrationError, OSError):
+                        # `codex mcp add` exited non-zero (e.g. codex binary
+                        # absent or config dir unwritable).  Best-effort per F4:
+                        # AGENTS.md is already written; continue without MCP.
+                        pass
+                except ImportError:
+                    # Runtime package not available (e.g. standalone CLI install).
+                    # MCP registration is a best-effort enhancement; skip silently.
                     pass
-            except ImportError:
-                # Runtime package not available (e.g. standalone CLI install).
-                # MCP registration is a best-effort enhancement; skip silently.
-                pass
 
         return Injection(
             env=env,

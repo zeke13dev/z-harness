@@ -1,16 +1,8 @@
 """
-runtime/drivers/codex/stream.py — stream-json JSONL parser for the Codex CLI driver.
+runtime/drivers/codex/stream.py — JSONL parser for the Codex CLI driver.
 
-Parses the ``--output-format stream-json`` byte stream from a ``codex exec -``
-subprocess line by line, yielding typed ``Frame`` objects to the caller.
-
-FORMAT-PAIRING PITFALL
-----------------------
-``--output-format stream-json`` MUST NOT be combined with ``--json-schema``.
-When both flags are present, the Codex CLI silently omits the ``structured_output``
-field from emitted frames — the schema is parsed and accepted but the response
-never includes a ``structured_output`` key.  If you need structured output, use
-``--output-format json`` (non-streaming) instead.
+Parses the ``--json`` byte stream from a ``codex exec --json -`` subprocess
+line by line, yielding typed ``Frame`` objects to the caller.
 
 Exception taxonomy (stream-level; distinct from driver.py wait-level kinds)
 ---------------------------------------------------------------------------
@@ -42,7 +34,7 @@ import sys
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 try:
     from runtime.compat import log_event as _log_event
@@ -58,6 +50,54 @@ except ImportError:
 #: CodexTimeoutError if no new byte is available within this window.
 _DEFAULT_STREAM_TIMEOUT_S: int = 30
 
+EVENT_FAMILY_AGENT = "agent"
+EVENT_FAMILY_SUBAGENT = "subagent"
+EVENT_FAMILY_ASK_USER = "ask_user"
+EVENT_FAMILY_GATE = "gate"
+EVENT_FAMILY_TOOL = "tool"
+EVENT_FAMILY_FINAL_RESULT = "final_result"
+EVENT_FAMILY_TELEMETRY = "telemetry"
+EVENT_FAMILY_ERROR = "error"
+EVENT_FAMILY_MESSAGE = "message"
+EVENT_FAMILY_UNKNOWN = "unknown"
+
+_MARKER_FIELDS: tuple[str, ...] = (
+    "type",
+    "event",
+    "kind",
+    "name",
+    "category",
+    "role",
+    "op",
+    "action",
+)
+_CONTENT_FIELDS: tuple[str, ...] = (
+    "content",
+    "text",
+    "message",
+    "delta",
+    "output",
+    "result",
+    "final_result",
+    "final_answer",
+    "summary",
+    "prompt",
+    "question",
+)
+_NESTED_CONTENT_FIELDS: tuple[str, ...] = (
+    "content",
+    "text",
+    "message",
+    "delta",
+    "output",
+    "result",
+    "final_result",
+    "final_answer",
+    "summary",
+    "prompt",
+    "question",
+)
+
 
 # ---------------------------------------------------------------------------
 # Public exceptions
@@ -65,7 +105,7 @@ _DEFAULT_STREAM_TIMEOUT_S: int = 30
 
 
 class CodexExecutionError(Exception):
-    """Raised when a stream-json frame carries ``is_error: true``.
+    """Raised when a Codex JSONL frame carries ``is_error: true``.
 
     Attributes
     ----------
@@ -113,7 +153,7 @@ class CodexCrashError(Exception):
 
 @dataclass
 class Frame:
-    """A single parsed stream-json frame from the Codex CLI.
+    """A single parsed JSONL frame from the Codex CLI.
 
     Required fields (always present after parsing)
     -----------------------------------------------
@@ -131,12 +171,112 @@ class Frame:
         The full deserialized JSON dict from the original JSONL line.
         Unknown keys from the Codex CLI are preserved here so callers can
         forward-compatibly access fields not yet modelled by this dataclass.
+    event_family : str
+        Conservative semantic family derived from native Codex event fields.
+        This is classification metadata only; ``raw`` remains the source of
+        truth and is never rewritten.
     """
 
     type: str
     content: str
     is_error: bool
     raw: dict = field(default_factory=dict)
+    event_family: str = EVENT_FAMILY_UNKNOWN
+
+
+def classify_event_family(raw: dict) -> str:
+    """Return a conservative semantic family for a native Codex event frame.
+
+    The classifier recognizes the event families z-harness needs to preserve
+    across Codex streams (agent/subagent, ask/gate prompts, tools, final
+    results, and telemetry) without translating the frame into a separate
+    model.  Unknown or future Codex frames remain ``"unknown"`` while their raw
+    keys stay available through ``Frame.raw``.
+    """
+    if not isinstance(raw, dict):
+        return EVENT_FAMILY_UNKNOWN
+
+    markers, keys = _classification_context(raw)
+
+    if bool(raw.get("is_error")) or _marker_matches(markers, ("error", "exception")):
+        return EVENT_FAMILY_ERROR
+    if _marker_matches(markers, ("agent_message", "assistant_message")):
+        return EVENT_FAMILY_MESSAGE
+    if _has_any_key(
+        keys,
+        ("subagent", "subagent_id", "subagent_name", "subagent_type"),
+    ) or _marker_matches(markers, ("subagent", "sub_agent")):
+        return EVENT_FAMILY_SUBAGENT
+    if _has_any_key(
+        keys,
+        ("agent", "agent_id", "agent_name", "agent_type"),
+    ) or _marker_matches(markers, ("agent",)):
+        return EVENT_FAMILY_AGENT
+    if _has_any_key(keys, ("ask_user", "prompt_user", "user_question")) or (
+        "question" in keys and ("choices" in keys or "options" in keys)
+    ) or _marker_matches(markers, ("ask_user", "prompt_user", "user_question")):
+        return EVENT_FAMILY_ASK_USER
+    if _has_any_key(keys, ("gate", "gate_id", "approval_request")) or _marker_matches(
+        markers,
+        ("gate", "user_gate", "approval_request", "resolve_question"),
+    ):
+        return EVENT_FAMILY_GATE
+    if _has_any_key(
+        keys,
+        (
+            "tool",
+            "tool_call",
+            "tool_call_id",
+            "tool_name",
+            "tool_result",
+            "function_call",
+            "function_call_id",
+            "command_execution",
+            "command_execution_id",
+        ),
+    ) or _marker_matches(
+        markers,
+        (
+            "tool",
+            "tool_call",
+            "tool_result",
+            "function_call",
+            "function_call_output",
+            "command_execution",
+            "command_execution_output",
+            "mcp_tool_call",
+        ),
+    ):
+        return EVENT_FAMILY_TOOL
+    if _has_any_key(keys, ("telemetry", "usage", "metrics", "token_usage")) or (
+        ("input_tokens" in keys or "output_tokens" in keys) and "type" in keys
+    ) or _marker_matches(markers, ("telemetry", "usage", "metrics", "token_usage")):
+        return EVENT_FAMILY_TELEMETRY
+    if _has_any_key(keys, ("final_result", "final_answer")) or _marker_matches(
+        markers,
+        ("final", "final_result", "final_answer", "done", "completed"),
+    ):
+        return EVENT_FAMILY_FINAL_RESULT
+    if _marker_matches(markers, ("message", "assistant_message")):
+        return EVENT_FAMILY_MESSAGE
+    return EVENT_FAMILY_UNKNOWN
+
+
+def extract_frame_content(raw: dict) -> str:
+    """Extract human-readable content from common Codex JSONL frame fields."""
+    if not isinstance(raw, dict):
+        return ""
+
+    for key in _CONTENT_FIELDS:
+        text = _coerce_content(raw.get(key), depth=0)
+        if text:
+            return text
+    item = raw.get("item")
+    if isinstance(item, dict):
+        text = _coerce_content(item, depth=0)
+        if text:
+            return text
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +291,7 @@ def parse_stream(
     run_id: str = "codex-stream",
     repo_root: str = "",
 ) -> Iterator[Frame]:
-    """Parse ``--output-format stream-json`` JSONL from a running Popen.
+    """Parse ``codex exec --json`` JSONL from a running Popen.
 
     Reads ``proc.stdout`` line by line.  Each well-formed JSON line is decoded
     into a ``Frame``; unknown JSON keys are preserved in ``Frame.raw``.
@@ -238,9 +378,10 @@ def parse_stream(
         # ------------------------------------------------------------------
         frame = Frame(
             type=data.get("type", ""),
-            content=data.get("content", ""),
+            content=extract_frame_content(data),
             is_error=bool(data.get("is_error", False)),
             raw=data,
+            event_family=classify_event_family(data),
         )
 
         # ------------------------------------------------------------------
@@ -319,3 +460,67 @@ def _emit_error_telemetry(
     except (FileNotFoundError, RuntimeError):
         # log-event.sh is unavailable outside z-harness; ignore silently.
         pass
+
+
+def _classification_context(raw: dict) -> tuple[tuple[str, ...], set[str]]:
+    """Collect conservative top-level and Codex ``item`` classification hints."""
+    markers = list(_event_markers(raw))
+    keys = {_normalise_marker(str(key)) for key in raw}
+
+    item = raw.get("item")
+    if isinstance(item, dict):
+        markers.extend(_event_markers(item))
+        keys.update(_normalise_marker(str(key)) for key in item)
+
+    return tuple(markers), keys
+
+
+def _event_markers(raw: dict) -> tuple[str, ...]:
+    markers: list[str] = []
+    for field_name in _MARKER_FIELDS:
+        value = raw.get(field_name)
+        if isinstance(value, str) and value.strip():
+            markers.append(_normalise_marker(value))
+    return tuple(markers)
+
+
+def _normalise_marker(value: str) -> str:
+    chars = [ch.lower() if ch.isalnum() else "_" for ch in value]
+    return "_".join(part for part in "".join(chars).split("_") if part)
+
+
+def _has_any_key(keys: set[str], candidates: tuple[str, ...]) -> bool:
+    return any(candidate in keys for candidate in candidates)
+
+
+def _marker_matches(markers: tuple[str, ...], candidates: tuple[str, ...]) -> bool:
+    for marker in markers:
+        for candidate in candidates:
+            if (
+                marker == candidate
+                or marker.startswith(f"{candidate}_")
+                or marker.endswith(f"_{candidate}")
+                or f"_{candidate}_" in marker
+            ):
+                return True
+    return False
+
+
+def _coerce_content(value: Any, *, depth: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [
+            part
+            for item in value
+            if (part := _coerce_content(item, depth=depth + 1))
+        ]
+        return "\n".join(parts)
+    if isinstance(value, dict) and depth < 3:
+        for key in _NESTED_CONTENT_FIELDS:
+            text = _coerce_content(value.get(key), depth=depth + 1)
+            if text:
+                return text
+    return ""

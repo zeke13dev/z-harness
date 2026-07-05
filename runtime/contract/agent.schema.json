@@ -8,8 +8,7 @@
   "required": [
     "name",
     "description",
-    "model",
-    "schema_version"
+    "developer_instructions"
   ],
   "properties": {
     "schema_version": {
@@ -19,16 +18,24 @@
     },
     "name": {
       "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "description": "Unique identifier name for this agent."
     },
     "description": {
       "type": "string",
+      "minLength": 1,
       "description": "Human-readable description of what this agent does."
     },
     "model": {
       "type": "string",
       "minLength": 1,
-      "description": "Native model fallback label from frontmatter. May be a built-in tier (haiku, sonnet, opus) or an exact host model label; model_routing.native_agents can override it by agent id."
+      "description": "Optional native model fallback label from frontmatter. May be a built-in tier (haiku, sonnet, opus) or an exact host model label; model_routing.native_agents can override it by agent id."
+    },
+    "developer_instructions": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Required source body or native-agent instruction text associated with this agent."
     },
     "model_class": {
       "type": "string",

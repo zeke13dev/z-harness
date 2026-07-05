@@ -211,7 +211,7 @@
       },
       "event_frame_support": {
         "surface": "cli_stream",
-        "evidence_source": "codex exec --help stream-json/jsonl/event-frame output",
+        "evidence_source": "codex exec --help --json/JSONL/event-frame output",
         "claim_boundary": "Required before preserving native Codex event frames in the runtime driver."
       }
     },

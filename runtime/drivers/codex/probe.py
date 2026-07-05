@@ -328,6 +328,7 @@ _ASK_USER_GATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _EVENT_FRAME_PATTERN = re.compile(
+    r"(?<![\w-])--json(?![\w-])|"
     r"--output-format[^\n]*(?:stream-json|jsonl)|"
     r"\b(?:stream-json|jsonl|event[-_\s]?frames?)\b",
     re.IGNORECASE,
@@ -497,7 +498,7 @@ def _cli_capability_results(
         else CapabilityStatus.UNSUPPORTED,
         surface=CodexSurface.CLI_STREAM,
         evidence=_match_evidence(
-            event_match, "codex exec --help has no stream-json/jsonl event output"
+            event_match, "codex exec --help has no --json/jsonl event output"
         ),
     )
     return cli_visible_agent, ask_user_gate, event_frame

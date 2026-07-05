@@ -33,6 +33,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 - _(auto)_ Add codex prod support and model routing _(release)_
 - _(auto)_ Add parity-gated capability contract _(codex)_
+- _(auto)_ Export agents and preserve jsonl events _(codex)_
 
 ## 2026-07-04
 

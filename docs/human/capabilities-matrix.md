@@ -104,7 +104,7 @@ OMP's adapter and export fidelity are now `native` (T009 complete). **Only** the
 | `app_plugin_multi_agent_support` | Codex app/plugin | `codex features list` row for `multi_agent` | Indicates app/plugin multi-agent availability only; it is not proof that `codex exec` exposes CLI agent dispatch. |
 | `cli_visible_agent_support` | Codex CLI | `codex exec --help` agent/subagent flags or commands | Required before treating Codex CLI as a candidate for native subagent dispatch. |
 | `ask_user_gate_support` | Codex CLI | `codex exec --help` AskUser/gate/approval markers | Required before mapping z-harness gates onto Codex CLI. |
-| `event_frame_support` | Codex CLI stream | `codex exec --help` stream-json/jsonl/event-frame output | Required before preserving native Codex event frames in the runtime driver. |
+| `event_frame_support` | Codex CLI stream | `codex exec --help` `--json`/JSONL/event-frame output | Required before preserving native Codex event frames in the runtime driver. |
 | `support_tier` | Derived | The four fields above | One of `unknown`, `flattened_cli`, `cli_partial`, `cli_native_candidate`, `app_plugin_multi_agent_cli_degraded`, or `full_native_candidate`. |
 
 The current Codex adapter matrix still describes the shipped CLI adapter tier. A probe result of `app_plugin_multi_agent_cli_degraded` means the app/plugin surface has multi-agent evidence while the CLI surface remains degraded; a `cli_native_candidate` or `full_native_candidate` result still needs the later parity-gate and runtime-driver tests before command families can be promoted.

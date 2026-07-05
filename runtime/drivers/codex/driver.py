@@ -1,8 +1,8 @@
 """
 runtime/drivers/codex/driver.py — HostDriver implementation for the Codex CLI.
 
-Invokes ``codex exec -`` with ``--output-format stream-json``, piping the
-prompt to stdin.  Auth env additions from ``auth.resolve_auth()`` are injected
+Invokes ``codex exec --json -``, piping the prompt to stdin.  Auth env
+additions from ``auth.resolve_auth()`` are injected
 into the subprocess environment; ANTHROPIC_API_KEY and CLAUDE_API_KEY are
 explicitly stripped from the env unless the provider config opts in via
 ``allow_cross_vendor_env: true``.
@@ -32,13 +32,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Iterator, Optional
 
 from runtime.dispatch.driver import DispatchHandle, HostDriver
 from runtime.dispatch.result import DispatchResult
 from runtime.drivers.codex.auth import AuthResolutionError, resolve_auth
-from runtime.drivers.codex.stream import parse_stream
+from runtime.drivers.codex.stream import EVENT_FAMILY_UNKNOWN, parse_stream
 
 try:
     from runtime.compat import log_event as _log_event
@@ -54,7 +55,7 @@ except ImportError:
 _CROSS_VENDOR_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")
 
 #: Codex CLI invocation prefix; prompt arrives on stdin.
-_CODEX_CMD: list[str] = ["codex", "exec", "-", "--output-format", "stream-json"]
+_CODEX_CMD: list[str] = ["codex", "exec", "--json", "-"]
 
 #: Default timeout in seconds when provider_config does not specify one.
 _DEFAULT_TIMEOUT_S: int = 120
@@ -72,8 +73,8 @@ class CodexDriver(HostDriver):
     ---------
     1. Caller calls ``driver.init(provider_config)`` once.
     2. For each prompt, caller calls ``driver.dispatch(command_id, args, env)``
-       which launches ``codex exec -`` and returns a ``DispatchHandle``.
-    3. Caller iterates ``handle.events()`` to consume stream-json frames.
+        which launches ``codex exec --json -`` and returns a ``DispatchHandle``.
+    3. Caller iterates ``handle.events()`` to consume Codex JSONL frames.
     4. Caller calls ``handle.wait()`` to collect the ``DispatchResult``.
     5. Caller calls ``driver.teardown()`` (no-op for this driver).
 
@@ -132,17 +133,19 @@ class CodexDriver(HostDriver):
         args: list[str],
         env: dict,
     ) -> DispatchHandle:
-        """Launch ``codex exec -`` and return a streaming handle.
+        """Launch ``codex exec --json -`` and return a streaming handle.
 
-        The ``args`` list from the dispatcher is ignored here — CodexDriver
-        always uses ``_CODEX_CMD`` as the argv.  The ``env`` argument from the
-        dispatcher is used as the starting environment (already processed by
-        ``runtime.dispatch.env.build_env``); this method merges auth env
-        additions and strips cross-vendor keys on top of it.
+        CodexDriver always uses ``_CODEX_CMD`` as the subprocess argv.  The
+        dispatcher's ``args`` list is still used to build stdin: when it starts
+        with ``provider_config["args_template"]``, that prefix is stripped and
+        the remaining tokens are joined into the prompt.  The ``env`` argument
+        from the dispatcher is used as the starting environment (already
+        processed by ``runtime.dispatch.env.build_env``); this method merges
+        auth env additions and strips cross-vendor keys on top of it.
 
         Args:
             command_id: Ignored; present for interface compatibility.
-            args: Ignored; CodexDriver composes its own argv.
+            args: Dispatcher-composed argv; used only to derive stdin prompt.
             env: Starting subprocess environment from the dispatcher.
 
         Returns:
@@ -196,10 +199,19 @@ class CodexDriver(HostDriver):
             stderr=subprocess.PIPE,
             env=proc_env,
         )
+        _write_prompt_to_stdin(
+            proc,
+            _prompt_from_dispatch_args(args, self._provider_config),
+        )
 
         # Capture telemetry state for the closures below.
         run_id = self._run_id
         repo_root = self._repo_root
+        stream_stats = {
+            "frames_parsed": 0,
+            "frames_by_family": {},
+        }
+        stream_stats_lock = threading.Lock()
 
         def _events_fn() -> Iterator[dict]:
             """Yield parsed JSONL frames from codex stdout as dicts.
@@ -220,6 +232,13 @@ class CodexDriver(HostDriver):
                 run_id=run_id,
                 repo_root=repo_root,
             ):
+                event_family = frame.event_family or EVENT_FAMILY_UNKNOWN
+                with stream_stats_lock:
+                    stream_stats["frames_parsed"] += 1
+                    frames_by_family = stream_stats["frames_by_family"]
+                    frames_by_family[event_family] = (
+                        frames_by_family.get(event_family, 0) + 1
+                    )
                 yield frame.raw
 
         def _wait_fn() -> DispatchResult:
@@ -262,12 +281,16 @@ class CodexDriver(HostDriver):
                         file=sys.stderr,
                     )
             else:
+                with stream_stats_lock:
+                    frames_parsed = stream_stats["frames_parsed"]
+                    frames_by_family = dict(stream_stats["frames_by_family"])
                 try:
                     _fire_telemetry(
                         "codex_driver_complete",
                         {
                             "exit_code": exit_code,
-                            "frames_parsed": 0,  # T003 stream.py will carry frame counts
+                            "frames_parsed": frames_parsed,
+                            "frames_by_family": frames_by_family,
                             "elapsed_ms": round(elapsed_ms, 1),
                         },
                         run_id=run_id,
@@ -354,6 +377,33 @@ def _build_proc_env(
             env.pop(key, None)
 
     return env
+
+
+def _prompt_from_dispatch_args(args: list[str], provider_config: dict) -> str:
+    """Return the prompt portion of a dispatcher-composed argv list."""
+    prompt_args = list(args)
+    args_template = provider_config.get("args_template")
+    if isinstance(args_template, list):
+        prefix = [str(part) for part in args_template]
+        if prompt_args[: len(prefix)] == prefix:
+            prompt_args = prompt_args[len(prefix) :]
+    return " ".join(str(part) for part in prompt_args)
+
+
+def _write_prompt_to_stdin(proc: subprocess.Popen, prompt: str) -> None:
+    """Send the prompt to ``codex exec --json -`` and close stdin."""
+    if proc.stdin is None:
+        return
+
+    try:
+        if prompt:
+            payload = prompt if prompt.endswith("\n") else f"{prompt}\n"
+            proc.stdin.write(payload.encode("utf-8"))
+        proc.stdin.close()
+    except BrokenPipeError:
+        # The process may exit before reading stdin, for example on immediate
+        # CLI validation failure. wait() will report the subprocess status.
+        pass
 
 
 def _fire_telemetry(

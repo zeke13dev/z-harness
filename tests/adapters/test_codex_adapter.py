@@ -6,7 +6,7 @@ Covers:
   * export_payload() — round-trip to a tmp dir; files land under prompts/.
   * inject() / cleanup() — ephemeral round-trip in a tmp git project.
   * MCP registration — capability-gated; idempotent; NOT removed by cleanup (F4).
-  * fidelity tier = "flattened".
+  * fidelity tiers are gate-driven.
   * capability flags correct (project_mcp=True, user_mcp=False,
     needs_trust_prompt=False, supports_cwd_override=False).
   * command-capability matrix — multi-agent commands blocked, others degraded.
@@ -16,6 +16,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -260,13 +261,15 @@ class TestExportPayload(unittest.TestCase):
             ):
                 result = self.adapter.export_payload(dest)
 
-            self.assertEqual(result.fidelity, "flattened")
+            from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
+            self.assertEqual(result.fidelity, codex_export_fidelity())
             self.assertTrue(
                 any("personas/" in w for w in result.warnings),
                 f"Expected warning about missing personas/, got: {result.warnings}",
             )
 
-    def test_export_fidelity_is_flattened(self):
+    def test_export_fidelity_is_gate_driven(self):
         """export_payload() reports the gate-driven default fidelity."""
         from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
 
@@ -275,7 +278,6 @@ class TestExportPayload(unittest.TestCase):
             dest.mkdir()
             result = self.adapter.export_payload(dest)
         self.assertEqual(result.fidelity, codex_export_fidelity())
-        self.assertEqual(result.fidelity, "flattened")
 
     def test_export_to_temp_dir_with_mock_persona(self):
         """Round-trip: persona exported to temp dir lands under prompts/personas/."""
@@ -316,7 +318,9 @@ class TestExportPayload(unittest.TestCase):
                     adapter = CodexAdapter()
                     result = adapter.export_payload(dest)
 
-            self.assertEqual(result.fidelity, "flattened")
+            from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
+
+            self.assertEqual(result.fidelity, codex_export_fidelity())
             self.assertEqual(result.dest, dest)
 
 
@@ -347,7 +351,7 @@ class TestParityGate(unittest.TestCase):
         adapter = CodexAdapter()
 
         self.assertEqual(adapter.fidelity_tier, codex_adapter_fidelity())
-        self.assertEqual(codex_export_fidelity(), "flattened")
+        self.assertEqual(codex_export_fidelity(), "partial")
         for cmd in KNOWN_COMMANDS:
             with self.subTest(cmd=cmd):
                 self.assertEqual(command_tier("codex", cmd), codex_command_tier(cmd))
@@ -493,6 +497,36 @@ class TestInjectEphemeral(_RepoCase):
         """inject() must call ensure_mcp_registered when supports_project_mcp=True."""
         _, mock_mcp = self._inject_with_stubbed_mcp()
         mock_mcp.ensure_mcp_registered.assert_called_once()
+
+    def test_inject_default_mcp_config_path_is_generated_cache_file(self):
+        """Default MCP registration must use an existing generated config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            with patch.dict("os.environ", {"XDG_CACHE_HOME": str(cache_root)}), \
+                 patch(
+                     "runtime.drivers.codex.mcp.ensure_mcp_registered",
+                     return_value=False,
+                 ) as mock_ensure:
+                self.adapter.inject(
+                    {},
+                    mode="ephemeral",
+                    project=self.repo,
+                )
+
+            hardcoded_export_path = REPO_ROOT / "exports" / "codex" / "mcp_config.json"
+            mock_ensure.assert_called_once()
+            kwargs = mock_ensure.call_args.kwargs
+            mcp_config_path = Path(kwargs["mcp_config_path"])
+            self.assertNotEqual(mcp_config_path, hardcoded_export_path)
+            self.assertTrue(
+                mcp_config_path.exists(),
+                f"generated MCP config missing: {mcp_config_path}",
+            )
+            self.assertTrue(mcp_config_path.is_relative_to(cache_root))
+
+            data = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            self.assertIn("mcpServers", data)
+            self.assertIn("z-harness", data["mcpServers"])
 
     def test_inject_mcp_registration_idempotent(self):
         """Calling inject() twice must call ensure_mcp_registered twice (each idempotent).

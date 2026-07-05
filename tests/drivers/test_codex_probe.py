@@ -57,7 +57,7 @@ _FAKE_HELP_WITH_SESSION = """\
 Usage: codex exec [OPTIONS] -
 
 Options:
-  --output-format <fmt>   Output format (stream-json, json)
+  --json                  Print events to stdout as JSONL
   --session-id <id>       Resume or create a session by ID
   --model <model>         Model to use
   -h, --help              Print help
@@ -67,7 +67,7 @@ _FAKE_HELP_WITHOUT_SESSION = """\
 Usage: codex exec [OPTIONS] -
 
 Options:
-  --output-format <fmt>   Output format (stream-json, json)
+  --json                  Print events to stdout as JSONL
   --model <model>         Model to use
   -h, --help              Print help
 """
@@ -78,7 +78,7 @@ Usage: codex exec [OPTIONS] -
 Options:
   --agent <name>          Run with a named agent
   --ask-user              Emit AskUser gate prompts
-  --output-format <fmt>   Output format (stream-json, json)
+  --json                  Print events to stdout as JSONL
   -h, --help              Print help
 """
 
@@ -325,12 +325,14 @@ class TestCodexCapabilityContractUnit:
             contract = _probe_codex_capabilities("codex")
 
         assert contract.ask_user_gate_support.status == CapabilityStatus.UNSUPPORTED
+        assert contract.cli_visible_agent_support.status == CapabilityStatus.UNSUPPORTED
         assert (
             contract.ask_user_gate_support.evidence
             == "codex exec --help has no AskUser/gate markers"
         )
         assert contract.event_frame_support.status == CapabilityStatus.SUPPORTED
-        assert "JSONL" in contract.event_frame_support.evidence
+        assert "--json" in contract.event_frame_support.evidence
+        assert contract.support_tier == CodexSupportTier.FLATTENED_CLI
 
 
 # ===========================================================================

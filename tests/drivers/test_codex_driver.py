@@ -384,6 +384,7 @@ from runtime.drivers.codex.driver import (
     _build_proc_env,
     _CROSS_VENDOR_KEYS,
     _DEFAULT_TIMEOUT_S,
+    _prompt_from_dispatch_args,
 )
 from runtime.dispatch.result import DispatchResult
 
@@ -501,6 +502,19 @@ class TestBuildProcEnv:
         assert base == original_base
 
 
+class TestPromptFromDispatchArgs:
+    """Prompt extraction from dispatcher-composed argv."""
+
+    def test_strips_provider_args_template_prefix(self):
+        assert (
+            _prompt_from_dispatch_args(["exec", "-", "say", "hello"], _CODEX_PROVIDER)
+            == "say hello"
+        )
+
+    def test_uses_all_args_when_prefix_does_not_match(self):
+        assert _prompt_from_dispatch_args(["say", "hello"], _CODEX_PROVIDER) == "say hello"
+
+
 # ---------------------------------------------------------------------------
 # CodexDriver.init tests
 # ---------------------------------------------------------------------------
@@ -537,7 +551,7 @@ class TestCodexDriverInit:
 
 
 class TestCodexDriverDispatch:
-    """dispatch() launches codex exec -, returns a working DispatchHandle."""
+    """dispatch() launches codex exec --json -, returns a working DispatchHandle."""
 
     def _driver_with_mock(
         self,
@@ -573,10 +587,9 @@ class TestCodexDriverDispatch:
         mock_popen.assert_called_once()
         call_args = mock_popen.call_args
         argv = call_args[0][0]
-        assert argv[0] == "codex"
-        assert "exec" in argv
-        assert "--output-format" in argv
-        assert "stream-json" in argv
+        assert argv == ["codex", "exec", "--json", "-"]
+        assert "--output-format" not in argv
+        assert "stream-json" not in argv
 
     def test_popen_stdin_is_pipe(self, monkeypatch: pytest.MonkeyPatch):
         mock_proc = _make_mock_proc(returncode=0)
@@ -585,6 +598,30 @@ class TestCodexDriverDispatch:
 
         call_kwargs = mock_popen.call_args.kwargs
         assert call_kwargs["stdin"] == _subprocess.PIPE
+
+    def test_dispatch_writes_prompt_tail_to_stdin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        mock_proc = _make_mock_proc(stdout_lines=[], returncode=0)
+        mock_proc.stdin = MagicMock()
+        driver, _ = self._driver_with_mock(monkeypatch, mock_proc)
+
+        driver.dispatch("z-ask", ["exec", "-", "say", "hello"], dict(_CLEAN_ENV))
+
+        mock_proc.stdin.write.assert_called_once_with(b"say hello\n")
+        mock_proc.stdin.close.assert_called_once()
+
+    def test_dispatch_closes_stdin_for_empty_prompt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        mock_proc = _make_mock_proc(stdout_lines=[], returncode=0)
+        mock_proc.stdin = MagicMock()
+        driver, _ = self._driver_with_mock(monkeypatch, mock_proc)
+
+        driver.dispatch("z-ask", ["exec", "-"], dict(_CLEAN_ENV))
+
+        mock_proc.stdin.write.assert_not_called()
+        mock_proc.stdin.close.assert_called_once()
 
     def test_events_yields_parsed_json(self, monkeypatch: pytest.MonkeyPatch):
         lines = ['{"type":"message","content":"hello"}', '{"type":"done"}']
@@ -598,6 +635,49 @@ class TestCodexDriverDispatch:
         assert len(events) == 2
         assert events[0] == {"type": "message", "content": "hello"}
         assert events[1] == {"type": "done"}
+
+    def test_events_preserve_native_semantic_frames_raw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        raw_frames = [
+            {
+                "type": "subagent.started",
+                "subagent_type": "implementer",
+                "native_unknown": "kept",
+            },
+            {
+                "type": "ask_user",
+                "question": "Continue?",
+                "choices": ["continue", "abort"],
+            },
+            {
+                "type": "tool_call",
+                "tool_name": "apply_patch",
+                "tool_call_id": "tool-1",
+            },
+            {
+                "type": "final_result",
+                "result": {"content": "complete"},
+            },
+        ]
+        mock_proc = _make_mock_proc(
+            stdout_lines=[_json_stream.dumps(frame) for frame in raw_frames],
+            returncode=0,
+        )
+        driver, _ = self._driver_with_mock(monkeypatch, mock_proc)
+        _patch_driver_select(monkeypatch)
+
+        handle = driver.dispatch("z-ask", [], dict(_CLEAN_ENV))
+        events = list(handle.events())
+
+        assert events == raw_frames
+        assert events[0]["native_unknown"] == "kept"
+        assert [classify_event_family(event) for event in events] == [
+            EVENT_FAMILY_SUBAGENT,
+            EVENT_FAMILY_ASK_USER,
+            EVENT_FAMILY_TOOL,
+            EVENT_FAMILY_FINAL_RESULT,
+        ]
 
     def test_events_skips_malformed_jsonl(
         self, monkeypatch: pytest.MonkeyPatch, capsys
@@ -760,8 +840,12 @@ class TestCodexDriverTelemetry:
         self,
         monkeypatch: pytest.MonkeyPatch,
         returncode: int = 0,
+        stdout_lines: list[str] | None = None,
     ) -> tuple[CodexDriver, MagicMock]:
-        mock_proc = _make_mock_proc(returncode=returncode)
+        mock_proc = _make_mock_proc(
+            stdout_lines=stdout_lines,
+            returncode=returncode,
+        )
         mock_popen = MagicMock(return_value=mock_proc)
         monkeypatch.setattr(
             "runtime.drivers.codex.driver.subprocess.Popen", mock_popen
@@ -809,6 +893,33 @@ class TestCodexDriverTelemetry:
 
         kinds = [c.args[0] for c in mock_fire.call_args_list]
         assert "codex_driver_complete" in kinds
+
+    def test_complete_event_reports_consumed_frame_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        stdout_lines = [
+            '{"type":"message","content":"hi"}',
+            '{"type":"tool_call","tool_name":"apply_patch"}',
+            '{"type":"final_result","result":{"content":"done"}}',
+        ]
+        driver, mock_fire = self._setup_mocks(
+            monkeypatch,
+            returncode=0,
+            stdout_lines=stdout_lines,
+        )
+        _patch_driver_select(monkeypatch)
+        handle = driver.dispatch("z-ask", [], dict(_CLEAN_ENV))
+        list(handle.events())
+        handle.wait()
+
+        complete_call = next(
+            c for c in mock_fire.call_args_list if c.args[0] == "codex_driver_complete"
+        )
+        payload = complete_call.args[1]
+        assert payload["frames_parsed"] == 3
+        assert payload["frames_by_family"]["message"] == 1
+        assert payload["frames_by_family"]["tool"] == 1
+        assert payload["frames_by_family"]["final_result"] == 1
 
     def test_complete_event_not_fired_on_error_exit(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1179,13 +1290,25 @@ class TestEnvCollisionTelemetry:
 # ===========================================================================
 
 import io as _io
+import json as _json_stream
 import select as _select
 
 from runtime.drivers.codex.stream import (
     CodexCrashError,
     CodexExecutionError,
     CodexTimeoutError,
+    EVENT_FAMILY_AGENT,
+    EVENT_FAMILY_ASK_USER,
+    EVENT_FAMILY_FINAL_RESULT,
+    EVENT_FAMILY_GATE,
+    EVENT_FAMILY_MESSAGE,
+    EVENT_FAMILY_SUBAGENT,
+    EVENT_FAMILY_TELEMETRY,
+    EVENT_FAMILY_TOOL,
+    EVENT_FAMILY_UNKNOWN,
     Frame,
+    classify_event_family,
+    extract_frame_content,
     parse_stream,
 )
 
@@ -1248,6 +1371,10 @@ class TestFrame:
         f = Frame(type="done", content="", is_error=False)
         assert f.raw == {}
 
+    def test_event_family_defaults_unknown_for_manual_frame(self):
+        f = Frame(type="custom", content="", is_error=False)
+        assert f.event_family == "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Normal completion
@@ -1291,6 +1418,178 @@ class TestParseStreamNormalCompletion:
         )
         frames = list(parse_stream(proc))
         assert frames[0].raw["extra_field"] == "x"
+
+    def test_classifies_native_codex_event_families(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_select_ready(monkeypatch)
+        native_frames = [
+            {
+                "type": "agent.started",
+                "agent_name": "planner",
+                "content": "agent online",
+            },
+            {
+                "type": "subagent.started",
+                "subagent_type": "implementer",
+                "z_extra": {"worker": "T005"},
+            },
+            {
+                "type": "ask_user",
+                "question": "Proceed?",
+                "choices": ["yes", "no"],
+            },
+            {
+                "type": "user_gate",
+                "gate_id": "release_review",
+                "prompt": "Approve release?",
+            },
+            {
+                "type": "tool_call",
+                "tool_name": "apply_patch",
+                "tool_call_id": "tool-1",
+                "arguments": {"file": "runtime/drivers/codex/stream.py"},
+            },
+            {
+                "type": "final_result",
+                "result": {"content": "done"},
+            },
+            {
+                "type": "telemetry",
+                "usage": {"input_tokens": 12, "output_tokens": 4},
+            },
+        ]
+        proc = _make_stream_proc(
+            stdout_lines=[_json_stream.dumps(frame) for frame in native_frames],
+            returncode=0,
+        )
+
+        frames = list(parse_stream(proc))
+
+        assert [frame.event_family for frame in frames] == [
+            EVENT_FAMILY_AGENT,
+            EVENT_FAMILY_SUBAGENT,
+            EVENT_FAMILY_ASK_USER,
+            EVENT_FAMILY_GATE,
+            EVENT_FAMILY_TOOL,
+            EVENT_FAMILY_FINAL_RESULT,
+            EVENT_FAMILY_TELEMETRY,
+        ]
+        assert frames[1].raw["z_extra"] == {"worker": "T005"}
+        assert frames[2].content == "Proceed?"
+        assert frames[3].content == "Approve release?"
+        assert frames[5].content == "done"
+
+    def test_classifies_current_codex_nested_item_frames(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_select_ready(monkeypatch)
+        native_frames = [
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "command_execution",
+                    "id": "cmd-1",
+                    "command": "pytest -q",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "function_call",
+                    "name": "apply_patch",
+                    "call_id": "call-1",
+                },
+            },
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "subagent.started",
+                    "subagent_type": "reviewer",
+                },
+            },
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "agent.started",
+                    "agent_name": "planner",
+                },
+            },
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 12, "output_tokens": 4},
+            },
+        ]
+        proc = _make_stream_proc(
+            stdout_lines=[_json_stream.dumps(frame) for frame in native_frames],
+            returncode=0,
+        )
+
+        frames = list(parse_stream(proc))
+
+        assert [frame.event_family for frame in frames] == [
+            EVENT_FAMILY_TOOL,
+            EVENT_FAMILY_TOOL,
+            EVENT_FAMILY_SUBAGENT,
+            EVENT_FAMILY_AGENT,
+            EVENT_FAMILY_TELEMETRY,
+        ]
+        assert [frame.raw for frame in frames] == native_frames
+
+    def test_current_codex_agent_message_item_is_message_with_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        _patch_select_ready(monkeypatch)
+        live_frames = [
+            {"thread_id": "...", "type": "thread.started"},
+            {"type": "turn.started"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_0",
+                    "type": "agent_message",
+                    "text": "OK",
+                },
+            },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 17401,
+                    "output_tokens": 20,
+                },
+            },
+        ]
+        proc = _make_stream_proc(
+            stdout_lines=[_json_stream.dumps(frame) for frame in live_frames],
+            returncode=0,
+        )
+
+        frames = list(parse_stream(proc))
+
+        assert [frame.event_family for frame in frames] == [
+            EVENT_FAMILY_UNKNOWN,
+            EVENT_FAMILY_UNKNOWN,
+            EVENT_FAMILY_MESSAGE,
+            EVENT_FAMILY_TELEMETRY,
+        ]
+        assert frames[2].content == "OK"
+        assert frames[2].raw == live_frames[2]
+
+    def test_content_extraction_handles_nested_message_content(self):
+        raw = {
+            "type": "message",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "text", "text": "world"},
+                ]
+            },
+        }
+        assert extract_frame_content(raw) == "hello\nworld"
+
+    def test_classify_event_family_is_available_for_raw_driver_events(self):
+        raw = {"type": "tool_result", "tool_call_id": "tool-1", "output": "ok"}
+        assert classify_event_family(raw) == EVENT_FAMILY_TOOL
 
     def test_empty_lines_skipped(self, monkeypatch: pytest.MonkeyPatch):
         _patch_select_ready(monkeypatch)
@@ -1537,6 +1836,7 @@ class TestParseStreamTelemetryErrorKinds:
 # mcp.py / ensure_mcp_registered() tests (T005)
 # ===========================================================================
 
+import json as _json
 import tomllib as _tomllib
 
 from runtime.drivers.codex.mcp import (
@@ -1546,6 +1846,28 @@ from runtime.drivers.codex.mcp import (
     _resolve_config_toml,
     ensure_mcp_registered,
 )
+
+
+def _write_mcp_config(
+    tmp_path: Path,
+    *,
+    server_name: str = "filesystem",
+    command: str = "python3",
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Write an exported MCP config fixture and return its path."""
+    server: dict[str, object] = {"command": command}
+    if args is not None:
+        server["args"] = args
+    if env is not None:
+        server["env"] = env
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text(
+        _json.dumps({"mcpServers": {server_name: server}}),
+        encoding="utf-8",
+    )
+    return str(config_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1621,8 +1943,16 @@ class TestIsAlreadyRegistered:
 class TestInvokeCodexMcpAdd:
     """_invoke_codex_mcp_add wraps subprocess.run; raises McpRegistrationError on failure."""
 
-    def test_calls_correct_command(self):
+    def test_calls_current_codex_cli_command_shape(self, tmp_path: Path):
         captured: dict = {}
+        mcp_config_path = _write_mcp_config(
+            tmp_path,
+            args=["-m", "z_harness_cli", "serve", "--transport", "stdio"],
+            env={
+                "PYTHONPATH": "/repo",
+                "CLAUDE_PLUGIN_ROOT": "/repo",
+            },
+        )
 
         def _fake_run(cmd, *, stdin, stdout, stderr):
             captured["cmd"] = cmd
@@ -1634,17 +1964,65 @@ class TestInvokeCodexMcpAdd:
         with patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
             _invoke_codex_mcp_add(
                 codex_path="/usr/local/bin/codex",
-                mcp_config_path="/path/to/mcp.json",
+                mcp_config_path=mcp_config_path,
                 server_name="filesystem",
             )
 
-        assert captured["cmd"][0] == "/usr/local/bin/codex"
-        assert "mcp" in captured["cmd"]
-        assert "add" in captured["cmd"]
-        assert "/path/to/mcp.json" in captured["cmd"]
-        assert "filesystem" in captured["cmd"]
+        assert captured["cmd"] == [
+            "/usr/local/bin/codex",
+            "mcp",
+            "add",
+            "--env",
+            "PYTHONPATH=/repo",
+            "--env",
+            "CLAUDE_PLUGIN_ROOT=/repo",
+            "filesystem",
+            "--",
+            "python3",
+            "-m",
+            "z_harness_cli",
+            "serve",
+            "--transport",
+            "stdio",
+        ]
+        assert "--config" not in captured["cmd"]
+        assert mcp_config_path not in captured["cmd"]
 
-    def test_raises_mcp_registration_error_on_non_zero_exit(self):
+    def test_omits_env_options_when_env_absent(self, tmp_path: Path):
+        captured: dict = {}
+        mcp_config_path = _write_mcp_config(
+            tmp_path,
+            command="node",
+            args=["server.js"],
+        )
+
+        def _fake_run(cmd, *, stdin, stdout, stderr):
+            captured["cmd"] = cmd
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = b""
+            return result
+
+        with patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
+            _invoke_codex_mcp_add(
+                codex_path="/usr/local/bin/codex",
+                mcp_config_path=mcp_config_path,
+                server_name="filesystem",
+            )
+
+        assert captured["cmd"] == [
+            "/usr/local/bin/codex",
+            "mcp",
+            "add",
+            "filesystem",
+            "--",
+            "node",
+            "server.js",
+        ]
+
+    def test_raises_mcp_registration_error_on_non_zero_exit(self, tmp_path: Path):
+        mcp_config_path = _write_mcp_config(tmp_path)
+
         def _fake_run(cmd, *, stdin, stdout, stderr):
             result = MagicMock()
             result.returncode = 1
@@ -1655,14 +2033,16 @@ class TestInvokeCodexMcpAdd:
             with pytest.raises(McpRegistrationError) as exc_info:
                 _invoke_codex_mcp_add(
                     codex_path="/usr/local/bin/codex",
-                    mcp_config_path="/path/to/mcp.json",
-                    server_name="bad-server",
+                    mcp_config_path=mcp_config_path,
+                    server_name="filesystem",
                 )
 
         assert exc_info.value.returncode == 1
         assert "codex: unknown server" in exc_info.value.stderr
 
-    def test_no_raise_on_zero_exit(self):
+    def test_no_raise_on_zero_exit(self, tmp_path: Path):
+        mcp_config_path = _write_mcp_config(tmp_path)
+
         def _fake_run(cmd, *, stdin, stdout, stderr):
             result = MagicMock()
             result.returncode = 0
@@ -1673,11 +2053,13 @@ class TestInvokeCodexMcpAdd:
             # Must not raise
             _invoke_codex_mcp_add(
                 codex_path="/usr/local/bin/codex",
-                mcp_config_path="/path/to/mcp.json",
+                mcp_config_path=mcp_config_path,
                 server_name="filesystem",
             )
 
-    def test_stderr_captured_in_exception(self):
+    def test_stderr_captured_in_exception(self, tmp_path: Path):
+        mcp_config_path = _write_mcp_config(tmp_path, server_name="srv")
+
         def _fake_run(cmd, *, stdin, stdout, stderr):
             result = MagicMock()
             result.returncode = 2
@@ -1688,12 +2070,81 @@ class TestInvokeCodexMcpAdd:
             with pytest.raises(McpRegistrationError) as exc_info:
                 _invoke_codex_mcp_add(
                     codex_path="/usr/local/bin/codex",
-                    mcp_config_path="/p/mcp.json",
+                    mcp_config_path=mcp_config_path,
                     server_name="srv",
                 )
 
         assert "Error: permission denied" in exc_info.value.stderr
         assert exc_info.value.returncode == 2
+
+    def test_raises_when_mcp_config_missing(self):
+        with patch("runtime.drivers.codex.mcp.subprocess.run") as mock_run:
+            with pytest.raises(McpRegistrationError) as exc_info:
+                _invoke_codex_mcp_add(
+                    codex_path="/usr/local/bin/codex",
+                    mcp_config_path="/missing/mcp_config.json",
+                    server_name="filesystem",
+                )
+
+        assert exc_info.value.returncode == -1
+        assert "could not read MCP config" in exc_info.value.stderr
+        mock_run.assert_not_called()
+
+    def test_raises_when_mcp_config_malformed(self, tmp_path: Path):
+        config_path = tmp_path / "mcp_config.json"
+        config_path.write_text("{bad json", encoding="utf-8")
+
+        with patch("runtime.drivers.codex.mcp.subprocess.run") as mock_run:
+            with pytest.raises(McpRegistrationError) as exc_info:
+                _invoke_codex_mcp_add(
+                    codex_path="/usr/local/bin/codex",
+                    mcp_config_path=str(config_path),
+                    server_name="filesystem",
+                )
+
+        assert "could not parse MCP config" in exc_info.value.stderr
+        mock_run.assert_not_called()
+
+    def test_raises_when_server_missing_from_mcp_config(self, tmp_path: Path):
+        mcp_config_path = _write_mcp_config(tmp_path, server_name="other")
+
+        with patch("runtime.drivers.codex.mcp.subprocess.run") as mock_run:
+            with pytest.raises(McpRegistrationError) as exc_info:
+                _invoke_codex_mcp_add(
+                    codex_path="/usr/local/bin/codex",
+                    mcp_config_path=mcp_config_path,
+                    server_name="filesystem",
+                )
+
+        assert "does not define server 'filesystem'" in exc_info.value.stderr
+        mock_run.assert_not_called()
+
+    def test_raises_when_env_values_are_not_strings(self, tmp_path: Path):
+        config_path = tmp_path / "mcp_config.json"
+        config_path.write_text(
+            _json.dumps(
+                {
+                    "mcpServers": {
+                        "filesystem": {
+                            "command": "python3",
+                            "env": {"PYTHONPATH": 123},
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("runtime.drivers.codex.mcp.subprocess.run") as mock_run:
+            with pytest.raises(McpRegistrationError) as exc_info:
+                _invoke_codex_mcp_add(
+                    codex_path="/usr/local/bin/codex",
+                    mcp_config_path=str(config_path),
+                    server_name="filesystem",
+                )
+
+        assert "env as an object of string values" in exc_info.value.stderr
+        mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1739,6 +2190,7 @@ class TestEnsureMcpRegistered:
         config = tmp_path / ".codex" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text("[model]\nname = \"gpt-4\"\n")
+        mcp_config_path = _write_mcp_config(tmp_path)
 
         def _fake_run(cmd, *, stdin, stdout, stderr):
             r = MagicMock()
@@ -1749,7 +2201,7 @@ class TestEnsureMcpRegistered:
         with patch("runtime.drivers.codex.mcp.Path.home", return_value=tmp_path), \
              patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
             result = ensure_mcp_registered(
-                mcp_config_path="/path/to/mcp.json",
+                mcp_config_path=mcp_config_path,
                 server_name="filesystem",
                 codex_path="/usr/local/bin/codex",
             )
@@ -1761,6 +2213,7 @@ class TestEnsureMcpRegistered:
         dot_codex = tmp_path / ".codex"
         dot_codex.mkdir(parents=True)
         # No config.toml written
+        mcp_config_path = _write_mcp_config(tmp_path)
 
         def _fake_run(cmd, *, stdin, stdout, stderr):
             r = MagicMock()
@@ -1771,7 +2224,7 @@ class TestEnsureMcpRegistered:
         with patch("runtime.drivers.codex.mcp.Path.home", return_value=tmp_path), \
              patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
             result = ensure_mcp_registered(
-                mcp_config_path="/path/to/mcp.json",
+                mcp_config_path=mcp_config_path,
                 server_name="filesystem",
                 codex_path="/usr/local/bin/codex",
             )
@@ -1785,6 +2238,7 @@ class TestEnsureMcpRegistered:
         dot_codex = tmp_path / ".codex"
         dot_codex.mkdir(parents=True)
         # No config.toml — server is not registered
+        mcp_config_path = _write_mcp_config(tmp_path)
 
         def _fake_run(cmd, *, stdin, stdout, stderr):
             r = MagicMock()
@@ -1796,7 +2250,7 @@ class TestEnsureMcpRegistered:
              patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
             with pytest.raises(McpRegistrationError) as exc_info:
                 ensure_mcp_registered(
-                    mcp_config_path="/path/to/mcp.json",
+                    mcp_config_path=mcp_config_path,
                     server_name="filesystem",
                     codex_path="/usr/local/bin/codex",
                 )
@@ -1820,19 +2274,13 @@ class TestEnsureMcpRegistered:
         assert r2 is False
         mock_run.assert_not_called()
 
-    def test_mcp_registration_error_carries_stderr(self, tmp_path: Path):
-        """McpRegistrationError.stderr attribute contains the captured output."""
+    def test_mcp_registration_error_carries_validation_stderr(self, tmp_path: Path):
+        """McpRegistrationError.stderr contains local validation diagnostics."""
         dot_codex = tmp_path / ".codex"
         dot_codex.mkdir(parents=True)
 
-        def _fake_run(cmd, *, stdin, stdout, stderr):
-            r = MagicMock()
-            r.returncode = 3
-            r.stderr = b"Error: invalid config path\n"
-            return r
-
         with patch("runtime.drivers.codex.mcp.Path.home", return_value=tmp_path), \
-             patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
+             patch("runtime.drivers.codex.mcp.subprocess.run") as mock_run:
             with pytest.raises(McpRegistrationError) as exc_info:
                 ensure_mcp_registered(
                     mcp_config_path="/bad/path.json",
@@ -1840,8 +2288,9 @@ class TestEnsureMcpRegistered:
                     codex_path="/bin/codex",
                 )
 
-        assert "Error: invalid config path" in exc_info.value.stderr
-        assert exc_info.value.returncode == 3
+        assert "could not read MCP config" in exc_info.value.stderr
+        assert exc_info.value.returncode == -1
+        mock_run.assert_not_called()
 
 
 # ===========================================================================
@@ -2146,7 +2595,7 @@ _INTEGRATION_PROVIDER: dict = {
 
 @_SKIP_NO_CODEX
 class TestCodexDriverBasicIntegration:
-    """Invoke the real ``codex exec -`` subprocess with a trivial prompt.
+    """Invoke the real ``codex exec --json -`` subprocess with a trivial prompt.
 
     The test asserts that at least one non-error Frame (or clean DispatchResult)
     is returned.  It does NOT assert on the textual content of the response
