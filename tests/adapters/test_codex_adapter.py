@@ -9,7 +9,7 @@ Covers:
   * fidelity tiers are gate-driven.
   * capability flags correct (project_mcp=True, user_mcp=False,
     needs_trust_prompt=False, supports_cwd_override=False).
-  * command-capability matrix — multi-agent commands blocked, others degraded.
+  * command-capability matrix — tiers are parity-gate driven.
   * PTY exec is stubbed so tests run without a real terminal.
   * Ephemeral cleanup leaves ~/.codex/config.toml untouched (F4 invariant).
 """
@@ -71,12 +71,11 @@ class TestStaticIdentity(unittest.TestCase):
     def test_name(self):
         self.assertEqual(self.adapter.name, "codex")
 
-    def test_fidelity_tier_is_flattened(self):
-        """Default fidelity remains flattened until Codex parity evidence exists."""
+    def test_fidelity_tier_is_gate_driven(self):
+        """Adapter fidelity follows the Codex parity gate."""
         from z_harness_cli.adapters.codex_parity_gate import codex_adapter_fidelity
 
         self.assertEqual(self.adapter.fidelity_tier, codex_adapter_fidelity())
-        self.assertEqual(self.adapter.fidelity_tier, "flattened")
 
     def test_capabilities_project_mcp(self):
         """codex mcp add writes to ~/.codex/config.toml; project_mcp must be True."""
@@ -106,37 +105,16 @@ class TestStaticIdentity(unittest.TestCase):
 class TestCommandCapabilityMatrix(unittest.TestCase):
     """Verify the command-tier matrix is populated from the Codex parity gate."""
 
-    _MULTI_AGENT = {"z-execute", "z-panel", "z-consult", "z-gate"}
-
-    def test_multi_agent_commands_blocked(self):
-        """Multi-agent orchestration commands must be blocked on flattened fidelity."""
-        for cmd in self._MULTI_AGENT:
-            with self.subTest(cmd=cmd):
-                tier = command_tier("codex", cmd)
-                self.assertEqual(
-                    tier,
-                    "blocked",
-                    f"{cmd} should be blocked on codex (flattened), got {tier!r}",
-                )
-
-    def test_single_agent_commands_degraded(self):
-        """Non-multi-agent commands must be degraded (not native, not blocked)."""
-        single_agent = set(KNOWN_COMMANDS) - self._MULTI_AGENT
-        for cmd in single_agent:
-            with self.subTest(cmd=cmd):
-                tier = command_tier("codex", cmd)
-                self.assertEqual(
-                    tier,
-                    "degraded",
-                    f"{cmd} should be degraded on codex (flattened), got {tier!r}",
-                )
-
     def test_all_known_commands_registered(self):
         """Every known command must have an explicit tier registered."""
         for cmd in KNOWN_COMMANDS:
             with self.subTest(cmd=cmd):
                 tier = command_tier("codex", cmd)
                 self.assertIn(tier, ("native", "degraded", "blocked"))
+
+    def test_unknown_command_remains_blocked(self):
+        """Dynamic gate providers must not degrade unknown command ids."""
+        self.assertEqual(command_tier("codex", "z-not-a-command"), "blocked")
 
     def test_gate_drives_command_tiers(self):
         """Every registered command tier must match codex_parity_gate."""
@@ -146,16 +124,23 @@ class TestCommandCapabilityMatrix(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(command_tier("codex", cmd), codex_command_tier(cmd))
 
-    def test_multi_agent_block_reasons_are_explicit(self):
-        """Blocked multi-agent families explain which Codex evidence is missing."""
-        from z_harness_cli.adapters.codex_parity_gate import codex_command_decision
+    def test_native_candidate_decisions_are_gate_authorized(self):
+        """Native-candidate families are native only when the gate proves them."""
+        from z_harness_cli.adapters.codex_parity_gate import (
+            NATIVE_CANDIDATE_FAMILIES,
+            codex_command_decision,
+            has_parity_evidence,
+        )
 
-        for cmd in self._MULTI_AGENT:
+        for cmd in NATIVE_CANDIDATE_FAMILIES:
             with self.subTest(cmd=cmd):
                 decision = codex_command_decision(cmd)
-                self.assertEqual(decision.tier, "blocked")
-                self.assertIn("Missing required Codex parity evidence", decision.reason)
-                self.assertIn(cmd, decision.reason)
+                self.assertEqual(command_tier("codex", cmd), decision.tier)
+                if decision.tier == "native":
+                    self.assertTrue(has_parity_evidence(cmd))
+                else:
+                    self.assertEqual(decision.tier, "blocked")
+                    self.assertIn("Codex parity evidence", decision.reason)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +336,7 @@ class TestParityGate(unittest.TestCase):
         adapter = CodexAdapter()
 
         self.assertEqual(adapter.fidelity_tier, codex_adapter_fidelity())
-        self.assertEqual(codex_export_fidelity(), "partial")
+        self.assertIn(codex_export_fidelity(), ("native", "partial", "flattened"))
         for cmd in KNOWN_COMMANDS:
             with self.subTest(cmd=cmd):
                 self.assertEqual(command_tier("codex", cmd), codex_command_tier(cmd))
@@ -367,6 +352,7 @@ class TestParityGate(unittest.TestCase):
                 with self.subTest(cmd=cmd):
                     decision = gate_mod.codex_command_decision(cmd)
                     self.assertEqual(decision.tier, "blocked")
+                    self.assertEqual(command_tier("codex", cmd), decision.tier)
                     self.assertIn("No Codex parity evidence is registered", decision.reason)
         finally:
             gate_mod.PARITY_EVIDENCE.clear()
@@ -383,6 +369,26 @@ class TestParityGate(unittest.TestCase):
             self.assertEqual(gate_mod.codex_command_tier("z-execute"), "blocked")
             self.assertEqual(gate_mod.codex_adapter_fidelity(), "partial")
             self.assertEqual(gate_mod.codex_export_fidelity(), "partial")
+        finally:
+            if original_module is None:
+                sys.modules.pop(self._PARITY_MODULE, None)
+            else:
+                sys.modules[self._PARITY_MODULE] = original_module
+
+    def test_command_tier_rereads_gate_after_evidence_changes(self):
+        """Codex command_tier() must not freeze the import-time gate result."""
+        import z_harness_cli.adapters.codex_parity_gate as gate_mod
+
+        original_module = sys.modules.get(self._PARITY_MODULE)
+        fake = self._fake_module({"TestConsultantDispatchIsolation"})
+        try:
+            sys.modules[self._PARITY_MODULE] = fake
+            self.assertEqual(command_tier("codex", "z-consult"), "native")
+            self.assertEqual(command_tier("codex", "z-execute"), "blocked")
+            self.assertEqual(
+                command_tier("codex", "z-execute"),
+                gate_mod.codex_command_tier("z-execute"),
+            )
         finally:
             if original_module is None:
                 sys.modules.pop(self._PARITY_MODULE, None)

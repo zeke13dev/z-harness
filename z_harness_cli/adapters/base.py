@@ -19,6 +19,7 @@ Command tiers (command-capability matrix):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -29,6 +30,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 FidelityTier = Literal["native", "high", "flattened", "partial", "unsupported"]
 CommandTier = Literal["native", "degraded", "blocked"]
+CommandTierProvider = Callable[[str], CommandTier]
 
 # ---------------------------------------------------------------------------
 # ExportResult — re-exported from runtime (BLOCKER-1)
@@ -279,6 +281,11 @@ COMMAND_CAPABILITY_MATRIX: dict[str, dict[str, CommandTier]] = {
     # Shape: { host_name: { command_id: tier } }
 }
 
+# Optional dynamic tier providers.  Hosts with parity gates can register a
+# provider so command_tier() re-reads evidence instead of freezing the import-
+# time matrix snapshot.
+COMMAND_CAPABILITY_PROVIDERS: dict[str, CommandTierProvider] = {}
+
 #: The canonical /z-* command families.  Adapters must declare a tier for
 #: every entry in this list or raise at registration time.
 KNOWN_COMMANDS: tuple[str, ...] = (
@@ -301,7 +308,12 @@ KNOWN_COMMANDS: tuple[str, ...] = (
 )
 
 
-def register_command_tiers(host: str, tiers: dict[str, CommandTier]) -> None:
+def register_command_tiers(
+    host: str,
+    tiers: dict[str, CommandTier],
+    *,
+    tier_provider: CommandTierProvider | None = None,
+) -> None:
     """Register (or replace) command-capability tiers for *host*.
 
     Called by each adapter module at import time::
@@ -310,6 +322,9 @@ def register_command_tiers(host: str, tiers: dict[str, CommandTier]) -> None:
         register_command_tiers("claude", {"z-plan": "native", ...})
 
     Raises ``ValueError`` if *tiers* omits any entry in KNOWN_COMMANDS.
+    Hosts with parity-gated behavior may pass ``tier_provider`` to make
+    ``command_tier()`` re-read the gate while retaining the matrix snapshot
+    for registry completeness checks.
     """
     missing = set(KNOWN_COMMANDS) - set(tiers)
     if missing:
@@ -317,6 +332,10 @@ def register_command_tiers(host: str, tiers: dict[str, CommandTier]) -> None:
             f"Adapter '{host}' did not declare tiers for: {sorted(missing)}"
         )
     COMMAND_CAPABILITY_MATRIX[host] = dict(tiers)
+    if tier_provider is None:
+        COMMAND_CAPABILITY_PROVIDERS.pop(host, None)
+    else:
+        COMMAND_CAPABILITY_PROVIDERS[host] = tier_provider
 
 
 def command_tier(host: str, command: str) -> CommandTier:
@@ -332,6 +351,16 @@ def command_tier(host: str, command: str) -> CommandTier:
     Returns:
         ``"native"``, ``"degraded"``, or ``"blocked"``.
     """
+    if command not in KNOWN_COMMANDS:
+        return "blocked"
+
+    provider = COMMAND_CAPABILITY_PROVIDERS.get(host)
+    if provider is not None:
+        tier = provider(command)
+        if tier in ("native", "degraded", "blocked"):
+            return tier
+        return "blocked"
+
     host_tiers = COMMAND_CAPABILITY_MATRIX.get(host)
     if host_tiers is None:
         return "blocked"

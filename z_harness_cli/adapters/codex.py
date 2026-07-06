@@ -167,6 +167,7 @@ def _write_default_mcp_config(harness_root: Path) -> str | None:
 register_command_tiers(
     _HOST_NAME,
     {cmd: codex_command_tier(cmd) for cmd in KNOWN_COMMANDS},
+    tier_provider=codex_command_tier,
 )
 
 
