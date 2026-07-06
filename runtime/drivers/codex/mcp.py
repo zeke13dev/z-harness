@@ -18,7 +18,8 @@ TOML parsing
 Uses stdlib ``tomllib`` (Python 3.11+) for reading config.toml.  The Codex CLI
 does not currently expose an argv flag for MCP tool approval policy, so after
 ``codex mcp add`` succeeds this module patches only the direct
-``[mcp_servers.<server_name>]`` TOML key needed for that policy.
+``[mcp_servers.<server_name>]`` TOML keys needed for that policy and any
+Codex-native tool filters.
 
 Error handling
 --------------
@@ -199,6 +200,10 @@ def _registered_server_matches(
         server.get("command") == desired_server.get("command")
         and list(server.get("args") or []) == list(desired_server.get("args") or [])
         and dict(server.get("env") or {}) == dict(desired_server.get("env") or {})
+        and _optional_string_list(server.get("enabled_tools"))
+        == _optional_string_list(desired_server.get("enabled_tools"))
+        and _optional_string_list(server.get("disabled_tools"))
+        == _optional_string_list(desired_server.get("disabled_tools"))
         and server.get("default_tools_approval_mode")
         == desired_server.get("default_tools_approval_mode")
     )
@@ -209,20 +214,31 @@ def _ensure_registered_server_policy(
     server_name: str,
     desired_server: dict[str, object],
 ) -> None:
-    """Patch Codex TOML for MCP tool approval policy after ``mcp add``.
+    """Patch Codex TOML for MCP tool approval policy and filters after ``mcp add``.
 
     ``codex mcp add`` owns command/args/env writing, but it has no flag for
-    ``default_tools_approval_mode``.  Keep this patch surgical: only replace or
-    insert that direct key in ``[mcp_servers.<server_name>]``.
+    ``default_tools_approval_mode`` or tool filters.  Keep this patch surgical:
+    only replace, insert, or remove those direct keys in
+    ``[mcp_servers.<server_name>]``.
     """
     mode = desired_server.get("default_tools_approval_mode")
-    if mode is None:
-        return
-    if not isinstance(mode, str):
+    if mode is not None and not isinstance(mode, str):
         _raise_config_error(
             f"MCP server {server_name!r} default_tools_approval_mode must be a string",
             server_name=server_name,
         )
+    enabled_tools = _validate_optional_tool_list(
+        desired_server.get("enabled_tools"),
+        key="enabled_tools",
+        server_name=server_name,
+    )
+    disabled_tools = _validate_optional_tool_list(
+        desired_server.get("disabled_tools"),
+        key="disabled_tools",
+        server_name=server_name,
+    )
+    if mode is None and enabled_tools is None and disabled_tools is None:
+        return
 
     try:
         original = config_toml_path.read_text(encoding="utf-8")
@@ -246,16 +262,36 @@ def _ensure_registered_server_policy(
     while end < len(lines) and not lines[end].startswith("["):
         end += 1
 
-    desired_line = f'default_tools_approval_mode = "{mode}"'
-    key_prefix = "default_tools_approval_mode"
-    for idx in range(start + 1, end):
-        if lines[idx].split("=", 1)[0].strip() == key_prefix:
-            if lines[idx] == desired_line:
-                return
-            lines[idx] = desired_line
-            break
-    else:
-        lines.insert(start + 1, desired_line)
+    direct_updates: dict[str, str | None] = {
+        "default_tools_approval_mode": (
+            f'default_tools_approval_mode = "{mode}"' if mode is not None else None
+        ),
+        "enabled_tools": _toml_string_array_line("enabled_tools", enabled_tools),
+        "disabled_tools": _toml_string_array_line("disabled_tools", disabled_tools),
+    }
+    changed = False
+    insert_at = start + 1
+    idx = start + 1
+    while idx < end:
+        key = lines[idx].split("=", 1)[0].strip()
+        if key in direct_updates:
+            desired_line = direct_updates.pop(key)
+            if desired_line is None:
+                del lines[idx]
+                end -= 1
+                changed = True
+                continue
+            if lines[idx] != desired_line:
+                lines[idx] = desired_line
+                changed = True
+        idx += 1
+
+    for desired_line in reversed([line for line in direct_updates.values() if line is not None]):
+        lines.insert(insert_at, desired_line)
+        changed = True
+
+    if not changed:
+        return
 
     updated = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
     try:
@@ -415,7 +451,48 @@ def _load_mcp_server_config(
     }
     if default_tools_approval_mode is not None:
         result["default_tools_approval_mode"] = default_tools_approval_mode
+    for key in ("enabled_tools", "disabled_tools"):
+        value = _validate_optional_tool_list(
+            server.get(key),
+            key=key,
+            server_name=server_name,
+        )
+        if value is not None:
+            result[key] = value
     return result
+
+
+def _optional_string_list(value: object) -> list[str] | None:
+    """Return *value* as a list of strings, or None when absent/invalid."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def _validate_optional_tool_list(
+    value: object,
+    *,
+    key: str,
+    server_name: str,
+) -> list[str] | None:
+    """Validate an optional Codex MCP tool-filter list."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        _raise_config_error(
+            f"MCP server {server_name!r} {key} must be a list of strings",
+            server_name=server_name,
+        )
+    return list(value)
+
+
+def _toml_string_array_line(key: str, values: list[str] | None) -> str | None:
+    """Render a direct TOML array assignment for a list of strings."""
+    if values is None:
+        return None
+    return f"{key} = {json.dumps(values)}"
 
 
 def _raise_config_error(message: str, *, server_name: str) -> None:

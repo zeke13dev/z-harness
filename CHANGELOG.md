@@ -33,6 +33,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 - _(auto)_ Refresh stale MCP registration _(codex)_
 - _(auto)_ Auto-approve z-harness MCP tools _(codex)_
+- _(auto)_ Narrow z-harness MCP surface _(codex)_
 
 ## 2026-07-05
 

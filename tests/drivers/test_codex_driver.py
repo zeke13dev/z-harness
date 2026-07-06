@@ -1858,6 +1858,8 @@ def _write_mcp_config(
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
     default_tools_approval_mode: str | None = None,
+    enabled_tools: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ) -> str:
     """Write an exported MCP config fixture and return its path."""
     server: dict[str, object] = {"command": command}
@@ -1867,6 +1869,10 @@ def _write_mcp_config(
         server["env"] = env
     if default_tools_approval_mode is not None:
         server["default_tools_approval_mode"] = default_tools_approval_mode
+    if enabled_tools is not None:
+        server["enabled_tools"] = enabled_tools
+    if disabled_tools is not None:
+        server["disabled_tools"] = disabled_tools
     config_path = tmp_path / "mcp_config.json"
     config_path.write_text(
         _json.dumps({"mcpServers": {server_name: server}}),
@@ -2004,6 +2010,46 @@ class TestRegisteredServerMatches:
             },
         ) is False
 
+    def test_returns_true_for_exact_tool_filters(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            'enabled_tools = ["z_detect"]\n'
+        )
+
+        assert _registered_server_matches(
+            config,
+            "filesystem",
+            {
+                "command": "/repo/.venv/bin/python",
+                "args": ["-m", "z_harness_cli", "serve"],
+                "env": {},
+                "enabled_tools": ["z_detect"],
+            },
+        ) is True
+
+    def test_returns_false_for_stale_tool_filters(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            'enabled_tools = ["z_detect", "z_execute"]\n'
+        )
+
+        assert _registered_server_matches(
+            config,
+            "filesystem",
+            {
+                "command": "/repo/.venv/bin/python",
+                "args": ["-m", "z_harness_cli", "serve"],
+                "env": {},
+                "enabled_tools": ["z_detect"],
+            },
+        ) is False
+
 
 class TestEnsureRegisteredServerPolicy:
     """_ensure_registered_server_policy patches only the MCP approval key."""
@@ -2048,6 +2094,65 @@ class TestEnsureRegisteredServerPolicy:
         )
 
         assert 'default_tools_approval_mode = "approve"' in config.read_text()
+
+    def test_inserts_enabled_tools_filter(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            '[mcp_servers.filesystem.env]\n'
+            'PYTHONPATH = "/repo"\n'
+        )
+
+        _ensure_registered_server_policy(
+            config,
+            "filesystem",
+            {"enabled_tools": ["z_detect"]},
+        )
+
+        assert config.read_text() == (
+            '[mcp_servers.filesystem]\n'
+            'enabled_tools = ["z_detect"]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            '[mcp_servers.filesystem.env]\n'
+            'PYTHONPATH = "/repo"\n'
+        )
+
+    def test_replaces_stale_enabled_tools_filter(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'enabled_tools = ["z_detect", "z_execute"]\n'
+            'command = "python3"\n'
+        )
+
+        _ensure_registered_server_policy(
+            config,
+            "filesystem",
+            {"enabled_tools": ["z_detect"]},
+        )
+
+        text = config.read_text()
+        assert 'enabled_tools = ["z_detect"]' in text
+        assert "z_execute" not in text
+
+    def test_removes_stale_disabled_tools_when_absent_from_desired(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'disabled_tools = ["z_execute"]\n'
+            'command = "python3"\n'
+        )
+
+        _ensure_registered_server_policy(
+            config,
+            "filesystem",
+            {"enabled_tools": ["z_detect"]},
+        )
+
+        assert "disabled_tools" not in config.read_text()
 
 
 # ---------------------------------------------------------------------------

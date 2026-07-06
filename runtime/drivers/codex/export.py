@@ -233,6 +233,10 @@ def _render_mcp_config(repo_root: Path) -> str:
             _MCP_SERVER_NAME: {
                 "command": _resolve_mcp_python(repo_root),
                 "default_tools_approval_mode": "approve",
+                # Codex uses native plugin skills as the /z-* command surface.
+                # Keep MCP available only for lightweight detection helpers so
+                # a skill run cannot recursively invoke z-harness command tools.
+                "enabled_tools": ["z_detect"],
                 "args": [
                     "-m",
                     "z_harness_cli",
