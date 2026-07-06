@@ -6,7 +6,8 @@ The exported MCP JSON is used as input to build the current Codex CLI shape:
 ``codex mcp add [--env KEY=VALUE ...] <name> -- <command> <args...>``.
 Registration is idempotent: the function checks for an existing
 ``[mcp_servers.<server_name>]`` entry in the Codex config TOML before
-invoking the CLI, and skips re-registration if the entry is already present.
+invoking the CLI, and skips re-registration if the entry is already present
+and matches the exported command/args/env/tool-approval policy.
 
 This module is intentionally a one-time-setup helper, not a hot-path component.
 It is called at most once per driver lifecycle (typically during ``init()``),
@@ -14,8 +15,10 @@ never on every dispatch.
 
 TOML parsing
 ------------
-Uses stdlib ``tomllib`` (Python 3.11+) for reading config.toml.  Writing is
-delegated entirely to ``codex mcp add``; this module never hand-edits TOML.
+Uses stdlib ``tomllib`` (Python 3.11+) for reading config.toml.  The Codex CLI
+does not currently expose an argv flag for MCP tool approval policy, so after
+``codex mcp add`` succeeds this module patches only the direct
+``[mcp_servers.<server_name>]`` TOML key needed for that policy.
 
 Error handling
 --------------
@@ -107,12 +110,15 @@ def ensure_mcp_registered(
         if _registered_server_matches(config_toml_path, server_name, desired_server):
             return False
         _invoke_codex_mcp_remove(codex_path=codex_path, server_name=server_name)
+    else:
+        desired_server = _load_mcp_server_config(mcp_config_path, server_name)
 
     _invoke_codex_mcp_add(
         codex_path=codex_path,
         mcp_config_path=mcp_config_path,
         server_name=server_name,
     )
+    _ensure_registered_server_policy(config_toml_path, server_name, desired_server)
     return True
 
 
@@ -193,7 +199,72 @@ def _registered_server_matches(
         server.get("command") == desired_server.get("command")
         and list(server.get("args") or []) == list(desired_server.get("args") or [])
         and dict(server.get("env") or {}) == dict(desired_server.get("env") or {})
+        and server.get("default_tools_approval_mode")
+        == desired_server.get("default_tools_approval_mode")
     )
+
+
+def _ensure_registered_server_policy(
+    config_toml_path: Path,
+    server_name: str,
+    desired_server: dict[str, object],
+) -> None:
+    """Patch Codex TOML for MCP tool approval policy after ``mcp add``.
+
+    ``codex mcp add`` owns command/args/env writing, but it has no flag for
+    ``default_tools_approval_mode``.  Keep this patch surgical: only replace or
+    insert that direct key in ``[mcp_servers.<server_name>]``.
+    """
+    mode = desired_server.get("default_tools_approval_mode")
+    if mode is None:
+        return
+    if not isinstance(mode, str):
+        _raise_config_error(
+            f"MCP server {server_name!r} default_tools_approval_mode must be a string",
+            server_name=server_name,
+        )
+
+    try:
+        original = config_toml_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _raise_config_error(
+            f"could not read Codex config {config_toml_path}: {exc}",
+            server_name=server_name,
+        )
+
+    header = f"[mcp_servers.{server_name}]"
+    lines = original.splitlines()
+    try:
+        start = lines.index(header)
+    except ValueError:
+        _raise_config_error(
+            f"Codex config {config_toml_path} is missing {header}",
+            server_name=server_name,
+        )
+
+    end = start + 1
+    while end < len(lines) and not lines[end].startswith("["):
+        end += 1
+
+    desired_line = f'default_tools_approval_mode = "{mode}"'
+    key_prefix = "default_tools_approval_mode"
+    for idx in range(start + 1, end):
+        if lines[idx].split("=", 1)[0].strip() == key_prefix:
+            if lines[idx] == desired_line:
+                return
+            lines[idx] = desired_line
+            break
+    else:
+        lines.insert(start + 1, desired_line)
+
+    updated = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+    try:
+        config_toml_path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        _raise_config_error(
+            f"could not write Codex config {config_toml_path}: {exc}",
+            server_name=server_name,
+        )
 
 
 def _invoke_codex_mcp_remove(*, codex_path: str, server_name: str) -> None:
@@ -325,11 +396,26 @@ def _load_mcp_server_config(
             server_name=server_name,
         )
 
-    return {
+    default_tools_approval_mode = server.get("default_tools_approval_mode")
+    if default_tools_approval_mode is not None and default_tools_approval_mode not in {
+        "auto",
+        "prompt",
+        "approve",
+    }:
+        _raise_config_error(
+            f"MCP server {server_name!r} in {path} must define "
+            "default_tools_approval_mode as one of auto, prompt, approve",
+            server_name=server_name,
+        )
+
+    result: dict[str, object] = {
         "command": command,
         "args": args,
         "env": env,
     }
+    if default_tools_approval_mode is not None:
+        result["default_tools_approval_mode"] = default_tools_approval_mode
+    return result
 
 
 def _raise_config_error(message: str, *, server_name: str) -> None:

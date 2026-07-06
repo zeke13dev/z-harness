@@ -232,6 +232,7 @@ def _render_mcp_config(repo_root: Path) -> str:
         "mcpServers": {
             _MCP_SERVER_NAME: {
                 "command": _resolve_mcp_python(repo_root),
+                "default_tools_approval_mode": "approve",
                 "args": [
                     "-m",
                     "z_harness_cli",

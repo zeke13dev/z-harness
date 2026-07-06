@@ -1841,6 +1841,7 @@ import tomllib as _tomllib
 
 from runtime.drivers.codex.mcp import (
     McpRegistrationError,
+    _ensure_registered_server_policy,
     _invoke_codex_mcp_add,
     _is_already_registered,
     _registered_server_matches,
@@ -1856,6 +1857,7 @@ def _write_mcp_config(
     command: str = "python3",
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
+    default_tools_approval_mode: str | None = None,
 ) -> str:
     """Write an exported MCP config fixture and return its path."""
     server: dict[str, object] = {"command": command}
@@ -1863,6 +1865,8 @@ def _write_mcp_config(
         server["args"] = args
     if env is not None:
         server["env"] = env
+    if default_tools_approval_mode is not None:
+        server["default_tools_approval_mode"] = default_tools_approval_mode
     config_path = tmp_path / "mcp_config.json"
     config_path.write_text(
         _json.dumps({"mcpServers": {server_name: server}}),
@@ -1945,6 +1949,7 @@ class TestRegisteredServerMatches:
             '[mcp_servers.filesystem]\n'
             'command = "/repo/.venv/bin/python"\n'
             'args = ["-m", "z_harness_cli", "serve"]\n'
+            'default_tools_approval_mode = "approve"\n'
             '[mcp_servers.filesystem.env]\n'
             'PYTHONPATH = "/repo"\n'
         )
@@ -1956,6 +1961,7 @@ class TestRegisteredServerMatches:
                 "command": "/repo/.venv/bin/python",
                 "args": ["-m", "z_harness_cli", "serve"],
                 "env": {"PYTHONPATH": "/repo"},
+                "default_tools_approval_mode": "approve",
             },
         ) is True
 
@@ -1974,8 +1980,74 @@ class TestRegisteredServerMatches:
                 "command": "/repo/.venv/bin/python",
                 "args": ["-m", "z_harness_cli", "serve"],
                 "env": {},
+                "default_tools_approval_mode": "approve",
             },
         ) is False
+
+    def test_returns_false_for_stale_approval_mode(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            'default_tools_approval_mode = "prompt"\n'
+        )
+
+        assert _registered_server_matches(
+            config,
+            "filesystem",
+            {
+                "command": "/repo/.venv/bin/python",
+                "args": ["-m", "z_harness_cli", "serve"],
+                "env": {},
+                "default_tools_approval_mode": "approve",
+            },
+        ) is False
+
+
+class TestEnsureRegisteredServerPolicy:
+    """_ensure_registered_server_policy patches only the MCP approval key."""
+
+    def test_inserts_default_tools_approval_mode(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            '[mcp_servers.filesystem.env]\n'
+            'PYTHONPATH = "/repo"\n'
+        )
+
+        _ensure_registered_server_policy(
+            config,
+            "filesystem",
+            {"default_tools_approval_mode": "approve"},
+        )
+
+        assert config.read_text() == (
+            '[mcp_servers.filesystem]\n'
+            'default_tools_approval_mode = "approve"\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            '[mcp_servers.filesystem.env]\n'
+            'PYTHONPATH = "/repo"\n'
+        )
+
+    def test_replaces_existing_default_tools_approval_mode(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'default_tools_approval_mode = "prompt"\n'
+            'command = "python3"\n'
+        )
+
+        _ensure_registered_server_policy(
+            config,
+            "filesystem",
+            {"default_tools_approval_mode": "approve"},
+        )
+
+        assert 'default_tools_approval_mode = "approve"' in config.read_text()
 
 
 # ---------------------------------------------------------------------------

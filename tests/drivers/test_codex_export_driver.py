@@ -167,6 +167,7 @@ class TestCodexNativeAgentExport:
             "--transport",
             "stdio",
         ]
+        assert server["default_tools_approval_mode"] == "approve"
         assert server["env"]["PYTHONPATH"] == str(repo_root.resolve())
 
     def test_mcp_config_prefers_repo_venv_python_when_present(self, tmp_path: Path) -> None:
