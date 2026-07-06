@@ -168,3 +168,19 @@ class TestCodexNativeAgentExport:
             "stdio",
         ]
         assert server["env"]["PYTHONPATH"] == str(repo_root.resolve())
+
+    def test_mcp_config_prefers_repo_venv_python_when_present(self, tmp_path: Path) -> None:
+        repo_root = _make_repo_with_included_skill(tmp_path, "z-explain")
+        _write_safe_agent(repo_root)
+        venv_python = repo_root / ".venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+        export_root = tmp_path / "export"
+
+        result = export(repo_root, export_root)
+
+        config_path = export_root / "mcp_config.json"
+        assert config_path in result.files
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        server = data["mcpServers"]["z-harness"]
+        assert server["command"] == str(venv_python)

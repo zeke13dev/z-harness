@@ -215,12 +215,23 @@ def _render_plugin_manifest(repo_root: Path) -> str:
     return json.dumps(manifest, indent=2) + "\n"
 
 
+def _resolve_mcp_python(repo_root: Path) -> str:
+    """Return the Python executable Codex should use for the MCP server."""
+    for candidate in (
+        repo_root / ".venv" / "bin" / "python",
+        repo_root / "venv" / "bin" / "python",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return "python3"
+
+
 def _render_mcp_config(repo_root: Path) -> str:
     """Return the MCP config JSON consumed by Codex adapter registration."""
     payload = {
         "mcpServers": {
             _MCP_SERVER_NAME: {
-                "command": "python3",
+                "command": _resolve_mcp_python(repo_root),
                 "args": [
                     "-m",
                     "z_harness_cli",

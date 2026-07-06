@@ -94,9 +94,19 @@ def ensure_mcp_registered(
             carry diagnostic output and the exit code respectively.
     """
     config_toml_path = _resolve_config_toml(codex_path)
+    already_registered = _is_already_registered(config_toml_path, server_name)
 
-    if _is_already_registered(config_toml_path, server_name):
-        return False
+    if already_registered:
+        try:
+            desired_server = _load_mcp_server_config(mcp_config_path, server_name)
+        except McpRegistrationError:
+            # Preserve historical idempotency: if callers only know the entry is
+            # present but cannot provide a readable desired config, do not
+            # mutate the user's global Codex config.
+            return False
+        if _registered_server_matches(config_toml_path, server_name, desired_server):
+            return False
+        _invoke_codex_mcp_remove(codex_path=codex_path, server_name=server_name)
 
     _invoke_codex_mcp_add(
         codex_path=codex_path,
@@ -158,6 +168,51 @@ def _is_already_registered(config_toml_path: Path, server_name: str) -> bool:
 
     mcp_servers = data.get("mcp_servers", {})
     return server_name in mcp_servers
+
+
+def _registered_server_matches(
+    config_toml_path: Path,
+    server_name: str,
+    desired_server: dict[str, object],
+) -> bool:
+    """Return True iff the registered server exactly matches desired config."""
+    try:
+        with config_toml_path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+    mcp_servers = data.get("mcp_servers", {})
+    if not isinstance(mcp_servers, dict):
+        return False
+    server = mcp_servers.get(server_name)
+    if not isinstance(server, dict):
+        return False
+
+    return (
+        server.get("command") == desired_server.get("command")
+        and list(server.get("args") or []) == list(desired_server.get("args") or [])
+        and dict(server.get("env") or {}) == dict(desired_server.get("env") or {})
+    )
+
+
+def _invoke_codex_mcp_remove(*, codex_path: str, server_name: str) -> None:
+    """Remove an existing Codex MCP server entry before refreshing it."""
+    result = subprocess.run(
+        [codex_path, "mcp", "remove", server_name],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode("utf-8", errors="replace")
+        raise McpRegistrationError(
+            f"codex mcp remove failed for server '{server_name}' "
+            f"(exit {result.returncode}): {stderr_text.strip()}",
+            stderr=stderr_text,
+            returncode=result.returncode,
+        )
 
 
 def _invoke_codex_mcp_add(

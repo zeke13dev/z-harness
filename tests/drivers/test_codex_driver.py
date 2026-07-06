@@ -1843,6 +1843,7 @@ from runtime.drivers.codex.mcp import (
     McpRegistrationError,
     _invoke_codex_mcp_add,
     _is_already_registered,
+    _registered_server_matches,
     _resolve_config_toml,
     ensure_mcp_registered,
 )
@@ -1933,6 +1934,48 @@ class TestIsAlreadyRegistered:
             '[mcp_servers.filesystem-extended]\ncommand = "npx"\n'
         )
         assert _is_already_registered(config, "filesystem") is False
+
+
+class TestRegisteredServerMatches:
+    """_registered_server_matches compares existing Codex TOML to desired JSON."""
+
+    def test_returns_true_for_exact_command_args_and_env(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "/repo/.venv/bin/python"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+            '[mcp_servers.filesystem.env]\n'
+            'PYTHONPATH = "/repo"\n'
+        )
+
+        assert _registered_server_matches(
+            config,
+            "filesystem",
+            {
+                "command": "/repo/.venv/bin/python",
+                "args": ["-m", "z_harness_cli", "serve"],
+                "env": {"PYTHONPATH": "/repo"},
+            },
+        ) is True
+
+    def test_returns_false_for_stale_command(self, tmp_path: Path):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "python3"\n'
+            'args = ["-m", "z_harness_cli", "serve"]\n'
+        )
+
+        assert _registered_server_matches(
+            config,
+            "filesystem",
+            {
+                "command": "/repo/.venv/bin/python",
+                "args": ["-m", "z_harness_cli", "serve"],
+                "env": {},
+            },
+        ) is False
 
 
 # ---------------------------------------------------------------------------
@@ -2207,6 +2250,53 @@ class TestEnsureMcpRegistered:
             )
 
         assert result is True
+
+    def test_refreshes_when_registered_config_is_stale(self, tmp_path: Path):
+        """Existing mismatched entry is removed and re-added from desired config."""
+        config = tmp_path / ".codex" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            '[mcp_servers.filesystem]\n'
+            'command = "python3"\n'
+            'args = ["old"]\n'
+        )
+        mcp_config_path = _write_mcp_config(
+            tmp_path,
+            command="/repo/.venv/bin/python",
+            args=["-m", "z_harness_cli", "serve"],
+        )
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, *, stdin, stdout, stderr):
+            calls.append(cmd)
+            r = MagicMock()
+            r.returncode = 0
+            r.stderr = b""
+            return r
+
+        with patch("runtime.drivers.codex.mcp.Path.home", return_value=tmp_path), \
+             patch("runtime.drivers.codex.mcp.subprocess.run", _fake_run):
+            result = ensure_mcp_registered(
+                mcp_config_path=mcp_config_path,
+                server_name="filesystem",
+                codex_path="/usr/local/bin/codex",
+            )
+
+        assert result is True
+        assert calls == [
+            ["/usr/local/bin/codex", "mcp", "remove", "filesystem"],
+            [
+                "/usr/local/bin/codex",
+                "mcp",
+                "add",
+                "filesystem",
+                "--",
+                "/repo/.venv/bin/python",
+                "-m",
+                "z_harness_cli",
+                "serve",
+            ],
+        ]
 
     def test_returns_true_when_config_file_absent(self, tmp_path: Path):
         """Config file absent → treated as not registered → subprocess launched."""
