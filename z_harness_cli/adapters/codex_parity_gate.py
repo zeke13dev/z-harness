@@ -10,6 +10,10 @@ adapter/export fidelity remains ``flattened``; ordinary commands are
 ``degraded`` single-agent transliterations; and multi-agent families
 (``z-execute``, ``z-panel``, ``z-consult``, ``z-gate``) are ``blocked`` until
 their required Codex evidence classes resolve.
+
+Native subagent dispatch is intentionally gated separately from adapter-wide
+fidelity and command-family tiers.  Codex CLI custom-agent export is not proof
+that the active CLI has a callable native subagent dispatch primitive.
 """
 
 from __future__ import annotations
@@ -75,6 +79,14 @@ ADAPTER_EVIDENCE: list[EvidenceEntry] = [
 # Codex agent export just because command/runtime evidence appears.
 EXPORT_EVIDENCE: list[EvidenceEntry] = [
     (_EXPORT_MODULE, "TestCodexNativeAgentExport"),
+]
+
+
+# Narrow primitive evidence for z_subagent_dispatch.  Do not infer this from
+# Codex adapter fidelity, exported .codex/agents TOML files, or the current
+# interactive Codex session's own tools.
+NATIVE_SUBAGENT_DISPATCH_EVIDENCE: list[EvidenceEntry] = [
+    (_PARITY_MODULE, "TestCodexNativeSubagentDispatchPrimitive"),
 ]
 
 
@@ -205,3 +217,14 @@ def codex_export_fidelity() -> FidelityTier:
     ):
         return "partial"
     return "flattened"
+
+
+def codex_native_subagent_dispatch_available() -> bool:
+    """Return whether Codex native subagent dispatch is explicitly proven.
+
+    This is a primitive-level gate for MCP ``z_subagent_dispatch``.  It must
+    remain independent from command-family promotion and export fidelity:
+    exported ``.codex/agents/*.toml`` files are necessary host artifacts, not
+    evidence that the CLI can dispatch one by name at runtime.
+    """
+    return _all_entries_resolvable(NATIVE_SUBAGENT_DISPATCH_EVIDENCE)

@@ -428,6 +428,42 @@ class TestParityGate(unittest.TestCase):
             else:
                 sys.modules[self._EXPORT_MODULE] = original_export_module
 
+    def test_native_subagent_dispatch_gate_is_primitive_specific(self):
+        import z_harness_cli.adapters.codex_parity_gate as gate_mod
+
+        original_parity_module = sys.modules.get(self._PARITY_MODULE)
+        fake_without_primitive = self._fake_module(
+            {
+                "TestSubagentFanOutParity",
+                "TestConsultantDispatchIsolation",
+                "TestAskUserGateParity",
+                "TestTelemetryParity",
+                "TestMultiAgentCommandPath",
+            }
+        )
+        fake_with_primitive = self._fake_module(
+            {
+                "TestSubagentFanOutParity",
+                "TestConsultantDispatchIsolation",
+                "TestAskUserGateParity",
+                "TestTelemetryParity",
+                "TestMultiAgentCommandPath",
+                "TestCodexNativeSubagentDispatchPrimitive",
+            }
+        )
+        try:
+            sys.modules[self._PARITY_MODULE] = fake_without_primitive
+            self.assertEqual(gate_mod.codex_adapter_fidelity(), "native")
+            self.assertFalse(gate_mod.codex_native_subagent_dispatch_available())
+
+            sys.modules[self._PARITY_MODULE] = fake_with_primitive
+            self.assertTrue(gate_mod.codex_native_subagent_dispatch_available())
+        finally:
+            if original_parity_module is None:
+                sys.modules.pop(self._PARITY_MODULE, None)
+            else:
+                sys.modules[self._PARITY_MODULE] = original_parity_module
+
 
 # ---------------------------------------------------------------------------
 # inject() / cleanup() — ephemeral round-trip

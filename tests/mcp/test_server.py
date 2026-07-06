@@ -338,6 +338,489 @@ class TestSubagentDispatch:
         assert r.status == "error"
         assert "prompt" in r.content.lower()
 
+    def test_provider_resolution_preserves_role_and_reviewer_fallback(self) -> None:
+        """Reusable provider resolution keeps command role mapping and reviewer fallback."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import MCPProviderResolution, _resolve_mcp_provider
+
+        failing_proc = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        provider = {
+            "provider": "codex-cli",
+            "args_template": ["exec", "-"],
+            "model_arg_template": None,
+        }
+        success_proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(provider),
+            stderr="",
+        )
+
+        with patch("subprocess.run", side_effect=[failing_proc, success_proc]) as run:
+            result = _resolve_mcp_provider(Path("/fake/root"), "z_plan")
+
+        assert isinstance(result, MCPProviderResolution)
+        assert result.role == "implementer"
+        assert result.provider_name == "codex-cli"
+        assert result.host == "codex"
+        assert run.call_args_list[0].args[0][-1] == "implementer"
+        assert run.call_args_list[1].args[0][-1] == "reviewer"
+
+    def test_provider_resolution_skips_provider_none_payload(self) -> None:
+        """provider='none' JSON keeps consult-off behavior as skipped, not error."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import ToolResult, _resolve_mcp_provider
+
+        fake_proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"provider": "none"}),
+            stderr="",
+        )
+
+        with patch("subprocess.run", return_value=fake_proc):
+            result = _resolve_mcp_provider(Path("/fake/root"), "z_review_all")
+
+        assert isinstance(result, ToolResult)
+        assert result.status == "skipped"
+
+    def test_subagent_dispatch_falls_back_when_codex_native_gate_is_closed(self) -> None:
+        """Codex provider without primitive evidence uses the generic MCP dispatcher."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPDispatcher,
+            MCPProviderResolution,
+            ToolResult,
+            _handle_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \
+             patch(
+                 "z_harness_cli.mcp.server._load_agent",
+                 return_value=AgentDef(
+                     name="auditor",
+                     description="",
+                     model="haiku",
+                     prompt_template="AGENT TEMPLATE",
+                 ),
+             ), \
+             patch("runtime.dispatch.dispatcher.load_model_routing_config", return_value={}), \
+             patch("runtime.dispatch.dispatcher.resolve_native_agent_model", return_value=route), \
+             patch("z_harness_cli.mcp.server._resolve_mcp_provider", return_value=provider_resolution), \
+             patch(
+                 "z_harness_cli.adapters.codex_parity_gate."
+                 "codex_native_subagent_dispatch_available",
+                 return_value=False,
+             ), \
+             patch.object(
+                 MCPDispatcher,
+                 "dispatch",
+                 return_value=ToolResult.success("generic path"),
+             ) as generic_dispatch:
+            result = _handle_subagent_dispatch({"agent": "auditor", "prompt": "check it"}, None)
+
+        assert result.status == "complete"
+        generic_dispatch.assert_called_once()
+        assert generic_dispatch.call_args.kwargs["provider_resolution"] is provider_resolution
+
+    def test_subagent_dispatch_uses_codex_native_branch_when_proven(self) -> None:
+        """Primitive evidence plus a driver hook dispatches via Codex-native branch."""
+        from pathlib import Path
+        from runtime.dispatch.result import DispatchResult
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPDispatcher,
+            MCPProviderResolution,
+            _handle_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+        fake_result = DispatchResult(
+            exit_code=0,
+            is_error=False,
+            stdout_events=[{"type": "text", "content": "native complete"}],
+            stderr="",
+            wall_ms=7.0,
+        )
+
+        class FakeNativeCodexDriver:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+                self.teardown_calls = 0
+
+            def dispatch_native_subagent(self, **kwargs: object) -> DispatchResult:
+                self.calls.append(kwargs)
+                return fake_result
+
+            def teardown(self) -> None:
+                self.teardown_calls += 1
+
+        fake_driver = FakeNativeCodexDriver()
+        prior_slug = "prior-native-slug"
+        os.environ["Z_HARNESS_SLUG"] = prior_slug
+
+        restored_slug = None
+        try:
+            with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \
+                 patch(
+                     "z_harness_cli.mcp.server._load_agent",
+                     return_value=AgentDef(
+                         name="auditor",
+                         description="",
+                         model="haiku",
+                         prompt_template="AGENT TEMPLATE",
+                     ),
+                 ), \
+                 patch("runtime.dispatch.dispatcher.load_model_routing_config", return_value={}), \
+                 patch("runtime.dispatch.dispatcher.resolve_native_agent_model", return_value=route), \
+                 patch("z_harness_cli.mcp.server._resolve_mcp_provider", return_value=provider_resolution), \
+                 patch(
+                     "z_harness_cli.adapters.codex_parity_gate."
+                     "codex_native_subagent_dispatch_available",
+                     return_value=True,
+                 ), \
+                 patch("z_harness_cli.mcp.server._select_and_init_mcp_driver", return_value=fake_driver), \
+                 patch("runtime.dispatch.dispatcher.Dispatcher") as runtime_dispatcher, \
+                 patch.object(MCPDispatcher, "dispatch") as generic_dispatch:
+                result = _handle_subagent_dispatch(
+                    {"agent": "auditor", "prompt": "check it", "slug": "native-call-slug"},
+                    None,
+                )
+        finally:
+            restored_slug = os.environ.get("Z_HARNESS_SLUG")
+            os.environ.pop("Z_HARNESS_SLUG", None)
+
+        assert restored_slug == prior_slug
+        assert result.status == "complete"
+        assert result.content == "native complete"
+        assert result.meta["dispatch_path"] == "codex_native_subagent"
+        assert result.meta["agent"] == "auditor"
+        generic_dispatch.assert_not_called()
+        runtime_dispatcher.assert_not_called()
+        assert fake_driver.calls
+        native_call = fake_driver.calls[0]
+        assert native_call["agent_name"] == "auditor"
+        assert native_call["prompt"] == "check it"
+        assert "AGENT TEMPLATE" not in str(native_call["prompt"])
+        assert native_call["model"] == "gpt-5-codex"
+        assert native_call["env"]["Z_HARNESS_SLUG"] == "native-call-slug"  # type: ignore[index]
+        assert fake_driver.teardown_calls == 1
+
+    def test_subagent_dispatch_falls_back_when_gate_open_but_driver_has_no_hook(self) -> None:
+        """Primitive evidence alone does not turn prompt-only Codex exec into native."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPDispatcher,
+            MCPProviderResolution,
+            ToolResult,
+            _handle_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        class FakeCodexDriverWithoutNativeHook:
+            def __init__(self) -> None:
+                self.teardown_calls = 0
+
+            def teardown(self) -> None:
+                self.teardown_calls += 1
+
+        fake_driver = FakeCodexDriverWithoutNativeHook()
+
+        with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \
+             patch(
+                 "z_harness_cli.mcp.server._load_agent",
+                 return_value=AgentDef(
+                     name="auditor",
+                     description="",
+                     model="haiku",
+                     prompt_template="AGENT TEMPLATE",
+                 ),
+             ), \
+             patch("runtime.dispatch.dispatcher.load_model_routing_config", return_value={}), \
+             patch("runtime.dispatch.dispatcher.resolve_native_agent_model", return_value=route), \
+             patch("z_harness_cli.mcp.server._resolve_mcp_provider", return_value=provider_resolution), \
+             patch(
+                 "z_harness_cli.adapters.codex_parity_gate."
+                 "codex_native_subagent_dispatch_available",
+                 return_value=True,
+             ), \
+             patch(
+                 "z_harness_cli.mcp.server._select_and_init_mcp_driver",
+                 return_value=fake_driver,
+             ), \
+             patch("runtime.dispatch.dispatcher.Dispatcher") as runtime_dispatcher, \
+             patch.object(
+                 MCPDispatcher,
+                 "dispatch",
+                 return_value=ToolResult.success("generic path"),
+             ) as generic_dispatch:
+            result = _handle_subagent_dispatch({"agent": "auditor", "prompt": "check it"}, None)
+
+        assert result.status == "complete"
+        assert result.content == "generic path"
+        generic_dispatch.assert_called_once()
+        runtime_dispatcher.assert_not_called()
+        assert fake_driver.teardown_calls == 1
+
+    def test_codex_native_hook_clears_stale_slug_when_slug_not_supplied(self) -> None:
+        """Native hook calls without a slug do not inherit stale process state."""
+        from pathlib import Path
+        from runtime.dispatch.result import DispatchResult
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPProviderResolution,
+            _try_codex_native_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        class FakeNativeCodexDriver:
+            def __init__(self) -> None:
+                self.seen_env: dict[str, str] | None = None
+                self.seen_process_slug: str | None = None
+                self.teardown_calls = 0
+
+            def dispatch_native_subagent(self, **kwargs: object) -> DispatchResult:
+                self.seen_env = kwargs["env"]  # type: ignore[assignment]
+                self.seen_process_slug = os.environ.get("Z_HARNESS_SLUG")
+                return DispatchResult(
+                    exit_code=0,
+                    is_error=False,
+                    stdout_events=[{"type": "text", "content": "native complete"}],
+                    stderr="",
+                    wall_ms=1.0,
+                )
+
+            def teardown(self) -> None:
+                self.teardown_calls += 1
+
+        fake_driver = FakeNativeCodexDriver()
+        os.environ["Z_HARNESS_SLUG"] = "stale-slug"
+        try:
+            with patch(
+                "z_harness_cli.adapters.codex_parity_gate."
+                "codex_native_subagent_dispatch_available",
+                return_value=True,
+            ), \
+                 patch("z_harness_cli.mcp.server._select_and_init_mcp_driver", return_value=fake_driver):
+                result = _try_codex_native_subagent_dispatch(
+                    repo_root=Path("/fake/root"),
+                    provider_resolution=provider_resolution,
+                    agent_def=AgentDef(
+                        name="auditor",
+                        description="",
+                        model="haiku",
+                        prompt_template="AGENT TEMPLATE",
+                    ),
+                    prompt="check it",
+                    route=route,
+                    progress_callback=None,
+                    slug=None,
+                )
+
+            assert os.environ.get("Z_HARNESS_SLUG") == "stale-slug"
+        finally:
+            os.environ.pop("Z_HARNESS_SLUG", None)
+
+        assert result is not None
+        assert result.status == "complete"
+        assert fake_driver.seen_env is not None
+        assert "Z_HARNESS_SLUG" not in fake_driver.seen_env
+        assert fake_driver.seen_process_slug is None
+        assert fake_driver.teardown_calls == 1
+
+    def test_codex_native_hook_tears_down_when_hook_raises(self) -> None:
+        """Native hook dispatch failures still run driver teardown once."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPProviderResolution,
+            _try_codex_native_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        class FakeFailingNativeCodexDriver:
+            def __init__(self) -> None:
+                self.teardown_calls = 0
+
+            def dispatch_native_subagent(self, **kwargs: object) -> object:
+                raise RuntimeError("native boom")
+
+            def teardown(self) -> None:
+                self.teardown_calls += 1
+
+        fake_driver = FakeFailingNativeCodexDriver()
+
+        with patch(
+            "z_harness_cli.adapters.codex_parity_gate."
+            "codex_native_subagent_dispatch_available",
+            return_value=True,
+        ), \
+             patch("z_harness_cli.mcp.server._select_and_init_mcp_driver", return_value=fake_driver):
+            result = _try_codex_native_subagent_dispatch(
+                repo_root=Path("/fake/root"),
+                provider_resolution=provider_resolution,
+                agent_def=AgentDef(
+                    name="auditor",
+                    description="",
+                    model="haiku",
+                    prompt_template="AGENT TEMPLATE",
+                ),
+                prompt="check it",
+                route=route,
+                progress_callback=None,
+            )
+
+        assert result is not None
+        assert result.status == "error"
+        assert "native boom" in result.content
+        assert fake_driver.teardown_calls == 1
+
+    def test_subagent_dispatch_does_not_check_native_gate_for_non_codex_provider(self) -> None:
+        """Native gate is considered only after provider resolution yields Codex host."""
+        from pathlib import Path
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPDispatcher,
+            MCPProviderResolution,
+            ToolResult,
+            _handle_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={"provider": "claude", "args_template": ["--print"]},
+            provider_name="claude",
+            host="claude",
+        )
+        route = types.SimpleNamespace(
+            effective_model="sonnet",
+            source="frontmatter",
+            route="sonnet",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \
+             patch(
+                 "z_harness_cli.mcp.server._load_agent",
+                 return_value=AgentDef(
+                     name="auditor",
+                     description="",
+                     model="sonnet",
+                     prompt_template="AGENT TEMPLATE",
+                 ),
+             ), \
+             patch("runtime.dispatch.dispatcher.load_model_routing_config", return_value={}), \
+             patch("runtime.dispatch.dispatcher.resolve_native_agent_model", return_value=route), \
+             patch("z_harness_cli.mcp.server._resolve_mcp_provider", return_value=provider_resolution), \
+             patch(
+                 "z_harness_cli.adapters.codex_parity_gate."
+                 "codex_native_subagent_dispatch_available",
+                 return_value=True,
+             ) as native_gate, \
+             patch.object(
+                 MCPDispatcher,
+                 "dispatch",
+                 return_value=ToolResult.success("generic path"),
+             ):
+            result = _handle_subagent_dispatch({"agent": "auditor", "prompt": "check it"}, None)
+
+        assert result.status == "complete"
+        native_gate.assert_not_called()
+
 
 # ── Consult-off bypass tests ───────────────────────────────────────────────
 

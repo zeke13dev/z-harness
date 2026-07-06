@@ -240,6 +240,90 @@ class TestSubagentDispatchIntegration:
         r = _handle_subagent_dispatch({"agent": "auditor"}, None)
         assert r.status == "error"
 
+    def test_codex_native_subagent_helper_returns_structured_tool_result(self) -> None:
+        """Native Codex helper preserves ToolResult content and metadata shape."""
+        import types
+        from runtime.dispatch.result import DispatchResult
+        from z_harness_cli.mcp.server import (
+            AgentDef,
+            MCPProviderResolution,
+            _try_codex_native_subagent_dispatch,
+        )
+
+        provider_resolution = MCPProviderResolution(
+            role="implementer",
+            provider_config={
+                "provider": "codex-cli",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+            },
+            provider_name="codex-cli",
+            host="codex",
+        )
+        route = types.SimpleNamespace(
+            effective_model="gpt-5-codex",
+            source="frontmatter",
+            route="haiku",
+            route_kind="exact",
+            thinking="",
+            reasoning="",
+        )
+
+        class FakeNativeCodexDriver:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+                self.teardown_calls = 0
+
+            def dispatch_native_subagent(self, **kwargs: object) -> DispatchResult:
+                self.calls.append(kwargs)
+                return DispatchResult(
+                    exit_code=0,
+                    is_error=False,
+                    stdout_events=[
+                        {"type": "text", "content": "native result"},
+                        {"type": "artifact", "name": "trace", "content": "ok"},
+                    ],
+                    stderr="",
+                    wall_ms=4.0,
+                )
+
+            def teardown(self) -> None:
+                self.teardown_calls += 1
+
+        fake_driver = FakeNativeCodexDriver()
+
+        with patch(
+            "z_harness_cli.adapters.codex_parity_gate."
+            "codex_native_subagent_dispatch_available",
+            return_value=True,
+        ), \
+             patch("z_harness_cli.mcp.server._select_and_init_mcp_driver", return_value=fake_driver), \
+             patch("runtime.dispatch.dispatcher.Dispatcher") as runtime_dispatcher:
+            result = _try_codex_native_subagent_dispatch(
+                repo_root=Path("/fake/root"),
+                provider_resolution=provider_resolution,
+                agent_def=AgentDef(
+                    name="auditor",
+                    description="",
+                    model="haiku",
+                    prompt_template="AGENT TEMPLATE",
+                ),
+                prompt="review the patch",
+                route=route,
+                progress_callback=None,
+            )
+
+        assert result is not None
+        assert result.status == "complete"
+        assert result.content == "native result"
+        assert result.artifacts == {"trace": "ok"}
+        assert result.meta["dispatch_path"] == "codex_native_subagent"
+        assert result.meta["provider"] == "codex-cli"
+        runtime_dispatcher.assert_not_called()
+        assert fake_driver.calls[0]["agent_name"] == "auditor"
+        assert fake_driver.calls[0]["prompt"] == "review the patch"
+        assert fake_driver.teardown_calls == 1
+
 
 class TestSafeToolWrapper:
     """Verify _safe_tool catches exceptions on all handler types."""

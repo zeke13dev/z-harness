@@ -6,12 +6,14 @@ runtime/dispatch/dispatcher.py via _dispatch_command().
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
 import subprocess
 import sys
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -196,6 +198,134 @@ def _report_progress(
         pass  # Progress reporting is best-effort.
 
 
+_PROVIDER_TO_HOST: dict[str, str] = {
+    "codex-cli": "codex",
+    "claude": "claude",
+    "cursor": "cursor",
+    "antigravity": "antigravity",
+}
+
+_SUPPORTED_PROVIDER_HOSTS: frozenset[str] = frozenset(
+    {"claude", "cursor", "codex", "antigravity"}
+)
+
+
+@dataclass(frozen=True)
+class MCPProviderResolution:
+    """Resolved provider descriptor for one MCP tool dispatch."""
+
+    role: str
+    provider_config: dict[str, Any]
+    provider_name: str
+    host: str
+
+
+def _resolve_mcp_provider(repo_root: Path, tool_name: str) -> MCPProviderResolution | ToolResult:
+    """Resolve the configured provider for *tool_name* using MCP role rules.
+
+    This preserves ``MCPDispatcher``'s historical behaviour: command role
+    mapping, reviewer fallback, provider aliases inside ``resolve-provider.py``,
+    and the ``Z_HARNESS_CONSULT=off`` / provider ``none`` skipped sentinel.
+    """
+    role = _COMMAND_ROLE_MAP.get(tool_name, "reviewer")
+    provider_config: dict[str, Any] | None = None
+
+    for attempt_role in (role, "reviewer"):
+        try:
+            resolve_script = repo_root / "scripts" / "resolve-provider.py"
+            proc = subprocess.run(
+                [sys.executable, str(resolve_script), attempt_role],
+                capture_output=True, text=True, timeout=15,
+                cwd=str(repo_root),
+            )
+            if proc.returncode == 0:
+                # Detect the consult-off sentinel: resolve-provider.py prints
+                # the bare string "none" (not JSON) when Z_HARNESS_CONSULT=off
+                # and the role is a consult/reviewer role.
+                stdout_stripped = proc.stdout.strip()
+                if stdout_stripped == "none":
+                    return ToolResult.skipped(
+                        f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
+                        f"{tool_name} bound to a consult role was skipped."
+                    )
+                loaded = json.loads(proc.stdout)
+                # Also handle the case where the JSON itself carries provider="none".
+                if isinstance(loaded, dict) and loaded.get("provider") == "none":
+                    return ToolResult.skipped(
+                        f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
+                        f"{tool_name} bound to a consult role was skipped."
+                    )
+                if isinstance(loaded, dict):
+                    provider_config = loaded
+                    break
+        except subprocess.TimeoutExpired:
+            continue
+        except json.JSONDecodeError:
+            continue
+        except Exception:
+            continue
+
+    if provider_config is None:
+        return ToolResult.error(
+            f"Provider resolution failed: no configured provider for role '{role}'"
+        )
+
+    provider_name = str(provider_config.get("provider", ""))
+    host = _PROVIDER_TO_HOST.get(provider_name, provider_name)
+    if host not in _SUPPORTED_PROVIDER_HOSTS:
+        return ToolResult.error(f"Unsupported provider host: {provider_name}")
+
+    return MCPProviderResolution(
+        role=role,
+        provider_config=provider_config,
+        provider_name=provider_name,
+        host=host,
+    )
+
+
+def _select_and_init_mcp_driver(
+    repo_root: Path,
+    run_id: str,
+    provider_resolution: MCPProviderResolution,
+) -> object | ToolResult:
+    """Select and initialise the host driver for an MCP provider resolution."""
+    try:
+        from runtime.drivers import select_driver
+
+        driver = select_driver(provider_resolution.host)
+    except Exception as exc:
+        return ToolResult.error(f"Driver selection failed: {exc}")
+
+    try:
+        driver.init(
+            provider_resolution.provider_config,
+            context={"run_id": run_id, "repo_root": str(repo_root)},
+        )
+    except Exception as exc:
+        return ToolResult.error(f"Driver init failed: {exc}")
+
+    return driver
+
+
+@contextmanager
+def _scoped_z_harness_slug(slug: Any):
+    """Scope Z_HARNESS_SLUG to one dispatch and restore the prior value."""
+    slug_key = "Z_HARNESS_SLUG"
+    prior_slug = os.environ.get(slug_key)
+    slug_text = str(slug) if slug is not None else ""
+    try:
+        if slug_text:
+            os.environ[slug_key] = slug_text
+        elif prior_slug is not None:
+            os.environ.pop(slug_key, None)
+        yield
+    finally:
+        if prior_slug is None:
+            os.environ.pop(slug_key, None)
+        else:
+            os.environ[slug_key] = prior_slug
+
+
 # ==========================================================================
 # MCPDispatcher wrapper (T017)
 # ==========================================================================
@@ -224,7 +354,10 @@ class MCPDispatcher:
             message, self._tool_name,
         )
 
-    def dispatch(self) -> ToolResult:
+    def dispatch(
+        self,
+        provider_resolution: MCPProviderResolution | None = None,
+    ) -> ToolResult:
         """Resolve provider, select driver, run dispatcher, bridge result.
 
         When ``self._args`` contains a ``resume`` key of shape
@@ -240,67 +373,25 @@ class MCPDispatcher:
             return ToolResult.error(f"Unknown command: {self._tool_name}")
         cmd_id: str = meta["command_id"]
 
-        # --- Provider resolution ---
-        role = _COMMAND_ROLE_MAP.get(self._tool_name, "reviewer")
-        provider_config = None
-        for attempt_role in (role, "reviewer"):
-            try:
-                resolve_script = self._repo_root / "scripts" / "resolve-provider.py"
-                proc = subprocess.run(
-                    [sys.executable, str(resolve_script), attempt_role],
-                    capture_output=True, text=True, timeout=15,
-                    cwd=str(self._repo_root),
-                )
-                if proc.returncode == 0:
-                    # Detect the consult-off sentinel: resolve-provider.py prints
-                    # the bare string "none" (not JSON) when Z_HARNESS_CONSULT=off
-                    # and the role is a consult/reviewer role.
-                    stdout_stripped = proc.stdout.strip()
-                    if stdout_stripped == "none":
-                        return ToolResult.skipped(
-                            f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
-                            f"{self._tool_name} bound to a consult role was skipped."
-                        )
-                    provider_config = json.loads(proc.stdout)
-                    # Also handle the case where the JSON itself carries provider="none".
-                    if isinstance(provider_config, dict) and provider_config.get("provider") == "none":
-                        return ToolResult.skipped(
-                            f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
-                            f"{self._tool_name} bound to a consult role was skipped."
-                        )
-                    break
-            except subprocess.TimeoutExpired:
-                continue
-            except json.JSONDecodeError:
-                continue
-            except Exception:
-                continue
+        # --- Provider / driver resolution ---
+        resolved_provider: MCPProviderResolution | ToolResult
+        if provider_resolution is None:
+            resolved_provider = _resolve_mcp_provider(self._repo_root, self._tool_name)
+        else:
+            resolved_provider = provider_resolution
+        if isinstance(resolved_provider, ToolResult):
+            return resolved_provider
 
-        if provider_config is None:
-            return ToolResult.error(
-                f"Provider resolution failed: no configured provider for role '{role}'"
-            )
-
-        # --- Driver selection ---
-        _PROVIDER_TO_HOST: dict[str, str] = {
-            "codex-cli": "codex", "claude": "claude",
-            "cursor": "cursor", "antigravity": "antigravity",
-        }
-        try:
-            from runtime.drivers import select_driver
-            provider_name = provider_config.get("provider", "")
-            host = _PROVIDER_TO_HOST.get(provider_name, provider_name)
-            if host not in ("claude", "cursor", "codex", "antigravity"):
-                return ToolResult.error(f"Unsupported provider host: {provider_name}")
-            driver = select_driver(host)
-        except Exception as exc:
-            return ToolResult.error(f"Driver selection failed: {exc}")
-
-        # --- Initialize driver ---
-        try:
-            driver.init()
-        except Exception as exc:
-            return ToolResult.error(f"Driver init failed: {exc}")
+        provider_config = resolved_provider.provider_config
+        run_id = f"mcp-{uuid.uuid4().hex[:12]}"
+        driver_or_error = _select_and_init_mcp_driver(
+            self._repo_root,
+            run_id,
+            resolved_provider,
+        )
+        if isinstance(driver_or_error, ToolResult):
+            return driver_or_error
+        driver = driver_or_error
 
         # --- Build args ---
         prompt = self._args.get("prompt", "")
@@ -322,22 +413,12 @@ class MCPDispatcher:
         caller_args: list[str] = [prompt] if prompt else []
 
         # --- Dispatch (with scoped Z_HARNESS_SLUG mutation) ---
-        # Save and restore Z_HARNESS_SLUG around the dispatch so a per-call
-        # slug cannot leak into subsequent MCP tool calls (stateless invariant).
-        _SLUG_KEY = "Z_HARNESS_SLUG"
-        _prior_slug = os.environ.get(_SLUG_KEY)
-        try:
-            if slug_val:
-                os.environ[_SLUG_KEY] = slug_val
-            elif _prior_slug is not None:
-                # Caller didn't supply a slug; clear any inherited value so this
-                # call doesn't accidentally inherit a stale slug from a prior call.
-                os.environ.pop(_SLUG_KEY, None)
-
+        # A per-call slug cannot leak into later MCP calls, and calls without
+        # a slug do not inherit stale process state.
+        with _scoped_z_harness_slug(slug_val):
             self._advance_phase(f"Resolving provider and driver for {cmd_id}")
             try:
                 from runtime.dispatch.dispatcher import Dispatcher
-                run_id = f"mcp-{uuid.uuid4().hex[:12]}"
                 dispatcher = Dispatcher(repo_root=str(self._repo_root), run_id=run_id)
 
                 self._advance_phase(f"Dispatching {cmd_id}")
@@ -354,38 +435,12 @@ class MCPDispatcher:
                 )
             except Exception as exc:
                 return ToolResult.error(f"Dispatch error: {exc}")
-        finally:
-            # Always restore the prior slug value (including "was unset").
-            if _prior_slug is None:
-                os.environ.pop(_SLUG_KEY, None)
-            else:
-                os.environ[_SLUG_KEY] = _prior_slug
-
-        # --- Detect needs_input from output ---
-        # The narrative lives in stdout_events (type=="text" frames); result.stderr
-        # is the raw OS stderr pipe which carries only CLI diagnostic messages.
-        narrative = _extract_narrative(result.stdout_events) or result.stderr
-        input_signal = _detect_needs_input(narrative)
-        if input_signal:
-            return ToolResult.needs_input(input_signal["content"], input_signal["question_id"])
 
         # --- Bridge result ---
-        if result.success:
-            # Drivers emit human-readable output as type=="text" events on stdout,
-            # NOT on stderr.  result.stderr is the raw OS stderr pipe (CLI warnings);
-            # it is only a last-resort fallback when no text events were emitted.
-            content = narrative or "Command completed successfully."
-            artifacts: dict[str, str] = {}
-            for event in result.stdout_events:
-                if isinstance(event, dict) and event.get("type") == "artifact":
-                    name, text = event.get("name", ""), event.get("content", "")
-                    if name and text:
-                        artifacts[name] = text
+        bridged = _bridge_dispatch_result(result, cmd_id)
+        if bridged.status == "complete":
             self._advance_phase("Complete")
-            return ToolResult.success(content=content, artifacts=artifacts,
-                                      meta={"exit_code": result.exit_code, "wall_ms": result.wall_ms})
-        else:
-            return ToolResult.error(result.stderr or f"Command '{cmd_id}' failed (exit {result.exit_code})")
+        return bridged
 
 
 # ==========================================================================
@@ -416,6 +471,42 @@ def _extract_narrative(stdout_events: list[dict]) -> str:
         and event["content"]
     ]
     return "\n".join(parts)
+
+
+def _bridge_dispatch_result(
+    result: Any,
+    cmd_id: str,
+    meta: dict[str, object] | None = None,
+) -> ToolResult:
+    """Convert a runtime ``DispatchResult`` into the MCP ``ToolResult`` shape."""
+    # The narrative lives in stdout_events (type=="text" frames); result.stderr
+    # is the raw OS stderr pipe which carries only CLI diagnostic messages.
+    narrative = _extract_narrative(result.stdout_events) or result.stderr
+    input_signal = _detect_needs_input(narrative)
+    if input_signal:
+        return ToolResult.needs_input(input_signal["content"], input_signal["question_id"])
+
+    if result.success:
+        # Drivers emit human-readable output as type=="text" events on stdout,
+        # NOT on stderr.  result.stderr is the raw OS stderr pipe (CLI warnings);
+        # it is only a last-resort fallback when no text events were emitted.
+        content = narrative or "Command completed successfully."
+        artifacts: dict[str, str] = {}
+        for event in result.stdout_events:
+            if isinstance(event, dict) and event.get("type") == "artifact":
+                name, text = event.get("name", ""), event.get("content", "")
+                if name and text:
+                    artifacts[name] = text
+
+        result_meta: dict[str, object] = {
+            "exit_code": result.exit_code,
+            "wall_ms": result.wall_ms,
+        }
+        if meta:
+            result_meta.update(meta)
+        return ToolResult.success(content=content, artifacts=artifacts, meta=result_meta)
+
+    return ToolResult.error(result.stderr or f"Command '{cmd_id}' failed (exit {result.exit_code})")
 
 
 # ==========================================================================
@@ -674,6 +765,120 @@ def _handle_skill_dispatch(
 # Subagent dispatch (T010)
 # ==========================================================================
 
+def _codex_native_subagent_hook(driver: object) -> Callable[..., Any] | None:
+    """Return the explicit native subagent hook implemented by *driver*."""
+    try:
+        inspect.getattr_static(driver, "dispatch_native_subagent")
+    except AttributeError:
+        return None
+
+    hook = getattr(driver, "dispatch_native_subagent", None)
+    return hook if callable(hook) else None
+
+
+def _try_codex_native_subagent_dispatch(
+    repo_root: Path,
+    provider_resolution: MCPProviderResolution,
+    agent_def: AgentDef,
+    prompt: str,
+    route: Any,
+    progress_callback: Any,
+    slug: Any = None,
+) -> ToolResult | None:
+    """Dispatch through Codex native subagent support when explicitly proven.
+
+    ``None`` means the native gate did not pass and callers must use the
+    generic MCP dispatcher fallback unchanged.  Primitive evidence alone is
+    not sufficient: the selected Codex driver must expose an actual native
+    dispatch hook, otherwise this fails closed to the generic dispatcher.
+    """
+    if provider_resolution.host != "codex":
+        return None
+
+    try:
+        from z_harness_cli.adapters.codex_parity_gate import (
+            codex_native_subagent_dispatch_available,
+        )
+    except Exception:
+        return None
+
+    if not codex_native_subagent_dispatch_available():
+        return None
+
+    meta = _active_command_tools().get("z_subagent_dispatch")
+    if meta is None:
+        return ToolResult.error("Unknown command: z_subagent_dispatch")
+    cmd_id: str = meta["command_id"]
+
+    run_id = f"mcp-{uuid.uuid4().hex[:12]}"
+    driver_or_error = _select_and_init_mcp_driver(
+        repo_root,
+        run_id,
+        provider_resolution,
+    )
+    if isinstance(driver_or_error, ToolResult):
+        return driver_or_error
+    driver = driver_or_error
+    try:
+        native_hook = _codex_native_subagent_hook(driver)
+        if native_hook is None:
+            return None
+
+        try:
+            _report_progress(
+                progress_callback,
+                "dispatch",
+                2,
+                1,
+                f"Dispatching Codex native agent {agent_def.name}",
+                "z_subagent_dispatch",
+            )
+            with _scoped_z_harness_slug(slug):
+                result = native_hook(
+                    agent_name=agent_def.name,
+                    prompt=prompt,
+                    env=os.environ.copy(),
+                    provider_config=provider_resolution.provider_config,
+                    repo_root=str(repo_root),
+                    run_id=run_id,
+                    model=route.effective_model,
+                    model_source=route.source,
+                    model_route=route.route,
+                    model_route_kind=route.route_kind,
+                    model_thinking=route.thinking,
+                    model_reasoning=route.reasoning,
+                )
+        except Exception as exc:
+            return ToolResult.error(f"Dispatch error: {exc}")
+
+        bridged = _bridge_dispatch_result(
+            result,
+            cmd_id,
+            meta={
+                "dispatch_path": "codex_native_subagent",
+                "agent": agent_def.name,
+                "provider": provider_resolution.provider_name,
+                "host": provider_resolution.host,
+                "effective_model": route.effective_model,
+                "model_source": route.source,
+                "model_route": route.route,
+                "model_route_kind": route.route_kind,
+            },
+        )
+        if bridged.status == "complete":
+            _report_progress(
+                progress_callback,
+                "complete",
+                2,
+                2,
+                "Complete",
+                "z_subagent_dispatch",
+            )
+        return bridged
+    finally:
+        driver.teardown()
+
+
 def _handle_subagent_dispatch(args: dict[str, Any], progress_callback: Any) -> ToolResult:
     """Dispatch a subagent via the LLM CLI.
 
@@ -746,8 +951,25 @@ def _handle_subagent_dispatch(args: dict[str, Any], progress_callback: Any) -> T
         "model_reasoning": route.reasoning,
         "slug": args.get("slug"),
     }
+
+    provider_resolution = _resolve_mcp_provider(repo_root, "z_subagent_dispatch")
+    if isinstance(provider_resolution, ToolResult):
+        return provider_resolution
+
+    native_result = _try_codex_native_subagent_dispatch(
+        repo_root=repo_root,
+        provider_resolution=provider_resolution,
+        agent_def=agent_def,
+        prompt=prompt,
+        route=route,
+        progress_callback=progress_callback,
+        slug=args.get("slug"),
+    )
+    if native_result is not None:
+        return native_result
+
     dispatcher = MCPDispatcher(repo_root, "z_subagent_dispatch", enriched_args, progress_callback)
-    return dispatcher.dispatch()
+    return dispatcher.dispatch(provider_resolution=provider_resolution)
 
 
 # ==========================================================================
