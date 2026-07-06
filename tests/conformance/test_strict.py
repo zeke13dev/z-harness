@@ -213,6 +213,65 @@ def test_all_supported_hosts_route_to_distinct_drivers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Codex advertised support must match the live runtime primitive surface
+# ---------------------------------------------------------------------------
+
+
+def test_codex_multi_agent_claims_stay_blocked_when_runtime_path_is_missing() -> None:
+    """Codex must not advertise native multi-agent support without a runtime path."""
+    from runtime.drivers.codex.driver import CodexDriver
+    from z_harness_cli.adapters.base import command_tier
+    from z_harness_cli.adapters.codex_parity_gate import (
+        NATIVE_CANDIDATE_FAMILIES,
+        codex_native_subagent_dispatch_available,
+    )
+
+    primitive_available = codex_native_subagent_dispatch_available()
+    driver_has_hook = hasattr(CodexDriver, "dispatch_native_subagent")
+    if primitive_available and driver_has_hook:
+        return
+
+    assert {
+        command: command_tier("codex", command)
+        for command in NATIVE_CANDIDATE_FAMILIES
+    } == {
+        command: "blocked"
+        for command in NATIVE_CANDIDATE_FAMILIES
+    }, (
+        "Codex advertised native multi-agent support while the runtime "
+        f"path is incomplete: primitive_available={primitive_available}, "
+        f"driver_has_hook={driver_has_hook}"
+    )
+
+
+def test_codex_native_multi_agent_claims_require_primitive_and_driver_hook() -> None:
+    """A native multi-agent tier requires both gate evidence and driver support."""
+    from runtime.drivers.codex.driver import CodexDriver
+    from z_harness_cli.adapters.base import command_tier
+    from z_harness_cli.adapters.codex_parity_gate import (
+        NATIVE_CANDIDATE_FAMILIES,
+        codex_native_subagent_dispatch_available,
+    )
+
+    native_claims = sorted(
+        command
+        for command in NATIVE_CANDIDATE_FAMILIES
+        if command_tier("codex", command) == "native"
+    )
+    if not native_claims:
+        return
+
+    assert codex_native_subagent_dispatch_available(), (
+        "Codex advertised native multi-agent command support without the "
+        f"native subagent primitive gate: {native_claims}"
+    )
+    assert hasattr(CodexDriver, "dispatch_native_subagent"), (
+        "Codex advertised native multi-agent command support, but the live "
+        f"CodexDriver has no dispatch_native_subagent hook: {native_claims}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Unsupported host -> DriverNotFoundError with a clear message
 # ---------------------------------------------------------------------------
 

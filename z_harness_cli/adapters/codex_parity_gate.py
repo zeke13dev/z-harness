@@ -5,11 +5,13 @@ This gate intentionally does not treat the current host session's subagent
 tools as shipped Codex capability evidence: promotion is tied to resolvable
 test classes that exercise the Codex adapter/runtime surface.
 
-Current default posture is conservative and preserves existing behaviour:
-adapter/export fidelity remains ``flattened``; ordinary commands are
-``degraded`` single-agent transliterations; and multi-agent families
-(``z-execute``, ``z-panel``, ``z-consult``, ``z-gate``) are ``blocked`` until
-their required Codex evidence classes resolve.
+Current command posture is conservative and preserves existing behaviour:
+adapter fidelity remains ``flattened``; ordinary commands are ``degraded``
+single-agent transliterations; and multi-agent families (``z-execute``,
+``z-panel``, ``z-consult``, ``z-gate``) are ``blocked`` until their required
+Codex command evidence and runtime primitive evidence resolve.  Export
+fidelity may advance independently when Codex-native export artifacts are
+proved.
 
 Native subagent dispatch is intentionally gated separately from adapter-wide
 fidelity and command-family tiers.  Codex CLI custom-agent export is not proof
@@ -24,6 +26,7 @@ from typing import Literal
 FidelityTier = Literal["native", "high", "flattened", "partial", "unsupported"]
 CommandTier = Literal["native", "degraded", "blocked"]
 EvidenceEntry = tuple[str, str]
+PrimitiveName = Literal["native_subagent_dispatch"]
 
 _PARITY_MODULE = "runtime.tests.test_codex_parity"
 _EXPORT_MODULE = "tests.drivers.test_codex_export_driver"
@@ -90,6 +93,20 @@ NATIVE_SUBAGENT_DISPATCH_EVIDENCE: list[EvidenceEntry] = [
 ]
 
 
+RUNTIME_PRIMITIVE_EVIDENCE: dict[PrimitiveName, list[EvidenceEntry]] = {
+    "native_subagent_dispatch": NATIVE_SUBAGENT_DISPATCH_EVIDENCE,
+}
+
+
+# Native command-family orchestration requires both behavioral parity evidence
+# for the family and the runtime primitive needed to execute that family.  This
+# keeps preservation/export/fallback fixtures from promoting command execution.
+COMMAND_RUNTIME_PRIMITIVES: dict[str, tuple[PrimitiveName, ...]] = {
+    command: ("native_subagent_dispatch",)
+    for command in NATIVE_CANDIDATE_FAMILIES
+}
+
+
 def _entry_resolvable(entry: EvidenceEntry) -> bool:
     module_path, class_name = entry
     try:
@@ -121,40 +138,91 @@ def _any_resolvable(entries_by_family: dict[str, list[EvidenceEntry]]) -> bool:
     )
 
 
+def _runtime_primitive_entries(primitive: PrimitiveName) -> list[EvidenceEntry]:
+    return RUNTIME_PRIMITIVE_EVIDENCE.get(primitive, [])
+
+
+def has_runtime_primitive_evidence(primitive: PrimitiveName) -> bool:
+    """Return True when the named Codex runtime primitive is proven."""
+    return _all_entries_resolvable(_runtime_primitive_entries(primitive))
+
+
+def _missing_runtime_primitives(command: str) -> list[str]:
+    missing: list[str] = []
+    for primitive in COMMAND_RUNTIME_PRIMITIVES.get(command, ()):
+        entries = _runtime_primitive_entries(primitive)
+        if not _all_entries_resolvable(entries):
+            missing_entries = ", ".join(_missing_entries(entries))
+            if missing_entries:
+                missing.append(f"{primitive} ({missing_entries})")
+            else:
+                missing.append(primitive)
+    return missing
+
+
+def _command_runtime_primitives_available(command: str) -> bool:
+    return not _missing_runtime_primitives(command)
+
+
 def has_parity_evidence(command: str) -> bool:
-    """Return True when all required Codex evidence for *command* resolves."""
+    """Return True when command-family Codex evidence for *command* resolves."""
     return _all_entries_resolvable(PARITY_EVIDENCE.get(command, []))
+
+
+def has_native_command_support(command: str) -> bool:
+    """Return True when *command* has both command evidence and primitives."""
+    return has_parity_evidence(command) and _command_runtime_primitives_available(command)
 
 
 def codex_command_decision(command: str) -> CommandDecision:
     """Return the command tier and downgrade reason for *command*."""
     evidence = PARITY_EVIDENCE.get(command, [])
-    if evidence and _all_entries_resolvable(evidence):
-        return CommandDecision(
-            tier="native",
-            reason="Codex parity evidence resolved for this command family.",
-        )
 
     if command in NATIVE_CANDIDATE_FAMILIES:
-        if evidence:
-            missing = ", ".join(_missing_entries(evidence))
+        if not evidence:
             return CommandDecision(
                 tier="blocked",
                 reason=(
-                    "Missing required Codex parity evidence for native "
+                    "No Codex parity evidence is registered for native "
+                    f"{command} support."
+                ),
+            )
+
+        missing_evidence = _missing_entries(evidence)
+        if missing_evidence:
+            missing = ", ".join(missing_evidence)
+            return CommandDecision(
+                tier="blocked",
+                reason=(
+                    "Missing required Codex native command evidence for "
                     f"{command} support: {missing}."
                 ),
             )
+
+        missing_primitives = _missing_runtime_primitives(command)
+        if missing_primitives:
+            missing = ", ".join(missing_primitives)
+            return CommandDecision(
+                tier="blocked",
+                reason=(
+                    "Missing required Codex runtime primitive for native "
+                    f"{command} support: {missing}."
+                ),
+            )
+
         return CommandDecision(
-            tier="blocked",
-            reason=(
-                "No Codex parity evidence is registered for native "
-                f"{command} support."
-            ),
+            tier="native",
+            reason="Codex native command evidence and runtime primitives resolved.",
         )
 
     if evidence:
-        missing = ", ".join(_missing_entries(evidence))
+        missing_evidence = _missing_entries(evidence)
+        if not missing_evidence:
+            return CommandDecision(
+                tier="native",
+                reason="Codex parity evidence resolved for this command family.",
+            )
+        missing = ", ".join(missing_evidence)
         return CommandDecision(
             tier="blocked",
             reason=(
@@ -175,7 +243,7 @@ def codex_command_tier(command: str) -> CommandTier:
 
 
 def _all_native_candidates_proven() -> bool:
-    return all(has_parity_evidence(command) for command in NATIVE_CANDIDATE_FAMILIES)
+    return all(has_native_command_support(command) for command in NATIVE_CANDIDATE_FAMILIES)
 
 
 def _all_adapter_evidence_proven() -> bool:
@@ -185,6 +253,10 @@ def _all_adapter_evidence_proven() -> bool:
 def _any_adapter_evidence_resolvable() -> bool:
     return _any_resolvable(PARITY_EVIDENCE) or any(
         _entry_resolvable(entry) for entry in ADAPTER_EVIDENCE
+    ) or any(
+        _entry_resolvable(entry)
+        for entries in RUNTIME_PRIMITIVE_EVIDENCE.values()
+        for entry in entries
     )
 
 
@@ -227,4 +299,4 @@ def codex_native_subagent_dispatch_available() -> bool:
     exported ``.codex/agents/*.toml`` files are necessary host artifacts, not
     evidence that the CLI can dispatch one by name at runtime.
     """
-    return _all_entries_resolvable(NATIVE_SUBAGENT_DISPATCH_EVIDENCE)
+    return has_runtime_primitive_evidence("native_subagent_dispatch")

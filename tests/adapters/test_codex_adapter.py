@@ -129,7 +129,7 @@ class TestCommandCapabilityMatrix(unittest.TestCase):
         from z_harness_cli.adapters.codex_parity_gate import (
             NATIVE_CANDIDATE_FAMILIES,
             codex_command_decision,
-            has_parity_evidence,
+            has_native_command_support,
         )
 
         for cmd in NATIVE_CANDIDATE_FAMILIES:
@@ -137,10 +137,10 @@ class TestCommandCapabilityMatrix(unittest.TestCase):
                 decision = codex_command_decision(cmd)
                 self.assertEqual(command_tier("codex", cmd), decision.tier)
                 if decision.tier == "native":
-                    self.assertTrue(has_parity_evidence(cmd))
+                    self.assertTrue(has_native_command_support(cmd))
                 else:
                     self.assertEqual(decision.tier, "blocked")
-                    self.assertIn("Codex parity evidence", decision.reason)
+                    self.assertIn("Codex", decision.reason)
 
 
 # ---------------------------------------------------------------------------
@@ -361,14 +361,17 @@ class TestParityGate(unittest.TestCase):
             gate_mod.PARITY_EVIDENCE.update(original)
             gate_mod.ADAPTER_EVIDENCE[:] = original_adapter
 
-    def test_partial_resolvable_evidence_does_not_promote_unproven_families(self):
+    def test_command_evidence_without_primitive_does_not_promote_unproven_families(self):
         import z_harness_cli.adapters.codex_parity_gate as gate_mod
 
         original_module = sys.modules.get(self._PARITY_MODULE)
         fake = self._fake_module({"TestConsultantDispatchIsolation"})
         try:
             sys.modules[self._PARITY_MODULE] = fake
-            self.assertEqual(gate_mod.codex_command_tier("z-consult"), "native")
+            decision = gate_mod.codex_command_decision("z-consult")
+            self.assertEqual(decision.tier, "blocked")
+            self.assertIn("native_subagent_dispatch", decision.reason)
+            self.assertEqual(command_tier("codex", "z-consult"), "blocked")
             self.assertEqual(gate_mod.codex_command_tier("z-execute"), "blocked")
             self.assertEqual(gate_mod.codex_adapter_fidelity(), "partial")
             self.assertEqual(gate_mod.codex_export_fidelity(), "partial")
@@ -386,8 +389,12 @@ class TestParityGate(unittest.TestCase):
         fake = self._fake_module({"TestConsultantDispatchIsolation"})
         try:
             sys.modules[self._PARITY_MODULE] = fake
-            self.assertEqual(command_tier("codex", "z-consult"), "native")
+            self.assertEqual(command_tier("codex", "z-consult"), "blocked")
             self.assertEqual(command_tier("codex", "z-execute"), "blocked")
+            self.assertEqual(
+                command_tier("codex", "z-consult"),
+                gate_mod.codex_command_tier("z-consult"),
+            )
             self.assertEqual(
                 command_tier("codex", "z-execute"),
                 gate_mod.codex_command_tier("z-execute"),
@@ -410,6 +417,7 @@ class TestParityGate(unittest.TestCase):
                 "TestAskUserGateParity",
                 "TestTelemetryParity",
                 "TestMultiAgentCommandPath",
+                "TestCodexNativeSubagentDispatchPrimitive",
             }
         )
         fake_export = self._fake_module({"TestCodexNativeAgentExport"})
@@ -456,10 +464,13 @@ class TestParityGate(unittest.TestCase):
         )
         try:
             sys.modules[self._PARITY_MODULE] = fake_without_primitive
-            self.assertEqual(gate_mod.codex_adapter_fidelity(), "native")
+            self.assertEqual(gate_mod.codex_adapter_fidelity(), "partial")
+            self.assertEqual(gate_mod.codex_command_tier("z-execute"), "blocked")
             self.assertFalse(gate_mod.codex_native_subagent_dispatch_available())
 
             sys.modules[self._PARITY_MODULE] = fake_with_primitive
+            self.assertEqual(gate_mod.codex_adapter_fidelity(), "native")
+            self.assertEqual(gate_mod.codex_command_tier("z-execute"), "native")
             self.assertTrue(gate_mod.codex_native_subagent_dispatch_available())
         finally:
             if original_parity_module is None:

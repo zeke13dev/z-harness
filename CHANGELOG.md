@@ -36,6 +36,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 - _(auto)_ Export agents and preserve jsonl events _(codex)_
 - _(auto)_ Make command tiers gate-driven _(codex)_
 - _(auto)_ Gate native subagent dispatch _(codex)_
+- _(auto)_ Require primitives for native command tiers _(codex)_
 
 ## 2026-07-04
 

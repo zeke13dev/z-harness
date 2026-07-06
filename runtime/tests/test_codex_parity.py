@@ -311,7 +311,7 @@ class TestCodexAskUserGateFrames:
             decision = gate_mod.codex_command_decision("z-gate")
 
             assert decision.tier == "blocked"
-            assert "Missing required Codex parity evidence" in decision.reason
+            assert "Missing required Codex native command evidence" in decision.reason
             assert "MissingCodexAskUserEvidence" in decision.reason
         finally:
             gate_mod.PARITY_EVIDENCE.clear()
