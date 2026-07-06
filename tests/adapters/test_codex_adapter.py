@@ -345,8 +345,10 @@ class TestParityGate(unittest.TestCase):
         import z_harness_cli.adapters.codex_parity_gate as gate_mod
 
         original = {cmd: list(entries) for cmd, entries in gate_mod.PARITY_EVIDENCE.items()}
+        original_adapter = list(gate_mod.ADAPTER_EVIDENCE)
         try:
             gate_mod.PARITY_EVIDENCE.clear()
+            gate_mod.ADAPTER_EVIDENCE.clear()
             self.assertEqual(CodexAdapter().fidelity_tier, "flattened")
             for cmd in gate_mod.NATIVE_CANDIDATE_FAMILIES:
                 with self.subTest(cmd=cmd):
@@ -357,6 +359,7 @@ class TestParityGate(unittest.TestCase):
         finally:
             gate_mod.PARITY_EVIDENCE.clear()
             gate_mod.PARITY_EVIDENCE.update(original)
+            gate_mod.ADAPTER_EVIDENCE[:] = original_adapter
 
     def test_partial_resolvable_evidence_does_not_promote_unproven_families(self):
         import z_harness_cli.adapters.codex_parity_gate as gate_mod
