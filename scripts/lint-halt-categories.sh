@@ -24,6 +24,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STRICT=0
 CHECK_CHAIN=""
 SKILLS_DIR="$REPO_ROOT/skills"
+SCAN_LAYOUT="skills"
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       SKILLS_DIR="$2"
+      SCAN_LAYOUT="skills"
       shift 2
       ;;
     --commands-dir)
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       SKILLS_DIR="$2"
+      SCAN_LAYOUT="commands"
       shift 2
       ;;
     -h|--help)
@@ -102,6 +105,23 @@ _is_valid_category() {
 _warn()  { echo "WARN: $*" >&2; }
 _error() { echo "ERROR: $*" >&2; }
 _info()  { echo "INFO: $*"; }
+
+_iter_scan_files() {
+  if [[ "$SCAN_LAYOUT" == "commands" ]]; then
+    find "$SKILLS_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort
+  else
+    find "$SKILLS_DIR" -mindepth 2 -maxdepth 2 -type f -name 'SKILL.md' 2>/dev/null | sort
+  fi
+}
+
+_display_path() {
+  local file="$1"
+  if [[ "$SCAN_LAYOUT" == "commands" ]]; then
+    basename "$file"
+  else
+    printf '%s/SKILL.md' "$(basename "$(dirname "$file")")"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Core scan: emit lines like "<file>:<lineno>:<type>:<detail>"
@@ -215,29 +235,34 @@ _check_chain() {
     fi
   fi
 
-  # Map step names to skill file paths.
-  # Step names like "implement-all" map to skills/z-execute/SKILL.md.
+  # Map step names to gate-bearing source files.  Skills use the current
+  # skills/<id>/SKILL.md layout; --commands-dir keeps the legacy flat
+  # commands/z-<step>.md layout alive for compatibility tests.
   _step_to_skill() {
     local step="$1"
-    echo "z-${step}/SKILL.md"
+    if [[ "$SCAN_LAYOUT" == "commands" ]]; then
+      echo "z-${step}.md"
+    else
+      echo "z-${step}/SKILL.md"
+    fi
   }
 
   local found_any=0
   echo "Uncategorized ask_user gates reachable on chain '$preset':"
 
   if [[ "${steps_array[0]:-}" == "__ALL__" ]]; then
-    # Fallback: scan all skills
-    for f in "$SKILLS_DIR"/*/SKILL.md; do
-      [[ -f "$f" ]] || continue
+    # Fallback: scan all configured gate-bearing files.
+    while IFS= read -r f; do
+      [[ -n "$f" && -f "$f" ]] || continue
       while IFS= read -r entry; do
         [[ "$entry" =~ :missing_category: ]] || continue
         local file lineno
         file="$(echo "$entry" | cut -d: -f1)"
         lineno="$(echo "$entry" | cut -d: -f2)"
-        echo "  $(basename "$(dirname "$file")")/SKILL.md:$lineno  (no category= token)"
+        echo "  $(_display_path "$file"):$lineno  (no category= token)"
         found_any=1
       done < <(_scan_file "$f")
-    done
+    done < <(_iter_scan_files)
   else
     for step in "${steps_array[@]}"; do
       local cmd_file
@@ -270,19 +295,19 @@ if [[ -n "$CHECK_CHAIN" ]]; then
   exit 0
 fi
 
-# Full scan of all skills/*/SKILL.md
+# Full scan of all gate-bearing files in the selected layout.
 EXIT_CODE=0
 BAD_COUNT=0
 WARN_COUNT=0
 
-for f in "$SKILLS_DIR"/*/SKILL.md; do
-  [[ -f "$f" ]] || continue
+while IFS= read -r f; do
+  [[ -n "$f" && -f "$f" ]] || continue
   while IFS= read -r entry; do
     file="$(echo "$entry" | cut -d: -f1)"
     lineno="$(echo "$entry" | cut -d: -f2)"
     kind="$(echo "$entry" | cut -d: -f3)"
     detail="$(echo "$entry" | cut -d: -f4)"
-    rel_file="$(basename "$file")"
+    rel_file="$(_display_path "$file")"
 
     case "$kind" in
       bad_category)
@@ -302,7 +327,7 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
         ;;
     esac
   done < <(_scan_file "$f")
-done
+done < <(_iter_scan_files)
 
 # Summary
 if [[ $BAD_COUNT -gt 0 ]]; then
