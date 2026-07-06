@@ -7,7 +7,7 @@ in the runtime-owned ``export()`` signature.
 Public surface
 --------------
 export(repo_root, export_root, *, options=None) -> ExportResult
-    Render all z-harness skills and agents as Codex CLI files under
+    Render all z-harness skills and agents as Codex CLI export artifacts under
     ``export_root``.
 
     Codex output format:
@@ -23,8 +23,10 @@ export(repo_root, export_root, *, options=None) -> ExportResult
                                     the Codex adapter registration path.
 
 ExportResult is imported from runtime.drivers._export_utils (BLOCKER-1).
-Fidelity is read from the Codex parity gate when available, with a conservative
-``flattened`` fallback for isolated runtime environments.
+Fidelity is read from the Codex parity gate when available. Current evidence
+can promote export fidelity independently of runtime command orchestration:
+native skills/custom agents/MCP artifacts may be emitted while CLI subagent
+dispatch remains unproven.
 """
 
 from __future__ import annotations
@@ -59,8 +61,8 @@ _TOOL_SCHEMA_RE = re.compile(
 )
 
 _REPLACEMENT_COMMENT = (
-    "<!-- agent dispatch / skill invocation not supported in Codex CLI;"
-    " see CAPABILITIES.md -->"
+    "<!-- Codex export emits skill/custom-agent artifacts, but this runtime"
+    " dispatch primitive is unproven in Codex CLI; see CAPABILITIES.md -->"
 )
 
 
@@ -75,7 +77,7 @@ def _current_fidelity() -> str:
 
 
 def _rewrite_body(body: str) -> str:
-    """Rewrite whole unsupported runtime call blocks with a Codex hint."""
+    """Rewrite unsupported runtime call blocks with a Codex dispatch hint."""
     return rewrite_unsupported_call_blocks(
         body,
         lambda _block: _REPLACEMENT_COMMENT,
@@ -133,10 +135,10 @@ def _render_agents_md(agents: list[dict[str, Any]], *, fidelity: str) -> str:
         ]
     else:
         dispatch_note = [
-            "Codex CLI native subagent dispatch has not been proven by the\n",
-            "z-harness Codex parity gate.  These agent definitions describe the\n",
-            "**role and behaviour** of each agent so you can manually compose\n",
-            "prompts or invoke the appropriate prompt file.\n",
+            "Codex custom-agent definitions are exported under `.codex/agents/`,\n",
+            "but Codex CLI native subagent dispatch has not been proven by the\n",
+            "z-harness Codex parity gate.  This AGENTS.md remains a fallback\n",
+            "reference for the exported package.\n",
         ]
 
     lines: list[str] = [
@@ -258,10 +260,11 @@ def export(
         Destination directory for exported files.  Skills are written verbatim
         to ``<export_root>/skills/<id>/SKILL.md`` (frontmatter preserved, no
         transliteration).  Native Codex custom agents are written under
-        ``<export_root>/.codex/agents/``.  The consolidated agent reference is
-        written to ``<export_root>/AGENTS.md``.  A Codex CLI discovery manifest
-        is written to ``<export_root>/.codex-plugin/plugin.json``.  MCP
-        registration config is written to ``<export_root>/mcp_config.json``.
+        ``<export_root>/.codex/agents/``.  The consolidated
+        fallback/reference document is written to ``<export_root>/AGENTS.md``.
+        A Codex CLI discovery manifest is written to
+        ``<export_root>/.codex-plugin/plugin.json``.  MCP registration config
+        is written to ``<export_root>/mcp_config.json``.
     options:
         Reserved for future use.  Currently unused; pass ``None`` or omit.
 

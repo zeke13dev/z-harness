@@ -173,6 +173,8 @@ OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappe
 
 Do not treat `omp-antigravity-pro`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current OMP adapter/export support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports native adapter/export fidelity, and bounds command-family native claims to the capabilities parity matrix: `/z-execute`, `/z-consult`, `/z-gate`, and `/z-panel` are native with T008 evidence; other families remain degraded until promoted by parity evidence. Direct `gemini-cli` remains available as an explicitly named direct provider or as an explicit fallback command inside an OMP provider entry; it is not the Gemini-labeled OMP consult provider.
 
+Similarly, `codex-cli` provider entries invoke the external Codex CLI for provider roles only. They are not evidence for native Codex z-harness command orchestration. Current Codex support is split: export fidelity is partial because native skills/custom agents/MCP artifacts are emitted, while the CLI adapter remains flattened and multi-agent command families remain blocked until native runtime primitive and driver-hook evidence exists.
+
 ---
 
 ## argv composition

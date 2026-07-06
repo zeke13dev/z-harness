@@ -1,7 +1,7 @@
 {
   "concept": "multi-ide-exports",
-  "last_updated": "2026-06-24",
-  "covers_spec": "none",
+  "last_updated": "2026-07-05",
+  "covers_spec": "INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T009 docs/memory refresh; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T009 native OMP export contract",
   "source_file": [
     "runtime/drivers/_export_utils.py",
     "runtime/drivers/cursor/export.py",
@@ -115,14 +115,14 @@
       "line": 195,
       "symbol": "export",
       "kind": "fn",
-      "summary": "Emit Codex skills/<id>/SKILL.md files, .codex-plugin/plugin.json, and consolidated AGENTS.md; validate exported skills/manifest; fidelity=flattened"
+      "summary": "Emit Codex skills/<id>/SKILL.md files, .codex/agents/<id>.toml custom agents, .codex-plugin/plugin.json, AGENTS.md fallback/reference, and mcp_config.json; validate custom-agent TOML and optional CAPABILITIES.md when present; fidelity=partial"
     },
     {
       "file": "runtime/drivers/codex/export.py",
       "line": 57,
       "symbol": "_rewrite_body",
       "kind": "fn",
-      "summary": "Replace unsupported call sites with Codex limitation comment"
+      "summary": "Replace unsupported runtime dispatch call sites with Codex partial-export/runtime-dispatch limitation comment"
     },
     {
       "file": "runtime/drivers/codex/export.py",
@@ -136,7 +136,7 @@
       "line": 114,
       "symbol": "_render_agents_md",
       "kind": "fn",
-      "summary": "Consolidate all agents into a single AGENTS.md"
+      "summary": "Consolidate exported agents into AGENTS.md as a fallback/reference alongside native .codex/agents TOML"
     },
     {
       "file": "runtime/drivers/antigravity/export.py",
@@ -227,7 +227,7 @@
       "line": 243,
       "symbol": "CodexAdapter.export_payload",
       "kind": "fn",
-      "summary": "Two-stage: codex runtime export then persona loop from personas/builtin/; RuntimeError on validation errors; fidelity=flattened"
+      "summary": "Two-stage: codex runtime export then persona loop from personas/builtin/; RuntimeError on validation errors; fidelity=partial"
     },
     {
       "file": "z_harness_cli/adapters/antigravity.py",
@@ -275,19 +275,20 @@
     "ExportResult is owned by runtime/drivers/_export_utils.py; z_harness_cli code imports it only via z_harness_cli/adapters/base.py (one-way layering)",
     "All current runtime export() functions share signature: export(repo_root, export_root, *, options=None) -> ExportResult",
     "Non-empty ExportResult.warnings from the runtime export() are raised as RuntimeError by every adapter's export_payload() (legacy hard-gate preserved)",
-    "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate) are replaced line-by-line with target-specific HTML comments, never silently dropped",
-    "Each adapter validates all emitted files before reporting success; CAPABILITIES.md must contain ## Supported, ## Unsupported, ## Notes sections",
+    "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate) are replaced with target-specific HTML comments, never silently dropped",
+    "Target-specific exporters validate required artifacts where implemented; adapters surface non-empty runtime warnings as failures instead of silently reporting success. CAPABILITIES.md, when validated, must contain ## Supported, ## Unsupported, ## Notes sections",
     "Cursor and Codex append -skill suffix if a skill ID collides with an agent ID in export output; agy flat prompts use skill- prefix; legacy command/skill collision logic is no longer relevant (commands/ deleted)",
     "output_path_for handles only cursor and codex; agy is intentionally absent (owns its dual layout)",
     "pi is export-only: no adapter, no HostDriver, no --host pi CLI flag; export runs via direct import of runtime.drivers.pi.export",
     "pi has no persona export; persona export (from personas/builtin/) runs only for cursor, codex, and agy, while OMP profiles are rendered by runtime/drivers/omp/export.py",
-    "/z-export writes canonical exports/<target>/ mirrors: cursor/codex/agy/OMP via the runtime CLI with --out exports/<target> --force, and pi/windsurf/kiro/cline/copilot via standalone runtime drivers. OMP output is available but partial-fidelity. CLI --out paths must resolve inside the repo root; use exports/<target> or temp/<target> for ad hoc runs.",
+    "/z-export writes canonical exports/<target>/ mirrors: cursor/codex/agy/OMP via the runtime CLI with --out exports/<target> --force, and pi/windsurf/kiro/cline/copilot via standalone runtime drivers. Codex output is partial-fidelity; OMP output is native-fidelity. CLI --out paths must resolve inside the repo root; use exports/<target> or temp/<target> for ad hoc runs.",
     "/z-export performs no direct file I/O; all writes are delegated to runtime export() and persona_export.py modules",
     "_ALWAYS_ON_AGENTS is defined once in _export_utils.py and imported by every driver that needs it (agy, windsurf, kiro); never redefined per-driver",
     "audit-tarball.sh is the safety gate for packaged artifacts, independent of the export drivers",
     "OMP export emits .omp/config.yml plus .omp/z-harness/ package resources and is not a pi export variant.",
     "OMP ExportResult.fidelity is 'native' after T009; it is synchronized with OmpAdapter.fidelity_tier and COMMAND_CAPABILITY_MATRIX[\"omp\"] via omp_parity_gate.py.",
-    "OMP discovery keeps .omp/config.yml skills.enableAgentsProject=false and uses explicit OMP_PLUGIN_ROOT package discovery."
+    "OMP discovery keeps .omp/config.yml skills.enableAgentsProject=false and uses explicit OMP_PLUGIN_ROOT package discovery.",
+    "Codex export fidelity is 'partial': native SKILL.md files, .codex/agents custom-agent TOML, .codex-plugin/plugin.json, AGENTS.md fallback/reference, and mcp_config.json are emitted, but CLI runtime command orchestration remains flattened/degraded/blocked."
   ],
   "gotchas": [
     "skills/<id>/SKILL.md is the ONLY hand-authored committed source tier — commands/ markdown directory is deleted; enumerate_sources walks skills/*/SKILL.md and keeps a back-compat commands: [] key; cursor export writes verbatim .cursor/skills/<id>/SKILL.md (no transliteration)",
@@ -295,7 +296,7 @@
     "output_path_for intentionally omits agy — the agy exporter owns a dual layout (.agent/ + prompts/) that cannot be expressed as a single path",
     "/z-export uses exports/<target>/ as the canonical mirror destination. --in-place still writes into cwd for live workspace install, and lower-level --out <dest> remains available for ad hoc exports.",
     "inline_includes accepts base_dir for API symmetry but never uses it; resolution is always relative to repo_root (preserved quirk from legacy export-common.py)",
-    "Codex exports skills as native skills/<id>/SKILL.md files discovered through .codex-plugin/plugin.json; agents consolidate into AGENTS.md and no per-agent prompt files are emitted",
+    "Codex exports skills as native skills/<id>/SKILL.md files discovered through .codex-plugin/plugin.json; agents export as .codex/agents/<id>.toml with AGENTS.md as fallback/reference; no per-agent prompt files are emitted",
     "agy _ALWAYS_ON_AGENTS is defined in _export_utils.py and imported by antigravity/export.py (not redefined there); single source of truth covers implementer, reviewer, auditor, mr-reviewer, remote-runner",
     "agy-plugin.yaml is a z-harness convention manifest; Antigravity does not read it natively",
     "Antigravity workflow bodies have an ~12,000 character limit; several z-harness commands exceed it",
@@ -306,9 +307,24 @@
     "z_harness_cli/adapters/base.py re-exports ExportResult as __all__ = ['ExportResult'] so tests that import from base get the runtime type",
     "select_sources and resolve_strategy are used by export-only drivers (windsurf, kiro, cline, copilot) but not by cursor, codex, agy, pi, or OMP, which enumerate all sources unconditionally",
     "scripts/omp-consult.sh is provider-registry compatibility only; native OMP export/dispatch must not call it.",
-    "OMP package files are .omp/z-harness/ resources (T009 native): manifest, skills, rules, prompts, agents, profiles. .omp/config.yml is never modified. Four command families are native; others degraded."
+    "OMP package files are .omp/z-harness/ resources (T009 native): manifest, skills, rules, prompts, agents, profiles. .omp/config.yml is never modified. Four command families are native; others degraded.",
+    "Codex custom-agent export is not proof of Codex CLI native subagent dispatch. z_subagent_dispatch still requires Codex primitive evidence plus a CodexDriver.dispatch_native_subagent hook and currently falls back to generic MCP dispatch."
   ],
   "memories": [],
+  "codex_partial_export_contract": {
+    "status": "partial first-class host export; runtime command orchestration not native",
+    "layout": [
+      "skills/<id>/SKILL.md",
+      ".codex/agents/<id>.toml",
+      ".codex-plugin/plugin.json",
+      "AGENTS.md",
+      "mcp_config.json",
+      "prompts/personas/<name>.md"
+    ],
+    "fidelity": "ExportResult.fidelity='partial' while CodexAdapter.fidelity_tier='flattened'",
+    "runtime_boundary": "z-execute/z-panel/z-consult/z-gate remain blocked; ordinary commands such as z-plan are degraded until native subagent primitive evidence and a driver hook exist",
+    "claim_boundary": "Codex app/plugin multi_agent evidence and exported custom-agent TOML are not proof of Codex CLI native command orchestration"
+  },
   "omp_native_export_contract": {
     "status": "native first-class host export (T009 complete); not legacy pi export",
     "ground_truth": "Claude Code parity via capabilities-matrix gate; fidelity='native' after T009 for adapter and export; four command families native",

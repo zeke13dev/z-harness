@@ -10,7 +10,7 @@ This project is pre-1.0 beta software. It can orchestrate tools that read and wr
 
 - **Claude Code plugin:** primary/native command and agent workflow.
 - **Oh My Pi / OMP:** first-class package/export target; native claims are bounded by the documented parity gate.
-- **Codex plugin:** first-class flattened plugin/export target; multi-agent orchestration remains explicitly limited.
+- **Codex plugin:** first-class parity-gated plugin/export target; export fidelity is partial, while command orchestration remains explicitly limited.
 - **Advanced/dev exports:** Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot exporters remain in source and explicit export paths, but they are not public release defaults.
 - **Python CLI (`z-harness`):** small setup/onboarding entrypoint for Claude/OMP/Codex install and export guidance. It is not the day-to-day z-harness workflow surface.
 
@@ -45,7 +45,7 @@ Source installs symlink the checkout into the host plugin location. Edits take e
 make export
 # Installed public wheels/tarballs default to the prod surface.
 z-harness export --host omp --out temp/exports/omp --force
-# Codex is a first-class flattened prod export/plugin target.
+# Codex has partial prod export fidelity; runtime orchestration remains limited.
 z-harness export --host codex --surface prod --out temp/exports/codex --force
 ```
 

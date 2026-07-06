@@ -17,7 +17,7 @@ This document summarizes the beta support level for each shipped host/export tar
 |---|---:|---:|---:|---|
 | Claude Code | native | yes | plugin/source install | Best-supported beta path and public plugin installer. |
 | OMP | native | yes | `.omp/z-harness/` package | First-class public package/export target; native claims are bounded by parity evidence. |
-| Codex | flattened | yes | `skills/` + `.codex-plugin/plugin.json` + `AGENTS.md` | First-class public plugin/export target; MCP registration is global/persistent in `~/.codex/config.toml`; subagent fan-out is not native. |
+| Codex | flattened adapter; partial export | yes | `skills/` + `.codex/agents/` + `.codex-plugin/plugin.json` + `AGENTS.md` + MCP config | First-class parity-gated public plugin/export target; native skill/custom-agent/MCP artifacts are emitted, but CLI subagent fan-out is unproven. |
 
 ### Explicit dev/advanced or export-only targets
 
@@ -43,6 +43,8 @@ Non-native hosts may not support these z-harness runtime constructs directly:
 - long-running telemetry handshakes across host context resets.
 
 Export drivers must not silently drop those constructs. They preserve `RUNTIME-GATE` comments and replace unsupported call blocks with target-specific fallback instructions.
+
+Codex exports custom-agent definitions, native `SKILL.md` files, plugin metadata, and MCP config, but current Codex CLI dispatch does not have a proven z-harness native subagent primitive. Codex command orchestration therefore remains flattened/degraded/blocked until runtime primitive and driver-hook evidence exists.
 
 ## Release surfaces
 

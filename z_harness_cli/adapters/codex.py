@@ -31,17 +31,19 @@ De-registration of stale z-harness MCP entries happens only when the
 host's fidelity downgrades out of MCP support (i.e. codex loses MCP
 capability on a future version bump) and is handled by the doctor command.
 
-Export layout (AGENTS.md)
---------------------------
+Export layout
+-------------
 Delegates to ``runtime/drivers/codex/persona_export.py::export_persona()``
 for persona files, which writes::
 
     <dest>/prompts/personas/<name>.md
 
 The top-level AGENTS.md for an injected session is a lightweight stub
-that points to the prompts/ layout.  For full command/agent/skill export
-the caller should use ``scripts/export-codex.py`` (now frozen/deprecated)
-or the runtime driver equivalent.
+that points to the exported persona prompt layout.  The runtime driver writes
+native ``skills/<id>/SKILL.md``, ``.codex/agents/<id>.toml``,
+``.codex-plugin/plugin.json``, ``AGENTS.md`` fallback/reference, and
+``mcp_config.json``.  ``CodexAdapter.export_payload`` then adds persona prompts
+via ``runtime/drivers/codex/persona_export.py``.
 
 Capabilities
 ------------
@@ -255,13 +257,13 @@ class CodexAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export commands, agents, skills, and personas to the Codex prompts layout.
+        """Export skills, agents, plugin metadata, MCP config, and personas.
 
         Delegates to ``runtime/drivers/codex/export.py::export()`` for
-        commands, agents, and skills (producing flat ``prompts/<id>.md`` files
-        and a consolidated ``AGENTS.md``), then runs the existing persona loop
-        via ``runtime/drivers/codex/persona_export.py::export_persona()`` for
-        each persona file found in the ``personas/`` directory.
+        skills, native custom-agent TOML, plugin metadata, ``AGENTS.md``
+        fallback/reference, and MCP config.  It then runs the existing persona
+        loop via ``runtime/drivers/codex/persona_export.py::export_persona()``
+        for each persona file found in the ``personas/builtin/`` directory.
 
         Both results are merged into a single ExportResult.  Fidelity is read
         from ``codex_parity_gate`` so adapter/export claims cannot diverge.
@@ -272,15 +274,18 @@ class CodexAdapter:
         downgrade.
 
         Collision assert (MINOR-6): persona names must not overlap with
-        command/agent/skill ids in the flat ``prompts/`` namespace.  Codex
-        places all prompts flat, so this is the real collision risk.
-        A collision raises ``RuntimeError`` with a descriptive message.
+        prompt ids in the ``prompts/`` namespace.  Current runtime export writes
+        persona prompts under ``prompts/personas/``; the check is retained for
+        compatibility with any future flat prompt ids.
 
         The written layout is::
 
-            <dest>/prompts/<id>.md              — commands, skills
-            <dest>/AGENTS.md                    — consolidated agents
-            <dest>/prompts/personas/<name>.md   — personas
+            <dest>/skills/<id>/SKILL.md          — native skills
+            <dest>/.codex/agents/<id>.toml       — custom agents
+            <dest>/.codex-plugin/plugin.json     — Codex plugin manifest
+            <dest>/AGENTS.md                     — fallback/reference
+            <dest>/mcp_config.json               — MCP registration config
+            <dest>/prompts/personas/<name>.md    — personas
 
         Returns
         -------
@@ -292,7 +297,7 @@ class CodexAdapter:
         ------
         RuntimeError
             If the runtime export produces validation warnings (legacy hard-gate)
-            or if persona names collide with command/agent/skill ids.
+            or if persona names collide with prompt ids.
         """
         dest = Path(dest)
 
@@ -307,7 +312,7 @@ class CodexAdapter:
         all_warnings: list[str] = []
 
         # ------------------------------------------------------------------
-        # Stage 1: runtime export — commands, agents, skills
+        # Stage 1: runtime export — skills, agents, plugin metadata, MCP config
         # ------------------------------------------------------------------
         try:
             from runtime.drivers.codex.export import export as codex_export
@@ -329,7 +334,7 @@ class CodexAdapter:
                     + "\n".join(f"  {w}" for w in rt_result.warnings)
                 )
             # Collect exported prompt file stems to check for persona-name
-            # collisions.  Prompt files land under prompts/<id>.md; extract stem.
+            # collisions if a future Codex export adds flat prompt files.
             for f in rt_result.files:
                 p = Path(f)
                 # Only prompt files under prompts/ (not AGENTS.md) are in scope.
@@ -356,8 +361,7 @@ class CodexAdapter:
                 for persona_file in sorted(personas_dir.glob("*.md")):
                     persona_name = persona_file.stem
                     # Collision check: persona names must not overlap with
-                    # command/agent/skill ids in the flat prompts/ namespace.
-                    # This is the real collision risk for Codex (MINOR-6).
+                    # flat prompt ids in prompts/ (MINOR-6).
                     if persona_name in runtime_ids:
                         raise RuntimeError(
                             f"codex export collision: persona name {persona_name!r} "
