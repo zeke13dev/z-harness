@@ -389,7 +389,7 @@
         "z_harness_cli/adapters/omp.py",
         ".omp/config.yml"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-07-06",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -403,7 +403,7 @@
       "consumed_by": [
         "z_harness_cli.commands.export"
       ],
-      "summary": "Target-specific export pipeline. Current cursor/codex/agy/pi paths remain; OMP native export has partial support for an explicit .omp/z-harness package layout, while native fidelity/parity remains gated below T009 and ExportResult.fidelity must stay synchronized with the OMP parity gate rather than reusing pi export or omp-consult compatibility.",
+      "summary": "Target-specific export pipeline. OMP export is native for its explicit .omp/z-harness package layout. Codex export fidelity is partial: it emits native skills, custom-agent TOML under .codex/agents/, .codex-plugin/plugin.json, AGENTS.md fallback/reference, mcp_config.json, runtime scripts, and persona prompts via the adapter persona loop, while Codex adapter/runtime command orchestration remains degraded for ordinary commands and blocked for native multi-agent command families unless Codex parity evidence, runtime primitive evidence, and a CodexDriver native hook exist.",
       "source_file": [
         "runtime/drivers/omp/export.py",
         "z_harness_cli/adapters/omp.py",
