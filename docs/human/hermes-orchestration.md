@@ -63,6 +63,8 @@ remains for legacy Hermes `pi z-execute` lifecycle helpers, not Discord `so`.
 - Within a ready level, `partition_level` greedily splits workstreams so HIGH-severity file conflicts do not share a sub-batch. `serialize_all` and unknown scope force singleton batches.
 - `run_workstream` holds the concurrency semaphore from worktree creation through merge, bounding live sessions rather than just spawn rate.
 - `merge_workstream` runs under an in-process `asyncio.Lock`; no two merges happen concurrently inside a Hermes run.
+- Every workstream branches explicitly from a clean local `main` checkout. Hermes refuses to create a worktree or merge a branch if that checkout has uncommitted changes or a merge in progress; it never bases new work on the caller's current branch.
+- The primary `main` checkout is reserved for Git lifecycle operations: creating linked worktrees and merging verified worktree branches. Agent content edits belong only in linked worktrees. For qt-bot, all required remote sandbox verification must pass before its branch is eligible to merge.
 
 ## Cross-plan mode
 

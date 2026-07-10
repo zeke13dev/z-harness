@@ -219,6 +219,11 @@ List anything that differs from the PLAN. This feeds into Tier 2 migration guide
 
 ## Rules
 
+- Make content edits only in a linked worktree created from clean local `main`.
+  Never edit the primary checkout, even when it is otherwise idle; reserve it
+  for Git lifecycle operations and safe integration after verification. If the
+  primary checkout is dirty, return `status: "unable_to_complete"` with reason
+  `dirty_main_worktree`; do not stash, discard, or incorporate its changes.
 - Do not edit `$Z_HARNESS_PLAN_DIR/TASKS.md` — that's the orchestrator's job.
 - Do not spawn other subagents.
 - Do not call Gemini/Codex CLIs — review happens separately.
@@ -227,7 +232,7 @@ List anything that differs from the PLAN. This feeds into Tier 2 migration guide
 
 ### Guardrail-block policy (strict)
 
-If a `PreToolUse` hook **blocks** an `Edit`/`Write`/`MultiEdit` (most commonly the shared-tree worktree-isolation guard, `block-shared-tree-edit.sh`, which fires when another live session owns the working tree), treat the block as a **stop signal — never an obstacle to route around**. Specifically:
+If a `PreToolUse` hook **blocks** an `Edit`/`Write`/`MultiEdit` (most commonly the worktree-isolation guard, `block-shared-tree-edit.sh`, which blocks all content edits in the primary checkout and concurrent edits in a linked worktree), treat the block as a **stop signal — never an obstacle to route around**. Specifically:
 
 - **Do NOT** re-attempt the same write through a Bash file-write (`python3 -c "open(path,'w')"`, a `python3 … <<'PY'` heredoc, `tee`, `sed -i`, `> path`, `cp`/`mv` into the path, etc.). The hook now also guards Bash writes, but heuristic Bash parsing cannot catch every form — and defeating a safety guard is wrong regardless of whether the hook happens to catch it.
 - **Do** return `status: "unable_to_complete"` with reason `guardrail_blocked`, quoting the hook's stderr message, so the orchestrator can resolve the contention (e.g. move the run into an isolated worktree, or wait for the peer's claim to expire).

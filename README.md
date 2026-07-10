@@ -4,7 +4,7 @@ z-harness is a plugin/workflow layer for existing AI coding harnesses. It adds p
 
 ## Beta status
 
-This project is pre-1.0 beta software. It can orchestrate tools that read and write production code. Use it in a clean worktree, review generated plans before execution, and keep the review/test gates enabled. Expect host-specific fidelity differences while the export drivers stabilize.
+This project is pre-1.0 beta software. It can orchestrate tools that read and write production code. Keep the primary `main` checkout clean and read-only for agent content edits: create a linked worktree and branch from local `main` for every change, then merge verified work back into `main`. Review generated plans and keep the review/test gates enabled. Expect host-specific fidelity differences while the export drivers stabilize.
 
 ## Supported release surfaces
 

@@ -55,6 +55,60 @@ class WorktreeError(Exception):
     pass
 
 
+def main_worktree_path(repo_root: str = ".") -> str:
+    """Return the primary checkout, which must be checked out on ``main``."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, check=True, cwd=repo_root,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise WorktreeError(f"Unable to list worktrees: {exc.stderr}") from exc
+
+    primary_path = ""
+    primary_branch = ""
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            if primary_path:
+                break
+            primary_path = line[len("worktree "):]
+        elif line.startswith("branch ") and primary_path:
+            primary_branch = line[len("branch "):]
+
+    if primary_path and primary_branch == "refs/heads/main":
+        return os.path.abspath(primary_path)
+    raise WorktreeError(
+        "The primary worktree must be checked out on local main before creating "
+        "or merging a worktree branch."
+    )
+
+
+def require_clean_main_worktree(repo_root: str = ".") -> str:
+    """Return local main's path, refusing an uncommitted or merging checkout."""
+    main_root = main_worktree_path(repo_root)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=main_root,
+    )
+    if status.returncode != 0:
+        raise WorktreeError(f"Unable to inspect main worktree: {status.stderr}")
+    if status.stdout.strip():
+        raise WorktreeError(
+            f"Refusing to use dirty main worktree at {main_root}; commit, stash, "
+            "or discard its changes before creating or merging a worktree branch."
+        )
+
+    merge_head = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True, text=True, cwd=main_root,
+    )
+    if merge_head.returncode == 0:
+        raise WorktreeError(
+            f"Refusing to use main worktree at {main_root}; it has a merge in progress."
+        )
+    return main_root
+
+
 def create_worktree(slug: str, ws_id: str, repo_root: str = ".", base: str = "..") -> str:
     """Create a git worktree with namespaced branch.
     
@@ -62,7 +116,7 @@ def create_worktree(slug: str, ws_id: str, repo_root: str = ".", base: str = "..
     Raises WorktreeError on failure.
     """
     validate_ref(slug, ws_id)
-    
+    main_root = require_clean_main_worktree(repo_root)
     branch = branch_name(slug, ws_id)
     wt_path = os.path.abspath(worktree_path(slug, ws_id, base))
     
@@ -76,7 +130,7 @@ def create_worktree(slug: str, ws_id: str, repo_root: str = ".", base: str = "..
         result = subprocess.run(
             ["git", "branch", "--list", branch],
             capture_output=True, text=True, check=True,
-            cwd=repo_root,
+            cwd=main_root,
         )
         if result.stdout.strip():
             # Branch exists but worktree doesn't — try to recreate
@@ -89,7 +143,7 @@ def create_worktree(slug: str, ws_id: str, repo_root: str = ".", base: str = "..
         result = subprocess.run(
             ["git", "worktree", "add", wt_path, "-b", branch],
             capture_output=True, text=True, check=True,
-            cwd=repo_root,
+            cwd=main_root,
         )
         print(f"  Created worktree: {wt_path} (branch: {branch})")
     except subprocess.CalledProcessError as e:
@@ -98,7 +152,7 @@ def create_worktree(slug: str, ws_id: str, repo_root: str = ".", base: str = "..
             result = subprocess.run(
                 ["git", "worktree", "add", wt_path, branch],
                 capture_output=True, text=True,
-                cwd=repo_root,
+                cwd=main_root,
             )
             if result.returncode != 0:
                 raise WorktreeError(

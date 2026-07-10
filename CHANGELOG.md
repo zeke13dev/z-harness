@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-10
+
+- _(auto)_ Require worktrees for agent edits
+
 ## 2026-07-09
 
 - _(auto)_ Reconfigure consult/reviewer roles to gpt-5.6 (T007) _(routing)_
