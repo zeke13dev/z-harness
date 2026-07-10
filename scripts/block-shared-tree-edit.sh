@@ -10,20 +10,20 @@
 # any command we cannot confidently parse as a write into a contended tree is
 # allowed, so normal Bash usage is never wedged.
 #
-# Purpose: stop two agent sessions from editing the SAME git working tree at
-# once. On 2026-06-12 two sessions ran in the primary z-harness checkout on
-# `main` simultaneously; one committed under the other, `main` diverged, and a
-# merge nearly clobbered the other session's uncommitted work. This hook makes
-# that impossible: the first session to edit a tree owns it; a second concurrent
-# session is blocked until it moves to its own worktree. The block message is
-# entrypoint-agnostic: use the host's in-place worktree switch when available
-# (Claude Code: EnterWorktree; OMP/pi: move the current session cwd), otherwise
-# relaunch/root a new session in a linked worktree.
+# Purpose: keep the primary `main` checkout pristine and stop two agent sessions
+# from editing the SAME linked worktree at once. On 2026-06-12 two sessions ran
+# in the primary z-harness checkout on `main` simultaneously; one committed
+# under the other, `main` diverged, and a merge nearly clobbered the other
+# session's uncommitted work. Content edits in the primary checkout are always
+# blocked; the first session to edit a linked worktree owns it until it becomes
+# idle. The block message is entrypoint-agnostic: use the host's in-place
+# worktree switch when available (Claude Code: EnterWorktree; OMP/pi: move the
+# current session cwd), otherwise relaunch/root a new session in a linked tree.
 #
 # Decision:
-#   ALLOW : exit 0. Solo editing of ANY tree (including primary/main) is fine.
-#   BLOCK : exit 2, reason on STDERR, when a different LIVE session owns this
-#           working tree.
+#   ALLOW : exit 0 for a linked worktree not owned by another live session.
+#   BLOCK : exit 2 for every content edit in the primary `main` checkout, or
+#           when a different LIVE session owns the linked working tree.
 #
 # Mechanism (lockless, mirrors the active-plan-registry philosophy): each
 # session keeps a marker under the worktree's OWN per-tree git dir
@@ -39,8 +39,9 @@
 # Fail-open: any malformed payload, missing tool, or git error ALLOWS the edit.
 # A guardrail must never wedge all editing on its own bug.
 #
-# Override: export Z_HARNESS_ALLOW_SHARED_TREE=1 to bypass (intentional solo
-# work on a shared tree). Tune idle expiry via Z_HARNESS_EDIT_CLAIM_TTL (secs).
+# Override: export Z_HARNESS_ALLOW_SHARED_TREE=1 only to bypass linked-worktree
+# contention. It never permits content edits in the primary checkout. Tune idle
+# expiry via Z_HARNESS_EDIT_CLAIM_TTL (secs).
 set -u
 
 TTL="${Z_HARNESS_EDIT_CLAIM_TTL:-1200}"   # idle-claim expiry, default 20 min
@@ -77,7 +78,6 @@ COMMAND="$(printf '%s' "$FIELDS" | cut -f4)"
 CWD="$(printf '%s' "$FIELDS" | cut -f5)"
 
 [ -n "$SESSION" ] || exit 0                # no session id -> can't attribute
-[ "${Z_HARNESS_ALLOW_SHARED_TREE:-0}" = "1" ] && exit 0
 
 # --- build the list of write-target paths to guard ---------------------------
 # Edit family: exactly the one file_path. Bash: heuristically-extracted write
@@ -138,9 +138,10 @@ fi
 NOW="$(date +%s 2>/dev/null)" || exit 0
 mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 
-# --- guard one path: stamp our marker in its tree, block if a peer owns it ----
-# Echoes "BLOCK <worktree> <owner> <owner_age>" to stdout and returns 2 when a
-# different live session owns the tree; returns 0 (allow) otherwise. Fail-open.
+# --- guard one path: block primary, otherwise stamp/observe a linked-tree claim ---
+# Echoes "PRIMARY <worktree>" and returns 3 for primary content edits; echoes
+# "BLOCK <worktree> <owner> <owner_age>" and returns 2 for linked-tree
+# contention; returns 0 otherwise. Fail-open on parse/git errors.
 guard_path() {
   gp_path="$1"
   gp_dir="$(dirname -- "$gp_path" 2>/dev/null || echo "")"
@@ -153,6 +154,15 @@ guard_path() {
   [ -d "$gp_dir" ] || return 0
   gp_gitdir="$(git -C "$gp_dir" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
   [ -n "$gp_gitdir" ] || return 0
+
+  gp_wt="$(git -C "$gp_dir" rev-parse --show-toplevel 2>/dev/null || echo "$gp_dir")"
+  gp_primary_wt="$(git -C "$gp_dir" worktree list --porcelain 2>/dev/null | awk '/^worktree / { print substr($0, 10); exit }')"
+  if [ -n "$gp_primary_wt" ] && [ "$(cd "$gp_wt" 2>/dev/null && pwd -P)" = "$(cd "$gp_primary_wt" 2>/dev/null && pwd -P)" ]; then
+    printf 'PRIMARY\t%s\n' "$gp_wt"
+    return 3
+  fi
+
+  [ "${Z_HARNESS_ALLOW_SHARED_TREE:-0}" = "1" ] && return 0
 
   gp_markdir="$gp_gitdir/z-harness-active-editors"
   mkdir -p "$gp_markdir" 2>/dev/null || return 0
@@ -180,7 +190,6 @@ guard_path() {
 
   [ "$gp_owner" = "$SESSION" ] && return 0
   [ -z "$gp_owner" ] && return 0
-  gp_wt="$(git -C "$gp_dir" rev-parse --show-toplevel 2>/dev/null || echo "$gp_dir")"
   printf 'BLOCK\t%s\t%s\t%s\n' "$gp_wt" "$gp_owner" "$gp_age"
   return 2
 }
@@ -189,7 +198,21 @@ guard_path() {
 while IFS= read -r cand; do
   [ -n "$cand" ] || continue
   RESULT="$(guard_path "$cand")"; RC=$?
-  if [ "$RC" -eq 2 ]; then
+  if [ "$RC" -eq 3 ]; then
+    WT="$(printf '%s' "$RESULT" | cut -f2)"
+    {
+      echo "BLOCKED: content edits in the primary main worktree are not allowed."
+      echo "  main worktree : $WT"
+      echo "  target        : $cand"
+      echo
+      echo "Create or select a linked worktree from clean local main, then retry there:"
+      echo "    cd \"$WT\" && git worktree add ../$(basename "$WT")-<topic> -b <branch> main"
+      echo
+      echo "The primary checkout is reserved for reading, creating linked worktrees,"
+      echo "and safely merging verified worktree branches back into main."
+    } >&2
+    exit 2
+  elif [ "$RC" -eq 2 ]; then
     WT="$(printf '%s' "$RESULT" | cut -f2)"
     OWNER="$(printf '%s' "$RESULT" | cut -f3)"
     OWNER_AGE="$(printf '%s' "$RESULT" | cut -f4)"
@@ -210,9 +233,9 @@ while IFS= read -r cand; do
       echo "  - Other hosts: start/relaunch the agent rooted in a linked worktree"
       echo "A linked worktree has its own per-tree marker dir, so this guard won't fire there."
       echo "If you need to create one manually:"
-      echo "    git worktree add ../$(basename "$WT")-<topic> -b <branch> origin/main"
+      echo "    git worktree add ../$(basename "$WT")-<topic> -b <branch> main"
       echo
-      echo "Deliberate solo override: export Z_HARNESS_ALLOW_SHARED_TREE=1"
+      echo "Deliberate linked-worktree contention override: export Z_HARNESS_ALLOW_SHARED_TREE=1"
     } >&2
     exit 2
   fi

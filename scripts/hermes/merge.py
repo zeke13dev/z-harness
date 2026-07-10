@@ -11,7 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from hermes.worktree import get_worktree_info
+from hermes.worktree import (
+    WorktreeError,
+    get_worktree_info,
+    require_clean_main_worktree,
+)
 
 # scripts/hermes/merge.py -> scripts/worktree-cleanup.sh
 _WORKTREE_CLEANUP_SH = Path(__file__).resolve().parents[1] / "worktree-cleanup.sh"
@@ -32,29 +36,28 @@ class MergeResult:
 # ---------------------------------------------------------------------------
 
 def merge_workstream(ws_id: str, slug: str, repo_root: str = ".") -> MergeResult:
-    """Merge a workstream branch into the current branch.
+    """Merge a workstream branch into a clean local ``main`` checkout.
     
     Uses git merge --no-ff for traceable merge commits.
     Returns MergeResult indicating success or conflict details.
     """
     branch = f"hermes/{slug}/{ws_id}"
-    
-    # First, abort any in-progress merge
     try:
-        subprocess.run(
-            ["git", "merge", "--abort"],
-            capture_output=True, text=True,
-            cwd=repo_root,
+        main_root = require_clean_main_worktree(repo_root)
+    except WorktreeError as exc:
+        return MergeResult(
+            success=False,
+            workstream_id=ws_id,
+            branch=branch,
+            diff=str(exc),
         )
-    except subprocess.CalledProcessError:
-        pass  # No merge in progress — fine
-    
+
     # Check if branch exists
     try:
         result = subprocess.run(
             ["git", "branch", "--list", branch],
             capture_output=True, text=True, check=True,
-            cwd=repo_root,
+            cwd=main_root,
         )
         if not result.stdout.strip():
             return MergeResult(
@@ -73,12 +76,12 @@ def merge_workstream(ws_id: str, slug: str, repo_root: str = ".") -> MergeResult
         result = subprocess.run(
             ["git", "merge", branch, "--no-ff", "-m", commit_msg],
             capture_output=True, text=True,
-            cwd=repo_root,
+            cwd=main_root,
         )
         
         if result.returncode == 0:
             print(f"  Merged {branch} successfully")
-            _cleanup_merged_worktree(ws_id, slug, branch, repo_root)
+            _cleanup_merged_worktree(ws_id, slug, branch, main_root)
             return MergeResult(
                 success=True,
                 workstream_id=ws_id,
@@ -86,7 +89,7 @@ def merge_workstream(ws_id: str, slug: str, repo_root: str = ".") -> MergeResult
             )
         else:
             # Merge conflict
-            return _handle_merge_failure(ws_id, branch, result, repo_root)
+            return _handle_merge_failure(ws_id, branch, result, main_root)
     
     except subprocess.CalledProcessError as e:
         return MergeResult(

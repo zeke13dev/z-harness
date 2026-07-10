@@ -12,7 +12,7 @@ unsupported_driver_behavior: explicit_gate
 You are running **z-harness `/z-git-guardrails`** — the installer for the z-harness PreToolUse guardrail hooks. It manages a **bundle of two** hooks that run at the host tool-call level before a tool executes (implemented via Claude Code settings today; exported/other hosts must map the same guardrail semantics to their native hook surface if they have one):
 
 1. **git-safety** (`scripts/block-dangerous-git.sh`, matcher `Bash`) — blocks dangerous git operations (force-pushes onto upstream-reachable commits, working-tree-destructive commands).
-2. **worktree-isolation** (`scripts/block-shared-tree-edit.sh`, matcher `Edit|Write|MultiEdit|NotebookEdit`) — blocks a second concurrent agent session from editing a working tree another session already owns, so two sessions can't collide on one tree (the failure that diverged `main` on 2026-06-12). Solo editing is never blocked. When blocked, the preferred fix is an in-place move of the **current** session into a linked worktree: Claude Code can use `EnterWorktree`; OMP/pi or any cwd-aware entrypoint can create/select a linked worktree and move the current session cwd there. If the host cannot switch cwd/worktree in place, start a fresh session rooted in a linked worktree. A linked worktree has its own per-tree marker dir, so the guard won't fire there.
+2. **worktree-isolation** (`scripts/block-shared-tree-edit.sh`, matcher `Edit|Write|MultiEdit|NotebookEdit|Bash`) — blocks every agent content edit in the primary `main` checkout and blocks a second concurrent agent session from editing a linked worktree another session already owns. The primary checkout is reserved for creating worktrees and merging verified work back into `main`; it is never an implementation tree. When blocked, move the **current** session into a linked worktree: Claude Code can use `EnterWorktree`; OMP/pi or any cwd-aware entrypoint can create/select a linked worktree and move the current session cwd there. If the host cannot switch cwd/worktree in place, start a fresh session rooted in a linked worktree. A linked worktree has its own per-tree marker dir, so the guard won't fire there.
 
    **After merging** that worktree's branch back (native `EnterWorktree` merge flow), immediately run `scripts/worktree-cleanup.sh after-merge <worktree-path> <branch>` to remove the worktree and its branch — see `docs/human/worktree-hygiene.md`. Leftover merged worktrees are otherwise easy to forget once the guard block that prompted the move is resolved, and they're exactly what causes future worktree-isolation contention.
 
@@ -46,7 +46,7 @@ Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
    import json, os
    print(json.dumps([
      {"matcher": "Bash", "command": os.environ["GIT_HOOK"]},
-     {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "command": os.environ["TREE_HOOK"]},
+     {"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "command": os.environ["TREE_HOOK"]},
    ]))' )"
    ```
 
@@ -96,6 +96,24 @@ else:
 
 hooks = settings.setdefault("hooks", {})
 pre_tool_use = hooks.setdefault("PreToolUse", [])
+
+# Upgrade the previous content-only matcher in place. Leaving it beside the
+# Bash-capable matcher runs the same hook twice for Edit/Write calls.
+old_tree_matcher = "Edit|Write|MultiEdit|NotebookEdit"
+new_tree_matcher = "Edit|Write|MultiEdit|NotebookEdit|Bash"
+tree_command = next(
+    (spec["command"] for spec in bundle if spec["matcher"] == new_tree_matcher),
+    None,
+)
+if tree_command:
+    for entry in pre_tool_use:
+        if entry.get("matcher") != old_tree_matcher:
+            continue
+        if any(
+            hook.get("type") == "command" and hook.get("command") == tree_command
+            for hook in entry.get("hooks", [])
+        ):
+            entry["matcher"] = new_tree_matcher
 
 def present(matcher, command):
     for entry in pre_tool_use:
@@ -163,14 +181,13 @@ Dry-run each installed hook to confirm it is wired and runnable:
 # git-safety: a destructive command must be BLOCKED (exit 2).
 GIT_OUT="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git clean -fdx"}}' | bash "$GIT_HOOK" 2>&1)"; GIT_EXIT=$?
 
-# worktree-isolation: a solo edit must be ALLOWED (exit 0). Full block behavior
-# (a 2nd concurrent session -> exit 2) is covered by tests/test_block_shared_tree_edit.py;
-# it can't be reproduced with a single dry-run payload (needs a prior live claim).
+# worktree-isolation: a primary-main edit must be BLOCKED even for a solo
+# session. Linked-worktree contention is covered by tests/test_block_shared_tree_edit.py.
 TREE_OUT="$(printf '%s' '{"session_id":"verify","cwd":"'"$(pwd)"'","tool_name":"Write","tool_input":{"file_path":"'"$(pwd)"'/.z-harness-guardrails-verify"}}' | bash "$TREE_HOOK" 2>&1)"; TREE_EXIT=$?
 ```
 
 - `GIT_EXIT == 2` → git-safety verified (blocks `git clean -fdx`). Any other value → "WARNING: git-safety hook installed but dry-run returned exit `$GIT_EXIT`; inspect `$GIT_HOOK`."
-- `TREE_EXIT == 0` → worktree-isolation verified (runnable; allows solo edit). Any other value → "WARNING: worktree-isolation hook installed but solo dry-run returned exit `$TREE_EXIT` (expected 0 allow); inspect `$TREE_HOOK`."
+- `TREE_EXIT == 2` → worktree-isolation verified (runnable; blocks primary-main edits). Any other value → "WARNING: worktree-isolation hook installed but primary-main dry-run returned exit `$TREE_EXIT` (expected 2 block); inspect `$TREE_HOOK`."
 
 Tell the user the combined result, e.g. "Both guardrail hooks installed and verified in `<TARGET_SETTINGS>`. Takes effect for new sessions that load that hook settings file."
 
@@ -314,7 +331,7 @@ guardrail hook status:
 ## Out of scope
 
 - Editing the logic of `block-dangerous-git.sh` or `block-shared-tree-edit.sh` themselves → those files are managed as source code; use normal edit tools.
-- Installing either hook under a different matcher → the matchers are fixed (`Bash` for git-safety; `Edit|Write|MultiEdit|NotebookEdit` for worktree-isolation); a different matcher would never fire correctly.
+- Installing either hook under a different matcher → the matchers are fixed (`Bash` for git-safety; `Edit|Write|MultiEdit|NotebookEdit|Bash` for worktree-isolation); a different matcher would never fire correctly.
 - Managing unrelated host settings (model, `permissions`, other hooks) → this command is scoped to the two PreToolUse guardrail entries.
 - Restarting or reloading the host IDE/agent → after editing `settings.json`, the host picks up the change on the next session/load cycle; this command cannot trigger a reload.
 - Auditing past override events → see `<z-harness-base>/git-guardrails-audit.log` directly.
