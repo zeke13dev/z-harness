@@ -1,0 +1,71 @@
+# Durable evidence for the omp claims in runtime/watchdog/HOST_MECHANICS.md.
+# Every block below is verbatim output from a read-only inspection command
+# re-run on this machine on 2026-07-10 (omp v16.1.15, macOS). Re-run any block
+# to reproduce. HOST_MECHANICS.md cites these blocks by their [O-n] tag.
+
+# ==== [O-1] omp version ====
+# $ omp --version
+omp/16.1.15
+
+# ==== [O-2] Session storage dir env var / default (from omp --help) ====
+# $ omp --help | grep -i 'session storage\|PI_CODING_AGENT_DIR'
+      --session-dir=<value>           Directory for session storage and lookup
+  PI_CODING_AGENT_DIR        - Session storage directory (default: ~/.omp/agent)
+
+# ==== [O-3] Session files are sharded by a cwd-slug directory ====
+# $ ls -1d ~/.omp/agent/sessions/*/ | head -3
+/Users/zeke/.omp/agent/sessions/--private-tmp--/
+/Users/zeke/.omp/agent/sessions/--private-tmp-claude-501--Users-zeke-dev-z-harness-381af3ca-21cf-4e03-88e3-1166fe571ef2-scratchpad--/
+/Users/zeke/.omp/agent/sessions/-.hermes-hermes-agent/
+# => launch cwd with '/' replaced by '-' becomes the shard dir name; each dir
+#    holds one JSONL per chat. Many files per dir is the DURABLE corroboration
+#    for per-chat file creation (the live /new "New session started" keystroke
+#    observation is scoped to the grounding run in HOST_MECHANICS.md, same
+#    treatment as codex [C-2]).
+
+# ==== [O-4] Non-transcript state incl. plaintext-credential hazard ====
+# $ ls -1 ~/.omp/agent/*.db ~/.omp/agent/*.yml
+/Users/zeke/.omp/agent/agent.db
+/Users/zeke/.omp/agent/config.yml
+/Users/zeke/.omp/agent/history.db
+/Users/zeke/.omp/agent/models.db
+/Users/zeke/.omp/agent/models.yml
+# => models.yml / config.yml / *.db are NOT transcripts. models.yml holds
+#    provider apiKey values in plaintext; the watchdog must read only files
+#    under sessions/.
+
+# ==== [O-5] Context-window denominator is NOT in the transcript; use `omp models` ====
+# $ omp models --help  (semantics)
+List, search, and refresh available models
+USAGE
+  $ omp models [ACTION] [PATTERN] [FLAGS]
+ARGUMENTS
+  ACTION    ls (default) | find | refresh | canonical | <provider>
+FLAGS
+      --json               Output JSON
+# $ omp models | grep -i 'gpt-5.5'  (context column, K = 1000 tokens)
+│ gpt-5.5-extra-high            │    200K │     64K │ -                       │ no     │
+│ gpt-5.5-high                  │    200K │     64K │ -                       │ no     │
+│ gpt-5.5-low                   │    200K │     64K │ -                       │ no     │
+# => `omp models` (or `omp models --json` for machine parsing) is the second,
+#    session-independent source the omp adapter needs for a percentage
+#    denominator. gpt-5.5 = 200K context on this machine.
+
+# ==== [O-6] Assistant message usage/contextSnapshot + append-only growth ====
+# real file: ~/.omp/agent/sessions/-dev-z-harness/2026-07-10T02-17-39-823Z_019f49d0-f8ef-7000-b46a-fa3fdf9bd13f.jsonl
+# (parsed assistant `message` events, in file order:)
+line 6: totalTokens=28854 stopReason=toolUse contextSnapshot=present promptTokens=28674
+line 8: totalTokens=30984 stopReason=toolUse contextSnapshot=present promptTokens=30764
+line 10: totalTokens=31119 stopReason=toolUse contextSnapshot=present promptTokens=31059
+# => usage.totalTokens & contextSnapshot.promptTokens present per assistant
+#    message; values increase monotonically down the file == append-only, no
+#    rewrite of earlier lines. (Matches usage_nominal.json, which excerpts the
+#    line-10 message of this same file.)
+
+# ==== [O-7] Error-stopReason turns zero the usage and drop contextSnapshot ====
+# $ grep -l '"stopReason":"error"' ~/.omp/agent/sessions/-dev-z-harness/*.jsonl | head -1
+#   -> 2026-06-24T03-57-41-594Z_019ef7c6-cd5a-7000-bc8f-5e9745ee7678.jsonl
+# (parsed the error message:)
+totalTokens= 0 contextSnapshot= ABSENT errorMessage= Codex error event: The usage limit has been reached (code=us...
+# => an error turn reports a false 0% if trusted naively. (Matches
+#    usage_missing_or_degraded.json example_1.)

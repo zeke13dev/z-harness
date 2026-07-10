@@ -1,0 +1,53 @@
+{
+  "_provenance": "Captured live 2026-07-10 from a real `codex` TUI session spawned in a tmux pane for T001 grounding (session id 019f4ce0-7790-7ec1-8587-335f2c1ba36e, rollout file ~/.codex/sessions/2026/07/10/rollout-2026-07-10T09-33-26-019f4ce0-7790-7ec1-8587-335f2c1ba36e.jsonl, line 15). Redactions: none required (no account/PII fields present in this event type).",
+  "case": "nominal_context_read",
+  "session_meta": {
+    "type": "session_meta",
+    "payload": {
+      "session_id": "019f4ce0-7790-7ec1-8587-335f2c1ba36e",
+      "cwd": "/private/tmp/scratchpad",
+      "originator": "codex-tui",
+      "cli_version": "0.142.5",
+      "source": "cli"
+    }
+  },
+  "token_count_event": {
+    "timestamp": "2026-07-10T16:34:45.910Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "info": {
+        "total_token_usage": {
+          "input_tokens": 22326,
+          "cached_input_tokens": 4992,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 22331
+        },
+        "last_token_usage": {
+          "input_tokens": 22326,
+          "cached_input_tokens": 4992,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 22331
+        },
+        "model_context_window": 258400
+      },
+      "rate_limits": {
+        "limit_id": "codex",
+        "primary": {
+          "used_percent": 13.0,
+          "window_minutes": 300,
+          "resets_at": 1783716878
+        },
+        "secondary": {
+          "used_percent": 30.0,
+          "window_minutes": 10080,
+          "resets_at": 1784247878
+        },
+        "plan_type": "pro"
+      }
+    }
+  },
+  "computed_usage_pct": "total_token_usage.total_tokens / info.model_context_window == 22331 / 258400 == 0.0864 (8.6%)"
+}

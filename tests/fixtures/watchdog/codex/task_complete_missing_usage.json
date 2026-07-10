@@ -1,0 +1,43 @@
+{
+  "_provenance": "Captured live 2026-07-10 from the same tmux-spawned `codex` TUI session as token_count_nominal.json (rollout-2026-07-10T09-33-26-019f4ce0-7790-7ec1-8587-335f2c1ba36e.jsonl, lines 1 and 7). The user's first turn was submitted before /model had switched away from an unsupported model id (gpt-5.6-terra), so the turn errored server-side before any billed tokens existed. This is a genuine, naturally-occurring codex rollout turn with ZERO token_count events between task_started and task_complete -- confirmed by grepping the full 17-line file for \"token_count\" and finding none before line 7. A second, independently-observed case with the identical shape (task_complete with no preceding token_count anywhere in the file) is ~/.codex/sessions/2026/07/10/rollout-2026-07-10T03-06-57-019f4b7e-a1ad-7e83-8f1c-71d115edc160.jsonl, an 8-line codex_exec-originated session (originator: codex_exec) that completed a review turn with last_agent_message: null and no token_count line in the whole file.",
+  "case": "missing_usage_field",
+  "task_started": {
+    "timestamp": "2026-07-10T16:34:03.920Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "task_started",
+      "turn_id": "019f4ce1-0773-7633-a0f1-f03718cbb782",
+      "started_at": 1783701243,
+      "model_context_window": 258400,
+      "collaboration_mode_kind": "default"
+    }
+  },
+  "task_complete_with_no_prior_token_count": {
+    "timestamp": "2026-07-10T16:34:04.600Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "task_complete",
+      "turn_id": "019f4ce1-0773-7633-a0f1-f03718cbb782",
+      "last_agent_message": null,
+      "completed_at": 1783701244,
+      "duration_ms": 687
+    }
+  },
+  "second_observed_case": {
+    "source_file": "~/.codex/sessions/2026/07/10/rollout-2026-07-10T03-06-57-019f4b7e-a1ad-7e83-8f1c-71d115edc160.jsonl",
+    "originator": "codex_exec",
+    "line_count": 8,
+    "event_types_in_order": [
+      "session_meta",
+      "event_msg:task_started",
+      "response_item:message",
+      "response_item:message",
+      "turn_context",
+      "response_item:message",
+      "event_msg:user_message",
+      "event_msg:task_complete"
+    ],
+    "note": "No token_count event anywhere in this file; task_complete.last_agent_message is null."
+  },
+  "watchdog_implication": "A HostAdapter.read_context() for codex MUST treat 'no token_count event since last read' as a valid absent-usage state, not an error, and fall back to the byte-length heuristic documented in HOST_MECHANICS.md rather than raising or reporting 0% usage."
+}

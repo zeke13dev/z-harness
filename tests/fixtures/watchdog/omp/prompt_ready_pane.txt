@@ -1,0 +1,47 @@
+# Provenance: `tmux capture-pane -p -t zw-grounding-omp[2]` against a real
+# `omp v16.1.15` TUI session (`omp --allow-home`) spawned for T001 grounding
+# on 2026-07-10. Redaction: none required for these excerpts (no account
+# lines captured in the tail we recorded).
+#
+# ==== STATE 1: idle, input-ready composer ====
+# IMPORTANT FINDING: unlike the assumption baked into
+# scripts/hermes/mcp_hermes_orchestrator.py:534-563 (_needs_input, "omp's
+# TUI shows `❯` as the input prompt when it is waiting"), the DEFAULT
+# omp v16.1.15 composer box at idle renders NO printable prompt glyph at
+# all -- just an empty bordered box (confirmed both in plain `-p` capture
+# and in `-p -e` escape-sequence capture: the composer line is spaces, no
+# ❯ / '>' character). The live status footer bar IS a reliable ready
+# signal instead: it shows a percentage-based context-usage readout.
+╭──     GPT-5.5 ·  med   scratchpad   9.4%/272K 󰁨  (sub) ──────────────────────╮
+╰─                                                                            ─╯
+#
+# ==== STATE 2: busy / working (NOT ready for send-keys) ====
+# The spinner glyph + "Working…" + an "esc" hint is the busy indicator; a
+# watchdog must NOT send input while this is showing.
+# CRITICAL FOR THE READY GATE: note that the footer percentage
+# (`10.1%/272K`, line below) is STILL PRESENT here while omp is busy -- the
+# spinner does NOT replace the footer. So "footer percentage present" is
+# NOT sufficient to conclude the composer is idle. A ready/injection test
+# must require BOTH: (a) a `<pct>%/<window>` footer AND (b) the ABSENCE of
+# any busy marker ("Working…", a braille spinner glyph, or "⟨esc⟩"). This
+# STATE 2 exists specifically so a unit test can assert that the readiness
+# check returns False here even though a valid percentage footer is shown.
+ ⠼ Working… ⟨esc⟩
+
+╭──     GPT-5.5 ·  med   scratchpad   10.1%/272K 󰁨  (sub) ─── Reply Pong ──╮
+╰─                                                                        ─╯
+#
+# ==== STATE 3: interactive filter/selection overlay (needs_input) ====
+# Full-screen pickers (e.g. `/model`) DO use a `>` glyph -- but as a filter
+# INPUT box at the top of the picker, not as the normal composer's ready
+# marker. A needs_input detector for omp must match on the picker's option
+# list rendering (rows below the `>` filter line), not on `>` alone, since
+# `>` also appears in the idle composer under some overlays but not the
+# default one observed in STATE 1.
+Models:   ALL    CANONICAL    CURSOR    GOOGLE ANTIGRAVITY    LLAMA.CPP    LM STUDIO    NVIDIA NIM    OLLAMA    OPENAI CODEX   (tab to cycle)
+
+>
+
+ openai-codex/gpt-5.5  DEFAULT  (medium) [SMOL auto] (medium) [SLOW auto] (medium) [DESIGNER auto] (medium)
+  cursor/gpt-5.6-luna-high
+  cursor/gpt-5.6-luna-high-fast

@@ -1,0 +1,50 @@
+{
+  "_provenance": "Two independently-observed real error-path assistant messages from ~/.omp/agent/sessions/-dev-z-harness/*.jsonl, found by scanning the full local session corpus for message.stopReason == 'error'. Across the sampled corpus (~40k assistant messages), every naturally-occurring message DOES carry a 'usage' object -- omp appears to always attach the key syntactically -- but on an error-stopReason turn the object is present with every numeric field zeroed and 'contextSnapshot' is entirely absent from the message. This is the closest naturally-occurring 'missing usage' shape we could find; a HostAdapter must treat an all-zero usage + absent contextSnapshot as 'no usable context reading' just as it would treat a genuinely missing field, not as '0% context used'.",
+  "case": "missing_or_absent_usage_field",
+  "example_1": {
+    "source_file": "~/.omp/agent/sessions/-dev-z-harness/2026-06-24T05-21-47-672Z_019ef813-cc98-7000-a103-b355e2cdbdc1.jsonl",
+    "line_index": 126,
+    "message": {
+      "role": "assistant",
+      "content": [],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 }
+      },
+      "stopReason": "error",
+      "errorMessage": "Codex error event: The usage limit has been reached (code=usage_limit_reached)",
+      "duration": 776
+    },
+    "contextSnapshot_present": false
+  },
+  "example_2": {
+    "source_file": "~/.omp/agent/sessions/-dev-z-harness/2026-06-24T03-57-41-594Z_019ef7c6-cd5a-7000-bc8f-5e9745ee7678.jsonl",
+    "message": {
+      "role": "assistant",
+      "content": [],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 }
+      },
+      "stopReason": "error",
+      "errorMessage": "Codex error event: Your input exceeds the context window of this model. Please adjust your input and try again. (code=context_length_exceeded)",
+      "duration": 880
+    },
+    "contextSnapshot_present": false
+  },
+  "watchdog_implication": "read_context() for the omp adapter must special-case stopReason == 'error' (or totalTokens == 0 with contextSnapshot absent) as an unusable reading and fall back rather than reporting a false 0% usage that would suppress a handoff trigger."
+}
