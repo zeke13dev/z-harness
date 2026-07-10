@@ -2,7 +2,11 @@
 name: implementer
 description: "Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-execute once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot + LEDGER + durable tier (KERNEL/INVARIANTS/STYLE)."
 tools: Bash, Read, Edit, Write, Grep, Glob
-model: gpt-5.5:low
+# Fallback only: /z-execute resolves the implementer tier through the host-keyed
+# model classes and applies the routed model per-call via Agent(model=...).  This
+# frontmatter model/effort is used only when a host cannot apply a per-call override.
+model: sonnet
+effort: medium
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

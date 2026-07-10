@@ -1484,6 +1484,97 @@ def test_host_family_param_overrides_detection():
     assert resolved.effective_model == "gpt-5.6-terra-medium"
 
 
+# ---------------------------------------------------------------------------
+# T003 implementer tier -> host-keyed class routing + applied/advisory effort
+# ---------------------------------------------------------------------------
+
+# Shipped default implementer tier -> class mapping (scripts/config.py DEFAULTS).
+_IMPL_TIER_CLASS = {
+    "low": "low",
+    "medium": "standard",
+    "high": "deep",
+    "retry": "deep",
+}
+
+
+def _impl_tier_defaults() -> dict[str, object]:
+    """Host-keyed classes + the shipped implementer tier->class mapping (T003)."""
+    values = _host_keyed_defaults()
+    values.update(
+        {
+            "model_routing.implementer.low": "low",
+            "model_routing.implementer.medium": "standard",
+            "model_routing.implementer.high": "deep",
+            "model_routing.implementer.retry": "deep",
+        }
+    )
+    return values
+
+
+def _implementer_support_axis(resolution) -> tuple[bool, str]:
+    """Mirror the /z-execute implementer applied-vs-advisory rule.
+
+    Source of truth is prose in ``skills/z-execute/SKILL.md`` (the orchestrator
+    applies ``model=`` via ``Agent()`` but has no per-call effort parameter). The
+    model is always applied per-call; effort is applied only when baked into the
+    model name (omp family -> ``resolution.effort == ""``). When the per-task effort
+    is a distinct value (Claude family) it is advisory. This helper encodes that
+    rule so the invariant is guarded here even though the decision itself lives in
+    prose that cannot be imported.
+    """
+    return True, ("advisory" if resolution.effort else "applied")
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high", "retry"])
+def test_implementer_tier_routes_to_host_keyed_class_on_claude(tier, monkeypatch):
+    """Each tier resolves through its class to the Claude (model, effort) pair."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    resolved = resolve_implementer_model(tier, _impl_tier_defaults())
+
+    expected_model, expected_effort = _CLAUDE_MATRIX[_IMPL_TIER_CLASS[tier]]
+    assert resolved.route == _IMPL_TIER_CLASS[tier]
+    assert resolved.route_kind == "class"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high", "retry"])
+def test_implementer_tier_routes_to_host_keyed_class_on_pi(tier, monkeypatch):
+    """Each tier resolves through its class to the gpt-5.6 (model, effort) pair."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    resolved = resolve_implementer_model(tier, _impl_tier_defaults())
+
+    expected_model, expected_effort = _OMP_MATRIX[_IMPL_TIER_CLASS[tier]]
+    assert resolved.route == _IMPL_TIER_CLASS[tier]
+    assert resolved.route_kind == "class"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort  # "" - baked into the model name
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high", "retry"])
+def test_implementer_effort_advisory_on_claude(tier, monkeypatch):
+    """On Claude the model is applied but the per-task effort is advisory."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    resolved = resolve_implementer_model(tier, _impl_tier_defaults())
+    applied, support = _implementer_support_axis(resolved)
+
+    assert resolved.effort in {"medium", "high"}  # distinct effort value present
+    assert applied is True  # model applied per-call via Agent(model=...)
+    assert support == "advisory"  # Agent() has no per-call effort parameter
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high", "retry"])
+def test_implementer_effort_baked_applied_on_pi(tier, monkeypatch):
+    """On omp the effort is baked into the model name, so it is applied."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    resolved = resolve_implementer_model(tier, _impl_tier_defaults())
+    applied, support = _implementer_support_axis(resolved)
+
+    assert resolved.effort == ""  # baked into the omp catalog model name
+    assert applied is True
+    assert support == "applied"
+
+
 def test_dispatcher_model_resolved_telemetry_source_and_applied(monkeypatch, tmp_path):
     captured = _capture_events(monkeypatch)
     provider_config = {

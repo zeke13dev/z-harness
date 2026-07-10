@@ -2388,15 +2388,16 @@ The persona is a **prompt-prefix only**: the implementer still runs as the nativ
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
+  model="<IMPL_MODEL>",  ← APPLIED per-call: the host-routed effective model resolved below. This overrides the implementer frontmatter model. Effort is NOT a per-call Agent() param — on Claude the routed effort is advisory (carried in the prompt/telemetry only); on omp/codex effort is baked into the model name so applying the model applies the effort.
   prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (legacy mode: read SPEC.md / PLAN.md yourself from here; INTENT mode: SPEC.md is absent and intent_snapshot below is authoritative)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\nsubagent_model: <IMPL_MODEL>  ← include this in implement_start/implement_end event payloads\nsubagent_model_source: <IMPL_MODEL_SOURCE>\nsubagent_model_route: <IMPL_MODEL_ROUTE>\nsubagent_model_route_kind: <IMPL_MODEL_ROUTE_KIND>\nsubagent_model_override_applied: <IMPL_MODEL_APPLIED>\nsubagent_model_override_support: <IMPL_MODEL_SUPPORT>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
-**Model-on-retry signal.** If this is the second retry (cycle ≥ 2) after review blockers/majors, set env `Z_HARNESS_RETRY_UPGRADE=opus` before the `Agent()` call. This signal now selects the `retry` tier in the routing layer. Native Claude `Agent()` hosts may not support a true per-call model override, so telemetry MUST record whether the resolved route was actually applied by the host or only passed as advisory prompt/metrics metadata.
+**Model-on-retry signal.** If this is the second retry (cycle ≥ 2) after review blockers/majors, set env `Z_HARNESS_RETRY_UPGRADE=opus` before the `Agent()` call. This signal now selects the `retry` tier in the routing layer. The resolved model IS applied per-call via `Agent(model=<IMPL_MODEL>)`. The `Agent()` tool has NO per-call effort parameter, so the routed effort is applied only when baked into the model name (omp/codex family); on native Claude the per-task effort is advisory. Telemetry records this honestly: `override_applied=true` (model applied) with `override_support="applied"` when effort is baked in, or `override_support="advisory"` when the Claude effort could not be applied per-call — never silently dropped.
 
 **`**Complexity:** high` opt-in.** If the user wrote `**Complexity:** high` in the task block, select the `high` tier even on first attempt. `low` and `medium` select their matching tiers; absent/unknown complexity falls back to `medium`.
 
-**Derive `IMPL_MODEL` through native model routing.** Immediately before the `Agent()` call, resolve the implementer tier through `[model_routing.implementer]`, then expand class names through `[model_classes]`. Defaults preserve current behavior: `low|medium → sonnet`, `high|retry → opus`.
+**Derive `IMPL_MODEL` through native model routing.** Immediately before the `Agent()` call, resolve the implementer tier through `[model_routing.implementer]`, then expand the resulting class name through the host-keyed `[model_classes]`. The default tier→class mapping is `low→low`, `medium→standard`, `high→deep`, `retry→deep`; each class resolves to the detected host's `(model, effort)` pair. So on a `claude` host the tiers yield `sonnet·medium / sonnet·high / opus·high / opus·high`, and on a `pi`/`codex` host they yield `gpt-5.6-terra-low / gpt-5.6-terra-medium / gpt-5.6-sol-medium / gpt-5.6-sol-medium` (effort baked into the name). `IMPL_MODEL` is applied to `Agent(model=...)`; `IMPL_MODEL_APPLIED` is always `true`, and `IMPL_MODEL_SUPPORT` is `applied` when effort is baked in (omp) or `advisory` when the Claude per-task effort has no Agent() parameter.
 
 ```bash
 # Determine the implementer routing tier from existing /z-execute signals.
@@ -2421,12 +2422,17 @@ from runtime.dispatch.dispatcher import load_model_routing_config, resolve_imple
 
 repo_root, tier = sys.argv[1:3]
 values = load_model_routing_config(repo_root)
-# Native Claude Agent() support for true per-call model override is host-dependent;
-# /z-execute records the resolved label as advisory unless the host later confirms application.
-resolution = resolve_implementer_model(
-    tier, values, override_applied=False, override_support="advisory"
-)
-print(json.dumps(resolution.telemetry()))
+resolution = resolve_implementer_model(tier, values)
+# The resolved MODEL is applied per-call via Agent(model=...) below, so the model
+# axis is always applied (override_applied=True).  The EFFORT axis is applied only
+# when it is baked into the model name: on omp/codex the catalog name carries the
+# effort so resolution.effort == "" and support is "applied"; on Claude the per-task
+# effort (medium vs high) is a distinct value with no Agent() parameter, so it is
+# ADVISORY — recorded in telemetry + prompt, never silently dropped.
+payload = resolution.telemetry()
+payload["override_applied"] = True
+payload["override_support"] = "advisory" if resolution.effort else "applied"
+print(json.dumps(payload))
 PY
 )"
 IMPL_MODEL="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["effective_model"])' "$IMPL_ROUTE_JSON")"
@@ -2990,13 +2996,39 @@ cp $BASE/archive/tasks/<task-id>/diff.patch \
 - **`IMPLEMENTER_RETRY == "same"` (default):** sub-step 1 sets `REUSE=1` from the cycle-1 anchor `persona-draw.json` (same `persona_id` / `DRAW_FILE`). No redraw, no control-counter increment, no `--exclude`. The `ATTEMPT_ID` has changed to `<task-id>-v$CYCLE`, but `PERSONA_ID` / `DRAW_ID` / `PERSONA_PREFIX` remain the same as cycle 1. The persona-draw.json anchor is NOT overwritten. This is the **lifecycle traceability** path — one `persona_id` across all cycles of a task's attempt.
 - **`IMPLEMENTER_RETRY == "new"`:** sub-step 1 sets `DRAW_FILE` to `persona-draw-v$CYCLE.json` (per-cycle sidecar) and `REUSE=0`. Sub-step 2 increments the control counter and draws excluding the cycle-1 persona (`--exclude`). Sub-step 3 writes the new draw to the sidecar. The cycle-1 anchor `persona-draw.json` is **never overwritten**.
 
+**Re-resolve `IMPL_MODEL` for the `retry` tier.** Cycle ≥ 2 always dispatches at the `retry` tier (which maps to class `deep`), but step 5's `IMPL_ROUTE_JSON` resolution ran against cycle 1's tier and is stale here — re-run it forcing `retry` before the `Agent()` call below (same derivation as step 5's block, tier fixed instead of re-derived from `$TASK_COMPLEXITY`):
+
+```bash
+IMPL_TIER="retry"
+IMPL_ROUTE_JSON="$(python3 - "$REPO_ROOT" "$IMPL_TIER" <<'PY'
+import json, sys
+from runtime.dispatch.dispatcher import load_model_routing_config, resolve_implementer_model
+
+repo_root, tier = sys.argv[1:3]
+values = load_model_routing_config(repo_root)
+resolution = resolve_implementer_model(tier, values)
+payload = resolution.telemetry()
+payload["override_applied"] = True
+payload["override_support"] = "advisory" if resolution.effort else "applied"
+print(json.dumps(payload))
+PY
+)"
+IMPL_MODEL="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["effective_model"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_SOURCE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["source"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_ROUTE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["route"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_ROUTE_KIND="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["route_kind"])' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_APPLIED="$(python3 -c 'import json,sys; print("true" if json.loads(sys.argv[1])["override_applied"] else "false")' "$IMPL_ROUTE_JSON")"
+IMPL_MODEL_SUPPORT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["override_support"])' "$IMPL_ROUTE_JSON")"
+```
+
 Implementer prompt on cycle ≥ 2 is shorter than cycle 1:
 
 ```
 Agent(
   subagent_type="implementer",
   description="Implement <task-id> v<CYCLE>",
-  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape.\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  model="<IMPL_MODEL>",  ← APPLIED per-call (retry tier → class deep): opus/high on Claude (effort advisory, no Agent() effort param), gpt-5.6-sol-medium on omp (effort baked in, applied)
+  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape.\nsubagent_model: <IMPL_MODEL>  ← include this in implement_start/implement_end event payloads\nsubagent_model_source: <IMPL_MODEL_SOURCE>\nsubagent_model_route: <IMPL_MODEL_ROUTE>\nsubagent_model_route_kind: <IMPL_MODEL_ROUTE_KIND>\nsubagent_model_override_applied: <IMPL_MODEL_APPLIED>\nsubagent_model_override_support: <IMPL_MODEL_SUPPORT>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 

@@ -239,12 +239,16 @@ DEFAULTS: dict = {
         "native_agents": {
             "default": "",
         },
-        # Implementer tiers reproduce the current /z-execute model labels.
+        # Implementer tiers route through the host-keyed model classes (T003):
+        # each tier names a class, which resolve_model_route expands to the
+        # detected host's (model, effort) pair.  low→low, medium→standard,
+        # high→deep, retry→deep.  A repo/user config may still pin an exact
+        # model label per tier to bypass class routing.
         "implementer": {
-            "low": "sonnet",
-            "medium": "sonnet",
-            "high": "opus",
-            "retry": "opus",
+            "low": "low",
+            "medium": "standard",
+            "high": "deep",
+            "retry": "deep",
         },
     },
     "export": {

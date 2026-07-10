@@ -3095,10 +3095,11 @@ class TestModelsSection(unittest.TestCase):
 
     _EXPECTED_MODEL_ROUTING_DEFAULTS = {
         "model_routing.native_agents.default": "",
-        "model_routing.implementer.low": "sonnet",
-        "model_routing.implementer.medium": "sonnet",
-        "model_routing.implementer.high": "opus",
-        "model_routing.implementer.retry": "opus",
+        # Implementer tiers now name host-keyed classes (T003), not flat labels.
+        "model_routing.implementer.low": "low",
+        "model_routing.implementer.medium": "standard",
+        "model_routing.implementer.high": "deep",
+        "model_routing.implementer.retry": "deep",
     }
 
 
@@ -3145,7 +3146,7 @@ class TestModelsSection(unittest.TestCase):
             self.assertIn(dotted, VALIDATORS)
 
     def test_model_routing_defaults_present_in_defaults_and_validators(self):
-        """Model routing defaults must reproduce current implementer labels."""
+        """Model routing defaults must map implementer tiers to host-keyed classes."""
         from config import DEFAULTS, VALIDATORS
         flat_defaults = {
             f"model_routing.{group}.{field}": value
@@ -3215,10 +3216,10 @@ class TestModelsSection(unittest.TestCase):
             ("model_classes.cheap.model", "haiku"),
             ("model_classes.standard.model", "sonnet"),
             ("model_classes.deep.model", "opus"),
-            ("model_routing.implementer.low", "sonnet"),
-            ("model_routing.implementer.medium", "sonnet"),
-            ("model_routing.implementer.high", "opus"),
-            ("model_routing.implementer.retry", "opus"),
+            ("model_routing.implementer.low", "low"),
+            ("model_routing.implementer.medium", "standard"),
+            ("model_routing.implementer.high", "deep"),
+            ("model_routing.implementer.retry", "deep"),
         ):
             r = run(["get", key], env=self.env, cwd=self.cwd)
             self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
