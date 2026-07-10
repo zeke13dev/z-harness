@@ -32,6 +32,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 ## 2026-07-10
 
 - _(auto)_ Require worktrees for agent edits
+- _(auto)_ Preserve caller repo context _(registry)_
 
 ## 2026-07-09
 

@@ -201,6 +201,11 @@ def _min_confidence(conf_a: str, conf_b: str) -> str:
     return conf_b
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+# Helper files live beside this script, but repository-sensitive operations must
+# stay rooted in the directory from which the registry was invoked.  In an
+# installed plugin, SCRIPT_DIR.parent is the versioned plugin payload, not the
+# target repository running /z-plan, /z-fix, or /z-execute.
+INVOCATION_CWD = Path.cwd()
 
 
 def _config_get(key: str, default: str) -> str:
@@ -266,7 +271,7 @@ def _resolve_plan_dir(slug: str) -> Path | None:
             ["bash", str(plan_path_sh), "resolve_plan_path", slug],
             capture_output=True,
             text=True,
-            cwd=str(SCRIPT_DIR.parent),
+            cwd=str(INVOCATION_CWD),
             check=False,
         )
         if result.returncode == 0:
@@ -353,7 +358,7 @@ def _active_plans_dir() -> Path:
             ["bash", str(plan_path_sh), "active_plans_dir"],
             capture_output=True,
             text=True,
-            cwd=str(SCRIPT_DIR.parent),  # repo root — plan-path.sh expects to be run from repo
+            cwd=str(INVOCATION_CWD),
         )
     except FileNotFoundError as exc:
         raise RuntimeError(f"bash not found: {exc}") from exc
@@ -381,7 +386,7 @@ def _git_field(args: list[str], cwd: str | None = None) -> str:
             ["git"] + args,
             capture_output=True,
             text=True,
-            cwd=cwd or str(SCRIPT_DIR.parent),
+            cwd=cwd or str(INVOCATION_CWD),
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except FileNotFoundError:
@@ -553,7 +558,7 @@ def _build_record(
     # Normalise git-common-dir to an absolute path.
     if git_common_dir and not os.path.isabs(git_common_dir):
         git_common_dir = os.path.abspath(
-            os.path.join(repo_root or str(SCRIPT_DIR.parent), git_common_dir)
+            os.path.join(repo_root or str(INVOCATION_CWD), git_common_dir)
         )
     worktree_path = repo_root  # same as repo_root for non-worktree; will differ for worktrees
     branch = _git_field(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -566,7 +571,7 @@ def _build_record(
                 ["bash", str(plan_path_sh), "z_harness_repo_id"],
                 capture_output=True,
                 text=True,
-                cwd=repo_root or str(SCRIPT_DIR.parent),
+                cwd=repo_root or str(INVOCATION_CWD),
             )
             if result.returncode == 0:
                 repo_id = result.stdout.strip()

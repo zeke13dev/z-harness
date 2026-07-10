@@ -63,6 +63,7 @@ import concurrent.futures
 import json
 import multiprocessing
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -100,6 +101,94 @@ def _run_registry(
         cwd=cwd or str(REPO_ROOT),
         env=env,
     )
+
+
+class TestInvocationRepositoryContext(unittest.TestCase):
+    """Installed helpers must resolve state for the caller's repository."""
+
+    def test_register_uses_caller_repo_for_automatic_base_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target_repo = tmp_path / "target-app"
+            target_repo.mkdir()
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=target_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            plugin_scripts = tmp_path / "plugin-install" / "scripts"
+            plugin_scripts.mkdir(parents=True)
+            for helper_name in ("active-plan-registry.py", "plan-path.sh"):
+                shutil.copy2(REPO_ROOT / "scripts" / helper_name, plugin_scripts / helper_name)
+            installed_registry = str(plugin_scripts / "active-plan-registry.py")
+
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key not in {
+                    "GIT_DIR",
+                    "GIT_WORK_TREE",
+                    "Z_HARNESS_BASE_DIR",
+                    "Z_HARNESS_PLANS_DIR",
+                }
+            }
+            env.update({
+                "HOME": str(tmp_path / "home"),
+                "XDG_STATE_HOME": str(tmp_path / "state"),
+                "Z_HARNESS_EXTERNAL_DEFAULT": "1",
+                "Z_HARNESS_REGISTRY_ENABLED": "1",
+            })
+
+            repo_id_result = subprocess.run(
+                ["bash", str(REPO_ROOT / "scripts" / "plan-path.sh"), "z_harness_repo_id"],
+                cwd=target_repo,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            repo_id = repo_id_result.stdout.strip()
+            run_id = "test-caller-repo-context"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    installed_registry,
+                    "register",
+                    "--run-id", run_id,
+                    "--slug", "caller-context",
+                    "--command", "/z-fix",
+                    "--phase", "fix",
+                ],
+                cwd=target_repo,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            record_path = (
+                tmp_path / "state" / "z-harness" / repo_id
+                / "active-plans" / f"{run_id}.json"
+            )
+            self.assertTrue(record_path.is_file(), f"missing registry record: {record_path}")
+            claims_result = subprocess.run(
+                ["bash", str(plugin_scripts / "plan-path.sh"), "claims_dir"],
+                cwd=target_repo,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(Path(claims_result.stdout.strip()).parent, record_path.parent)
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(Path(record["repo_root"]).resolve(), target_repo.resolve())
+            self.assertEqual(Path(record["git_common_dir"]).resolve(), (target_repo / ".git").resolve())
+            self.assertEqual(Path(record["worktree_path"]).resolve(), target_repo.resolve())
+            self.assertEqual(record["repo_id"], repo_id)
 
 
 class TestRoundTrip(unittest.TestCase):
