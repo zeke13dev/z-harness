@@ -1408,6 +1408,42 @@ def test_current_host_family_honors_env_override(monkeypatch):
     assert _current_host_family() == "omp"
 
 
+def test_detect_host_caches_subprocess_call_but_env_override_wins_every_call(monkeypatch):
+    """The detect-host.sh subprocess call is cached (T-REV-004), but Z_HARNESS_HOST
+    is read fresh on every call and always short-circuits the cache.
+
+    Failure class: if ``Z_HARNESS_HOST`` were read *inside* the cached function,
+    ``lru_cache`` would freeze whichever env value was seen on the first call and
+    silently break every test (and caller) that forces a different host per call.
+    """
+    from runtime.dispatch import dispatcher as dispatcher_module
+
+    dispatcher_module._run_detect_host_script.cache_clear()
+    calls: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="codex\n", stderr="")
+
+    monkeypatch.setattr(dispatcher_module.subprocess, "run", _fake_run)
+    monkeypatch.delenv("Z_HARNESS_HOST", raising=False)
+
+    # Two calls with no override: subprocess is only invoked once (cached).
+    assert dispatcher_module._detect_host() == "codex"
+    assert dispatcher_module._detect_host() == "codex"
+    assert len(calls) == 1
+
+    # Z_HARNESS_HOST overrides win outright and never touch the cached subprocess
+    # result, per-call, even though the cache is already warm from above.
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    assert dispatcher_module._detect_host() == "claude"
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    assert dispatcher_module._detect_host() == "pi"
+    assert len(calls) == 1  # still just the one cached subprocess invocation
+
+    dispatcher_module._run_detect_host_script.cache_clear()
+
+
 @pytest.mark.parametrize("class_name", ["cheap", "low", "standard", "deep"])
 def test_class_resolution_claude_column(class_name, monkeypatch):
     """On a claude host each class resolves to the Claude (model, effort) pair."""
@@ -1483,6 +1519,36 @@ def test_host_family_param_overrides_detection():
         "standard", _host_keyed_defaults(), source="test", host_family="omp"
     )
     assert resolved.effective_model == "gpt-5.6-terra-medium"
+
+
+def test_builtin_class_legacy_scalar_pin_is_shadowed_by_hostkeyed_default(monkeypatch):
+    """Documents the built-in-class backward-compat gotcha (docs/human/config.md).
+
+    Built-in classes ship host-keyed DEFAULTS alongside the legacy scalar (see
+    ``scripts/config.py`` DEFAULTS), so a user who re-pins ONLY the legacy
+    scalar ``model_classes.<class>.model`` for a built-in class is silently
+    shadowed by the shipped host-keyed default — the host-keyed key is checked
+    first and is never absent for a built-in class. This locks that behavior
+    as observable so it does not regress unnoticed.
+    """
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    values = _host_keyed_defaults()  # host-keyed DEFAULTS present, as shipped
+    values["model_classes.deep.model"] = "my-custom-legacy-pin"  # user's legacy-only pin
+    resolved = resolve_model_route("deep", values, source="test")
+
+    # Shadowed: the shipped host-keyed default wins, not the user's legacy pin.
+    assert resolved.effective_model == "opus"
+    assert resolved.effective_model != "my-custom-legacy-pin"
+
+
+def test_builtin_class_hostkeyed_key_overrides_default(monkeypatch):
+    """Setting the host-keyed key is the documented way to re-pin a built-in class."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    values = _host_keyed_defaults()
+    values["model_classes.deep.claude.model"] = "my-custom-legacy-pin"
+    resolved = resolve_model_route("deep", values, source="test")
+
+    assert resolved.effective_model == "my-custom-legacy-pin"
 
 
 # ---------------------------------------------------------------------------
@@ -1658,6 +1724,57 @@ def test_routed_model_source_does_not_emit_legacy_override_event(monkeypatch, tm
     assert "persona_override_used" not in [kind for kind, _payload in captured]
     model_payload = [p for kind, p in captured if kind == "model_resolved"][0]
     assert model_payload["source"] == "frontmatter"
+
+
+def test_dispatcher_model_resolved_telemetry_includes_effort_when_present(monkeypatch, tmp_path):
+    """``model_effort`` reaches ``model_resolved`` telemetry when non-empty (T-REV-004)."""
+    captured = _capture_events(monkeypatch)
+    provider_config = {
+        "args_template": [],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": "sonnet",
+    }
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-subagent-dispatch",
+        [],
+        provider_config,
+        model="gpt-5.6-sol-medium",
+        model_source="model_routing.native_agents.explore",
+        model_route="deep",
+        model_route_kind="class",
+        model_effort="medium",
+        model_override_applied=True,
+        model_override_support="applied",
+    )
+
+    payload = [p for kind, p in captured if kind == "model_resolved"][0]
+    assert payload["effort"] == "medium"
+
+
+def test_dispatcher_model_resolved_telemetry_omits_effort_when_empty(monkeypatch, tmp_path):
+    """An empty/absent ``model_effort`` is never emitted (additive-only, like thinking/reasoning)."""
+    captured = _capture_events(monkeypatch)
+    provider_config = {"args_template": []}
+    driver = _MinimalDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver,
+        "z-subagent-dispatch",
+        [],
+        provider_config,
+        model="haiku",
+        model_source="model_routing.native_agents.doc_fetcher",
+    )
+
+    payload = [p for kind, p in captured if kind == "model_resolved"][0]
+    assert "effort" not in payload
 
 
 # ---------------------------------------------------------------------------

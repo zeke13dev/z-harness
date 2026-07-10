@@ -128,6 +128,7 @@ def _route() -> types.SimpleNamespace:
         route_kind="exact",
         thinking="",
         reasoning="",
+        effort="",
     )
 
 

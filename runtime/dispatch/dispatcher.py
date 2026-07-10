@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import functools
 import os
 import shutil
 import subprocess
@@ -151,17 +152,16 @@ class ModelRouteResolution:
 _HOST_DETECT_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "detect-host.sh"
 
 
-def _detect_host() -> str:
-    """Return the current host id, honoring the ``Z_HARNESS_HOST`` override.
+@functools.lru_cache(maxsize=1)
+def _run_detect_host_script() -> str:
+    """Run ``scripts/detect-host.sh`` once per process and cache the result.
 
-    When ``Z_HARNESS_HOST`` is set it wins outright (no subprocess — this is the
-    path tests use to force a host).  Otherwise ``scripts/detect-host.sh`` is run
-    once via subprocess and its single-token stdout is returned.  Any failure to
-    invoke the script degrades to ``"claude"`` (the script's own default).
+    Cached because the host is process-stable (the env markers ``detect-host.sh``
+    reads do not change mid-process), and this is the expensive part of host
+    detection (a subprocess spawn). ``Z_HARNESS_HOST`` is read in ``_detect_host``
+    *before* this cached call, never inside it, so a per-call env override still
+    short-circuits detection every time and is never frozen by the cache.
     """
-    override = os.environ.get("Z_HARNESS_HOST")
-    if override and override.strip():
-        return override.strip()
     try:
         proc = subprocess.run(
             ["bash", str(_HOST_DETECT_SCRIPT)],
@@ -174,6 +174,21 @@ def _detect_host() -> str:
         return "claude"
     host = proc.stdout.strip()
     return host or "claude"
+
+
+def _detect_host() -> str:
+    """Return the current host id, honoring the ``Z_HARNESS_HOST`` override.
+
+    When ``Z_HARNESS_HOST`` is set it wins outright (no subprocess — this is the
+    path tests use to force a host, and it is checked fresh on every call so
+    per-test/per-call overrides always take effect). Otherwise the cached
+    ``scripts/detect-host.sh`` subprocess result is returned (see
+    :func:`_run_detect_host_script`).
+    """
+    override = os.environ.get("Z_HARNESS_HOST")
+    if override and override.strip():
+        return override.strip()
+    return _run_detect_host_script()
 
 
 def _host_family(host: str) -> str:
@@ -439,6 +454,7 @@ class Dispatcher:
         model_route_kind: str | None = None,
         model_thinking: str | None = None,
         model_reasoning: str | None = None,
+        model_effort: str | None = None,
         model_override_applied: bool | None = None,
         model_override_support: str | None = None,
     ) -> DispatchResult:
@@ -521,6 +537,12 @@ class Dispatcher:
             model_route_kind: Optional ``"class"`` or ``"exact"`` discriminator.
             model_thinking: Optional class thinking metadata.
             model_reasoning: Optional class reasoning metadata.
+            model_effort: Optional resolved effort label (e.g. ``"medium"``,
+                ``"high"``) from ``ModelRouteResolution.effort``. Recorded in
+                ``model_resolved`` telemetry when non-empty; latent today on the
+                omp path (effort is baked into the model name there) but makes
+                effort a first-class telemetry field for hosts that carry it
+                separately from the model.
             model_override_applied: Whether the host actually received a concrete
                 model override transport.  When omitted, inferred from provider
                 support for model args/env.
@@ -700,6 +722,8 @@ class Dispatcher:
             _model_resolved_payload["thinking"] = model_thinking
         if model_reasoning:
             _model_resolved_payload["reasoning"] = model_reasoning
+        if model_effort:
+            _model_resolved_payload["effort"] = model_effort
         self._emit("model_resolved", _model_resolved_payload)
 
         # 4. Call driver.dispatch.

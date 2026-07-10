@@ -430,6 +430,7 @@ class MCPDispatcher:
                     model_route_kind=self._args.get("model_route_kind"),
                     model_thinking=self._args.get("model_thinking"),
                     model_reasoning=self._args.get("model_reasoning"),
+                    model_effort=self._args.get("model_effort"),
                     model_override_applied=self._args.get("model_override_applied"),
                     model_override_support=self._args.get("model_override_support"),
                 )
@@ -834,20 +835,23 @@ def _try_codex_native_subagent_dispatch(
                 "z_subagent_dispatch",
             )
             with _scoped_z_harness_slug(slug):
-                result = native_hook(
-                    agent_name=agent_def.name,
-                    prompt=prompt,
-                    env=os.environ.copy(),
-                    provider_config=provider_resolution.provider_config,
-                    repo_root=str(repo_root),
-                    run_id=run_id,
-                    model=route.effective_model,
-                    model_source=route.source,
-                    model_route=route.route,
-                    model_route_kind=route.route_kind,
-                    model_thinking=route.thinking,
-                    model_reasoning=route.reasoning,
-                )
+                native_hook_kwargs: dict[str, Any] = {
+                    "agent_name": agent_def.name,
+                    "prompt": prompt,
+                    "env": os.environ.copy(),
+                    "provider_config": provider_resolution.provider_config,
+                    "repo_root": str(repo_root),
+                    "run_id": run_id,
+                    "model": route.effective_model,
+                    "model_source": route.source,
+                    "model_route": route.route,
+                    "model_route_kind": route.route_kind,
+                    "model_thinking": route.thinking,
+                    "model_reasoning": route.reasoning,
+                }
+                if route.effort:
+                    native_hook_kwargs["model_effort"] = route.effort
+                result = native_hook(**native_hook_kwargs)
         except Exception as exc:
             return ToolResult.error(f"Dispatch error: {exc}")
 
@@ -951,6 +955,8 @@ def _handle_subagent_dispatch(args: dict[str, Any], progress_callback: Any) -> T
         "model_reasoning": route.reasoning,
         "slug": args.get("slug"),
     }
+    if route.effort:
+        enriched_args["model_effort"] = route.effort
 
     provider_resolution = _resolve_mcp_provider(repo_root, "z_subagent_dispatch")
     if isinstance(provider_resolution, ToolResult):

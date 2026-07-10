@@ -412,6 +412,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \
@@ -471,6 +472,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
         fake_result = DispatchResult(
             exit_code=0,
@@ -571,6 +573,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         class FakeCodexDriverWithoutNativeHook:
@@ -645,6 +648,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         class FakeNativeCodexDriver:
@@ -728,6 +732,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         class FakeFailingNativeCodexDriver:
@@ -791,6 +796,7 @@ class TestSubagentDispatch:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         with patch("z_harness_cli.mcp.server._get_repo_root", return_value=Path("/fake/root")), \

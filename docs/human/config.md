@@ -602,7 +602,23 @@ The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md
 
 **Host detection.** The family in point 2 is not read from adapter/export host selection — it comes from `scripts/detect-host.sh` (honoring a `Z_HARNESS_HOST` override), which prints exactly one of `claude | pi | codex | cursor | antigravity` (default `claude` when no positive env marker is present). The dispatcher (`runtime/dispatch/dispatcher.py::_host_family`) then applies the fixed rule: `claude` → the `claude` family, **every other value → the `omp` family**. This is a different detection mechanism from the adapter/export "host" concept in [capabilities-matrix.md](capabilities-matrix.md) (which uses `z_harness_cli/adapters/registry.py::detect_all()` / an explicit `--host` flag for launch/export) — the two happen to share the same host-id vocabulary but are looked up independently.
 
+**MCP dispatch path note:** the `z_harness_cli/mcp/server.py` native-agent/subagent dispatch path resolves its model route through this same `detect-host.sh`/`Z_HARNESS_HOST` mechanism (not a separate one). A non-claude host running the MCP dispatch path must have the env markers `detect-host.sh` reads (`PI_*`, `CODEX_API_KEY`/`CODEX_EXEC`, `CURSOR_API_KEY`, `ANTIGRAVITY_PLUGIN_ROOT`) actually set, or export `Z_HARNESS_HOST` explicitly — otherwise detection silently falls through to `claude`, and every class routes to the Claude-family model even though the MCP server is running on a different host.
+
 `effort` allowed values: `""` (no applied effort — the sentinel for Haiku and for every omp entry), `none`, `low`, `medium`, `high`, `xhigh`, `max`. Custom class names must use lowercase/underscore TOML keys; a custom class must define a model via either the legacy scalar or at least one host sub-table.
+
+**Gotcha: re-pinning a BUILT-IN class via the legacy scalar alone no longer works.** For the four built-in classes (`cheap`/`low`/`standard`/`deep`), `scripts/config.py` DEFAULTS *always* populate the host-keyed keys (`model_classes.<class>.claude.model`, `model_classes.<class>.omp.model`) alongside the legacy scalar — and the resolver checks the host-keyed key first, falling back to the legacy scalar only when the host-keyed key is absent. Because the host-keyed key is never absent for a built-in class (it ships as a DEFAULT), a config that sets **only** `model_classes.deep.model = "my-model"` is silently shadowed by the shipped `model_classes.deep.claude.model = "opus"` default on a Claude host — the legacy pin has no effect. This is different from a *custom* class (example (b) below), which has no DEFAULTS entry at all, so its legacy scalar is never shadowed. To re-pin a built-in class, set the host-keyed key(s) directly:
+
+```toml
+# Re-pin the built-in `deep` class on a Claude host — this is the key that
+# actually wins; setting only `model_classes.deep.model` is silently shadowed
+# by the shipped host-keyed DEFAULT.
+[model_classes.deep.claude]
+model = "my-model"
+
+# Optional: also override the non-Claude (omp) side so the pin is host-complete.
+[model_classes.deep.omp]
+model = "my-omp-model"
+```
 
 **Two label-format facts to know:**
 - The omp middle-tier model family is spelled **`terra`**, not "tera" (`gpt-5.6-terra-low`, `gpt-5.6-terra-medium`).

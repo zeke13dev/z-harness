@@ -267,6 +267,7 @@ class TestSubagentDispatchIntegration:
             route_kind="exact",
             thinking="",
             reasoning="",
+            effort="",
         )
 
         class FakeNativeCodexDriver:
