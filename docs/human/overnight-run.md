@@ -1,6 +1,6 @@
 # overnight-run
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 > Covers source: skills/z-overnight/SKILL.md, scripts/run-status.sh, scripts/normalize-task-state.sh, scripts/overnight-preflight.sh, scripts/config.py, docs/human/overnight-run.md, scripts/bench-autonomy-check.sh
 
 ## Overview
@@ -343,12 +343,12 @@ Context accumulation risk for step 4+ on large implementations. Deferred to v2.
 - `skills/z-overnight/SKILL.md:82` — `Phase 1 Setup` — New-run setup: slug derivation, preflight, lock, AUTODECIDE_EFFECTIVE, state init via chain-runner.sh
 - `skills/z-overnight/SKILL.md:341` — `Phase 3 per-step loop` — Per-step execution: NO_ASK carve-out, Skill call, C14 archive detection, run-status classification
 - `skills/z-overnight/SKILL.md:608` — `Phase 4 terminal handling` — Best-effort terminal: state update, morning-report.py, overnight_end, lock release, push-notify
-- `scripts/config.py:635` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — Default allowlist constant: workflow.slug_confirm + workflow.audit_to_amend
-- `scripts/config.py:1842` — `_parse_overnight_allowlist` — Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE; merges over defaults
-- `scripts/config.py:1933` — `_apply_overnight_overrides` — Post-processes resolver envelope under Z_HARNESS_NO_ASK=halt
-- `scripts/config.py:2826` — `_is_policy_mode` — Detects frozen-policy mode (fail-closed H4)
-- `scripts/config.py:2842` — `_emit_unhandled_gate` — Emits unhandled_gate event for policy-mode gate miss
-- `scripts/config.py:2988` — `cmd_check_no_ask` — check-no-ask CLI; budget-aware via --range-high/--severity
+- `scripts/config.py:860` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — Default allowlist constant: workflow.slug_confirm + workflow.audit_to_amend
+- `scripts/config.py:2186` — `_parse_overnight_allowlist` — Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE; merges over defaults
+- `scripts/config.py:2277` — `_apply_overnight_overrides` — Post-processes resolver envelope under Z_HARNESS_NO_ASK=halt
+- `scripts/config.py:3202` — `_is_policy_mode` — Detects frozen-policy mode (fail-closed H4)
+- `scripts/config.py:3218` — `_emit_unhandled_gate` — Emits unhandled_gate event for policy-mode gate miss
+- `scripts/config.py:3364` — `cmd_check_no_ask` — check-no-ask CLI; budget-aware via --range-high/--severity
 - `scripts/overnight-preflight.sh:240` — `cmd_check_collisions` — Phase 0 slug-collision guard
 - `scripts/bench-autonomy-check.sh:1` — `bench-autonomy-check.sh` — 3-step pre-run gate for policy-mode runs
 - `scripts/run-status.sh:1` — `run-status.sh` — classify and last-event subcommands for step-status classification
@@ -375,6 +375,7 @@ Context accumulation risk for step 4+ on large implementations. Deferred to v2.
 - morning-report.py selects the latest overnight run by lexical sort of `*-overnight-*` dirs; if a run produces no archive dir the wrong run may be selected
 - chain-runner.sh state-write takes the JSON via stdin (`-` form) to avoid OS argv/env ceiling limits — do not pass large state JSON via argv/env
 - Preset expansion goes through `chain-runner.sh steps <preset>` (single source of truth), not a hardcoded table inside z-overnight.md; unknown presets cause exit 2 from chain-runner and are caught before lock acquisition
+- `scripts/config.py` line numbers for overnight-gate functions (`OVERNIGHT_AUTODECIDE_QIDS_DEFAULT`, `_parse_overnight_allowlist`, `_apply_overnight_overrides`, `_is_policy_mode`, `_emit_unhandled_gate`, `cmd_check_no_ask`) drift readily since config.py is large and actively edited — re-grep before trusting a cited line on future doc refreshes
 
 ## Memories
 

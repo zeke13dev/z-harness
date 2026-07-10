@@ -1,6 +1,7 @@
 {
   "concept": "plan-layout-migration",
-  "last_updated": "2026-06-24",
+  "summary": "External artifact-base resolution (5-tier fallback + anchor split-brain guard) for all z-harness plan/telemetry paths, plus the safe copy-verify-rm migrator from legacy in-repo layouts.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/plan-path.sh",
@@ -163,17 +164,33 @@
       "symbol": "migrate_full",
       "kind": "fn",
       "summary": "Full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup"
+    },
+    {
+      "file": "scripts/log-event.sh",
+      "line": 91,
+      "symbol": "resolve_run_dir",
+      "kind": "fn",
+      "summary": "Slug-aware run-archive-dir resolution; mid-flight legacy-dir detection when Z_HARNESS_BASE_DIR unset"
+    },
+    {
+      "file": "scripts/log-event.sh",
+      "line": 178,
+      "symbol": "hermes_marker_fanout",
+      "kind": "module",
+      "summary": "Best-effort call into emit-hermes-marker.sh (status/heartbeat) when HERMES_MARKER_FILE is set"
     }
   ],
   "depends_on": [
     "scripts",
-    "commands"
+    "commands",
+    "hermes-orchestration"
   ],
   "consumed_by": [
     "commands",
     "active-plan-registry",
     "plan-claim",
-    "followup-sink"
+    "followup-sink",
+    "hermes-orchestration"
   ],
   "invariants": [
     "Path construction MUST go through plan-path.sh helpers (base_dir/plan_dir/active_plans_dir/claims_dir/followups_dir/all_plan_slugs/resolve_plan_path) — inline z-harness/ literals are a DRY violation.",
@@ -185,7 +202,8 @@
     "migrate-plan-layout.sh refuses a real move while any active-plan registry record is status:running (live-run barrier, invariant 8); --dry-run warns but still previews.",
     "metrics.jsonl migration is dedup-append (idempotent across crash/re-run); followups/ migration is opt-in (--with-followups) to avoid stranding in-flight locks.",
     "base_resolved telemetry emitted at most once per process (per-PID stamp) and only when Z_HARNESS_RUN_ID is set and _Z_HARNESS_RESOLVING_BASE is not set.",
-    "rescue-worktree-state.sh COPIES (never moves), has no live-run barrier, and never copies active-plans/ (zombie guard) or followups/; refused if resolved base is still inside the repo."
+    "rescue-worktree-state.sh COPIES (never moves), has no live-run barrier, and never copies active-plans/ (zombie guard) or followups/; refused if resolved base is still inside the repo.",
+    "log-event.sh's Hermes marker fan-out is strictly best-effort and additive: it never changes event-append or base-resolution behavior, and is a no-op whenever HERMES_MARKER_FILE is unset."
   ],
   "gotchas": [
     "Z_HARNESS_BASE_DIR must be absolute; relative value causes immediate exit 1.",
@@ -197,7 +215,8 @@
     "log-event.sh sources plan-path.sh; source-loop guard (_Z_HARNESS_RESOLVING_BASE=1) prevents recursive z_harness_base() -> log-event.sh -> z_harness_base() chain.",
     "canonicalize_path in migrate-plan-layout.sh exits loudly on unresolvable paths to prevent symlink asymmetry masking source==target self-migration.",
     "rescue-worktree-state.sh refuses if external base resolves inside the repo (no durable destination available).",
-    "claims_dir returns <base>/active-plans/claims (not <base>/claims); the plan-claim mutex stores per-slug .lock files there."
+    "claims_dir returns <base>/active-plans/claims (not <base>/claims); the plan-claim mutex stores per-slug .lock files there.",
+    "log-event.sh's Hermes marker fan-out (added 2026-06-29, commit 7de1e7e) maps event kind context_pressure to heartbeat and everything else to status; gated on HERMES_MARKER_FILE, best-effort (exits 0 even on emit failure) so a broken hermes marker path never breaks a normal run."
   ],
   "memories": []
 }

@@ -1,14 +1,13 @@
 {
   "concept": "z-brainstorm",
-  "last_updated": "2026-06-26",
+  "summary": "Cheap opt-in pre-planning ideation: Phase 0 reuses the shared z-sharpen component when GRILL.md is absent, then parses ideator count, probes scope, dispatches ideators, writes BRAINSTORM.md, and waits for user discussion/lock-in without auto-dispatching /z-plan.",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-plan-redesign",
   "source_file": [
     "skills/z-brainstorm/SKILL.md",
-    "skills/z-sharpen/SKILL.md",
     "agents/ideator-clusterer.md"
   ],
   "confidence": "high",
-  "summary": "Cheap opt-in pre-planning ideation: Phase 0 reuses the shared z-sharpen component when GRILL.md is absent, then parses ideator count, probes scope, dispatches ideators, writes BRAINSTORM.md, and waits for user discussion/lock-in without auto-dispatching /z-plan.",
   "entry_points": [
     {
       "file": "skills/z-brainstorm/SKILL.md",
@@ -27,9 +26,9 @@
     {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 134,
-      "symbol": "Phase 0 shared sharpen + scope probe",
+      "symbol": "Phase 0 — Scope probe",
       "kind": "section",
-      "summary": "Runs shared sharpen before scope-probe and Phase 1 scaffolding."
+      "summary": "Runs shared sharpen before scope-probe and Phase 1 scaffolding (heading renamed from prior version)."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
@@ -48,41 +47,55 @@
     {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 483,
-      "symbol": "Phase 1 Scaffolding",
+      "symbol": "Plan Route Check",
+      "kind": "section",
+      "summary": "Deterministic routing signals plus optional planning-router; runs before Phase 2 dispatch."
+    },
+    {
+      "file": "skills/z-brainstorm/SKILL.md",
+      "line": 526,
+      "symbol": "Phase 1 — Scaffolding",
       "kind": "section",
       "summary": "Assemble docs, optional Explore, terrain, GRILL seed, and input_hash."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 586,
-      "symbol": "Phase 2 Ideator dispatch",
+      "line": 630,
+      "symbol": "Phase 2 — Parallel ideator dispatch",
       "kind": "section",
       "summary": "Persona draw and parallel Claude/Codex/Gemini five-section ideators."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 693,
-      "symbol": "Phase 2c Wide mode",
+      "line": 737,
+      "symbol": "2c. Wide mode dispatch",
       "kind": "section",
-      "summary": "Wide cost gate, overflow waves, overflow model handling, and N->K clustering."
+      "summary": "Wide cost gate, overflow waves, overflow model handling."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 982,
-      "symbol": "Phase 3 Synthesis",
+      "line": 989,
+      "symbol": "2c-5. Dispatch ideator-clusterer",
+      "kind": "section",
+      "summary": "After all wide waves, cluster N framings into K directions; failure falls back to raw framings."
+    },
+    {
+      "file": "skills/z-brainstorm/SKILL.md",
+      "line": 1026,
+      "symbol": "Phase 3 — Synthesis + mandatory anti-bias check",
       "kind": "section",
       "summary": "Write BRAINSTORM.md, anti-bias check, ranked briefing, hard end-turn invariant."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 1149,
-      "symbol": "Phase 4 Finalize",
+      "line": 1193,
+      "symbol": "Phase 4 — Finalize",
       "kind": "section",
       "summary": "HEAVY chosen_pair or LIGHT/MEDIUM chosen_framing discussion-loop finalization."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 1335,
+      "line": 1379,
       "symbol": "Re-spin machinery",
       "kind": "section",
       "summary": "Shared diverge/refine two-ideator helper with optional cap."
@@ -92,7 +105,7 @@
       "line": 1,
       "symbol": "ideator-clusterer",
       "kind": "agent",
-      "summary": "Wide-mode read-only clustering agent."
+      "summary": "Wide-mode read-only clustering agent; groups N framings into K by core hypothesis axis."
     }
   ],
   "depends_on": [
@@ -126,7 +139,8 @@
     "Wide overflow maximum is 9 total ideators; over-cap requests are reported to the user.",
     "MAP.md is canonical terrain; approach-synthesis RESEARCH.md is skipped.",
     "Clusterer failure is non-fatal and falls back to raw N framings.",
-    "Refine mode is positive-seed depth; diverge mode is anti-seed breadth."
+    "Refine mode is positive-seed depth; diverge mode is anti-seed breadth.",
+    "Section line numbers drift as SKILL.md grows (e.g. Plan Route Check now precedes Phase 1 at line 483, Phase 1 itself starts at 526) — re-grep headings rather than trusting stale line numbers when in doubt."
   ],
   "memories": []
 }

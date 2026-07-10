@@ -1,6 +1,7 @@
 {
   "concept": "personas-and-roles",
-  "last_updated": "2026-06-24",
+  "summary": "TOML-bound persona/model/runtime resolution + a boring-anchor/no-persona rotation experiment (default ON) across implementer/reviewer/consultant/ideator/audit_persona roles, with per-target export adapters for Antigravity/Cursor/Codex/Claude.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-persona.py",
@@ -178,31 +179,31 @@
     },
     {
       "file": "z_harness_cli/adapters/antigravity.py",
-      "line": 1,
+      "line": 207,
       "symbol": "AntigravityAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md (not personas/*.md) and calls export_persona per file; also exports commands/agents/skills. Raises RuntimeError on persona-name collision with workflow ids."
     },
     {
       "file": "z_harness_cli/adapters/cursor.py",
-      "line": 1,
+      "line": 214,
       "symbol": "CursorAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md and calls cursor export_persona per file; warns if personas/builtin/ missing. Raises RuntimeError on persona-name collision with rule ids."
     },
     {
       "file": "z_harness_cli/adapters/codex.py",
-      "line": 1,
+      "line": 259,
       "symbol": "CodexAdapter.export_payload",
       "kind": "fn",
-      "summary": "Globs personas/builtin/*.md and calls codex export_persona per file; raises RuntimeError on persona-name collision with prompts/ ids."
+      "summary": "Globs personas/builtin/*.md and calls codex export_persona per file; raises RuntimeError on persona-name collision with prompt ids in the flat prompts/ namespace. Docstring/layout refreshed 2026-07-05 (6831ed6); glob and collision semantics unchanged."
     },
     {
       "file": "z_harness_cli/adapters/claude.py",
-      "line": 1,
+      "line": 160,
       "symbol": "ClaudeAdapter.export_payload",
       "kind": "fn",
-      "summary": "Globs personas/builtin/*.md and calls claude export_persona per file; returns ExportResult with fidelity=native."
+      "summary": "Globs personas/builtin/*.md and calls claude export_persona; returns ExportResult with fidelity=native."
     }
   ],
   "depends_on": [
@@ -241,7 +242,8 @@
     "attempt_id = <task_id>-v<cycle>. Resume = same cycle -> same attempt_id -> reuse persona-draw.json. Retry = cycle incremented -> new attempt_id -> new draw.",
     "control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt.",
     "Per-target export adapters (antigravity/cursor/codex/claude) all call parse_persona_file + build_portability_header from runtime/drivers/_persona_utils.py. Only antigravity is NATIVE -- Cursor/Codex/Claude are workarounds.",
-    "Cursor export produces .mdc with alwaysApply:true and glob '**/*'; body becomes rule content. Codex export produces a flat .md with '# Persona: <name>' header. Claude export produces flat .md with frontmatter block preserved. Antigravity export preserves full frontmatter + body."
+    "Cursor export produces .mdc with alwaysApply:true and glob '**/*'; body becomes rule content. Codex export produces a flat .md with '# Persona: <name>' header. Claude export produces flat .md with frontmatter block preserved. Antigravity export preserves full frontmatter + body.",
+    "experiment.persona_rotation defaults to true (scripts/config.py); experiment.control_every_n defaults to 5. The rotation system is active by default absent a repo/env override."
   ],
   "gotchas": [
     "Builtin personas live in personas/builtin/ -- the personas/ top-level dir holds only README.md. Globbing personas/*.md matches zero .md persona files and silently exports nothing. Bug was present before commit d894f93.",
@@ -260,7 +262,9 @@
     "persona_advisory_recommendation is logged separately at convergent sites; it NEVER folds into the authoritative decision or synthesis.",
     "parse_persona_file in _persona_utils.py uses stdlib-only regex (_FRONTMATTER_RE) -- no PyYAML dependency. All four per-target export adapters depend on it.",
     "Cursor export uses .mdc extension (not .md); Codex export uses .md with a flat '# Persona:' header (no frontmatter); Claude export preserves the full frontmatter block; Antigravity preserves full frontmatter + body with a portability comment header.",
-    "All four CLI adapter export_payload() methods emit a warning and skip persona export if personas/builtin/ directory is not found -- they do not hard-fail."
+    "All four CLI adapter export_payload() methods emit a warning and skip persona export if personas/builtin/ directory is not found -- they do not hard-fail.",
+    "z_harness_cli/adapters/codex.py received a docstring/layout-comment refresh on 2026-07-05 (6831ed6, docs(codex): refresh split-surface support docs) describing the native skills/agents/plugin/MCP export layout alongside the persona prompt export; the persona glob path, output location, and collision-check behavior are unchanged by that commit.",
+    "experiment.persona_rotation defaults to true -- the rotation system runs by default on every repo unless explicitly disabled via repo config or Z_HARNESS_EXPERIMENT_PERSONA_ROTATION env override."
   ],
   "memories": []
 }

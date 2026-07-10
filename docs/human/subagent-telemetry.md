@@ -1,15 +1,15 @@
 # subagent-telemetry
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 > Covers source: scripts/detect-host.sh, scripts/log-event.sh, scripts/log-subagent.sh, scripts/estimate-tokens.py, scripts/test_subagent_logging.sh, skills/z-stats/SKILL.md
 
 ## Overview
 
 `subagent-telemetry` records per-subagent dispatch cost signals without blocking the dispatch path. `scripts/detect-host.sh` identifies the host, `scripts/log-event.sh` stamps `host` on every event and writes events to the repo-wide metrics stream, `scripts/log-subagent.sh` emits non-fatal `subagent_call` events, and `scripts/estimate-tokens.py subagent-costs` reads those events to produce host/type cost breakdowns for `/z-stats`.
 
-The telemetry intentionally stores raw `prompt_chars` and `response_chars` separately. Pricing knowledge lives only in the read-side estimator, which uses real provider token counts when present and a labeled chars/4 approximation for native Claude subagents. This avoids the earlier misleading single `est_tokens` field, especially for output-heavy reviewers and consultants.
+The telemetry intentionally stores raw `prompt_chars` and `response_chars` separately. Pricing knowledge lives only in the read-side estimator, which uses real provider token counts when present and a labeled chars/4 approximation for native Claude subagents. This avoids a misleading single `est_tokens` field, especially for output-heavy reviewers and consultants.
 
-Do not conflate this retrospective surface with pre-run forecasts. `subagent-costs` prices observed `subagent_call` events after dispatch (exact when provider token fields exist, labeled `[char-est]` when it must use chars/4). `estimate-tokens.py forecast` is prospective and may include wide static plan+execute projections before the work exists.
+Do not conflate this retrospective surface with pre-run forecasts. `subagent-costs` prices observed `subagent_call` events after dispatch (exact when provider token fields exist, labeled `[char-est]` when it must use chars/4). `estimate-tokens.py` also exposes `estimate` and `forecast` subcommands (pre-run/E2E cost projection) that live in the same file but belong to the separate `cost-estimation` concept — `subagent-costs` is the only piece of `estimate-tokens.py` in scope here.
 
 ## Key entry points
 
@@ -18,11 +18,11 @@ Do not conflate this retrospective surface with pre-run forecasts. `subagent-cos
 - `scripts/log-event.sh:42` — `resolve-run-dir` read-only resolver subcommand.
 - `scripts/log-event.sh:133` — lazy host resolution: `Z_HARNESS_HOST` override or `/tmp/zh-host-$PPID` cache from `detect-host.sh`.
 - `scripts/log-subagent.sh:1` — non-fatal helper for emitting `subagent_call` events with role/type/model and prompt/response sizes.
-- `scripts/log-subagent.sh:87` — payload builder; optional provider token fields are included only when non-empty.
-- `scripts/log-subagent.sh:120` — delegates the actual event write to `log-event.sh`.
-- `scripts/estimate-tokens.py:356` — `_compute_event_cost()` — computes input/output tokens and cost for one `subagent_call` event.
-- `scripts/estimate-tokens.py:408` — `subagent_costs()` — groups cost by host and subagent type from repo-wide metrics.
-- `scripts/estimate-tokens.py:1081` — `_format_subagent_costs_table()` — human-readable `/z-stats` table formatter.
+- `scripts/log-subagent.sh:107` — payload builder; optional provider token fields are included only when non-empty.
+- `scripts/log-subagent.sh:154` — delegates the actual event write to `log-event.sh`.
+- `scripts/estimate-tokens.py:376` — `_compute_event_cost()` — computes input/output tokens and cost for one `subagent_call` event.
+- `scripts/estimate-tokens.py:444` — `subagent_costs()` — groups cost by host and subagent type from repo-wide metrics.
+- `scripts/estimate-tokens.py:1496` — `_format_subagent_costs_table()` — human-readable `/z-stats` table formatter.
 - `scripts/test_subagent_logging.sh:1` — drift-guard for role-bearing dispatch logging.
 - `skills/z-stats/SKILL.md:97` — Phase 3b user surface for `subagent-costs`.
 <!-- AUTO-END: entry-points -->
@@ -34,6 +34,7 @@ Do not conflate this retrospective surface with pre-run forecasts. `subagent-cos
 - `cost-estimation` — `estimate-tokens.py` owns both pre-run estimates/plan+execute forecasts and observed post-run subagent-cost read-side pricing; the surfaces share rates but not semantics.
 - `plan-path` / external base — `subagent_call` events land in the repo-wide metrics file at the resolved base, not per-plan metrics.
 - `z-stats` — displays per-host/per-type cost and labels `[char-est]`, `[real tokens]`, or `[mixed: provider+chars]`.
+- `scripts/report-context.py` — a second, undocumented-as-concept consumer that shells out to `estimate-tokens.py subagent-costs --json` to fold cost data into its own report; see NOTES.
 
 ## detect-host.sh
 
@@ -77,6 +78,7 @@ Provider token fields are optional and appear only for external CLIs that expose
 - Consultant dispatches from orchestrators must not double-log; consultant agents self-log.
 - `/z-stats` resolves the base dir explicitly for subagent costs because repo-wide metrics may live outside the plan dir.
 - `/z-plan` pre-run cost forecasts are not reconciled inline with `subagent-costs`; compare them after the run via `/z-stats` if calibration is needed.
+- Line-number anchors for `log-subagent.sh` and `estimate-tokens.py` had drifted significantly from the previous doc revision (the file grew a `forecast`/`estimate` subcommand family); this refresh re-verified every anchor against the current source.
 
 ## Memories
 

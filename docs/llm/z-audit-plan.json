@@ -1,75 +1,83 @@
 {
   "concept": "z-audit-plan",
-  "last_updated": "2026-06-24",
-  "source_files": [
+  "summary": "Read-only, claim-first, contract-level pre-implementation plan audit: low-risk plans skip via a fast-path; otherwise reality-check + design audit + optional pre-review + adversarial cross-LLM review feed a Class-tagged (spec_gap|premise_failure) PLAN_AUDIT_REPORT.md, then Phase 5 auto-amends spec_gap findings via /z-amend and surfaces premise_failure concerns as a prose brief, with a Phase 9 preference-elevation proposal.",
+  "last_updated": "2026-07-09",
+  "covers_spec": "none",
+  "source_file": [
     "skills/z-audit-plan/SKILL.md",
     "docs/human/z-audit-plan.md"
   ],
   "confidence": "high",
-  "summary": "Read-only pre-implementation plan audit pipeline that reality-checks and cross-reviews plan artifacts, class-tags findings as spec_gap or premise_failure, then routes Phase 5 through auto_split/prose summary/halt with run-brief finalization.",
   "entry_points": [
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 511,
+      "line": 253,
+      "symbol": "skip-by-recommendation fast-path",
+      "kind": "module",
+      "summary": "Low-risk plans skip Phases 1-5, emit skip_recommended verdict, route to /z-execute."
+    },
+    {
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 395,
+      "symbol": "Phase 2.5 pre-review cycle",
+      "kind": "module",
+      "summary": "Opt-in (runtime.pre_review) 3-way parallel Flash pre-reviewer scan feeding Phase 3 prompts."
+    },
+    {
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 508,
+      "symbol": "Phase 3 adversarial cross-LLM review",
+      "kind": "module",
+      "summary": "consultant-primary/consultant-secondary Agent() dispatch over contract artifacts + Phase 1/2 notes."
+    },
+    {
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 559,
       "symbol": "Class tagging",
       "kind": "module",
-      "summary": "Surviving findings get canonical Class; audit-plan uses spec_gap or premise_failure only."
+      "summary": "Assigns spec_gap or premise_failure to every surviving finding, per z-review-all's enum."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 557,
-      "symbol": "per-finding report format",
-      "kind": "module",
-      "summary": "Class field is required immediately after Severity in every finding."
-    },
-    {
-      "file": "skills/z-audit-plan/SKILL.md",
-      "line": 596,
+      "line": 644,
       "symbol": "Phase 5 gate decision",
       "kind": "module",
-      "summary": "Resolve workflow.audit_to_amend and map with amend-gate-decision.py before user interaction."
+      "summary": "Resolves workflow.audit_to_amend via config.py + amend-gate-decision.py before user interaction."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 621,
-      "symbol": "halt branch",
-      "kind": "module",
-      "summary": "audit_halt telemetry, no amend/popup, jump to Run Brief halt finalize."
-    },
-    {
-      "file": "skills/z-audit-plan/SKILL.md",
-      "line": 631,
+      "line": 679,
       "symbol": "auto_split branch",
       "kind": "module",
-      "summary": "Extract findings by Class, auto-amend spec_gap, render premise_failure as prose brief."
+      "summary": "Auto-amends spec_gap via /z-amend --skip-user-gate, renders premise_failure as prose brief."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 661,
-      "symbol": "target-mode-aware amend",
-      "kind": "module",
-      "summary": "INTENT targets batch all spec_gap corrections into one amend; legacy targets one amend per finding."
-    },
-    {
-      "file": "skills/z-audit-plan/SKILL.md",
-      "line": 778,
+      "line": 826,
       "symbol": "force_ask prose branch",
       "kind": "module",
-      "summary": "Prose alignment summary replaces the old 3-way AskUserQuestion popup."
+      "summary": "Prose alignment summary replaces the old AskUserQuestion popup."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 807,
+      "line": 855,
       "symbol": "Run Brief finalize",
       "kind": "module",
       "summary": "Sets outcome/next/approach and renders via run-brief before plan_audit_end."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 863,
-      "symbol": "plan_audit_end",
-      "kind": "event",
-      "summary": "Completion telemetry with status/findings/blockers/majors."
+      "line": 953,
+      "symbol": "Phase 9 Elevation Proposer",
+      "kind": "module",
+      "summary": "Proposes promoting workflow.audit_to_amend to config/memory after repeated audit-to-amend patterns."
+    },
+    {
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 1071,
+      "symbol": "Normal-end teardown",
+      "kind": "module",
+      "summary": "Releases slug claim before deregistering active-plan record; per-resource gating."
     }
   ],
   "depends_on": [
@@ -77,29 +85,34 @@
     "config",
     "plan-claim",
     "active-plan-registry",
-    "run-brief-contract"
+    "run-brief-contract",
+    "impl-pre-review"
   ],
   "consumed_by": [
     "z-plan",
     "z-execute",
-    "z-amend"
+    "z-amend",
+    "z-attend"
   ],
   "invariants": [
-    "Command is read-only for production code.",
-    "Every surviving finding in PLAN_AUDIT_REPORT.md has **Class:** after **Severity:**.",
-    "Audit-plan classes are spec_gap or premise_failure only.",
-    "Class is the discriminator, not severity.",
-    "auto_split skips completed [x] task references.",
-    "INTENT-mode auto_split batches spec_gap corrections into one amend call.",
-    "force_ask emits prose alignment, not a popup.",
-    "Run Brief owns completion prose."
+    "Command is read-only for production code and plan artifacts.",
+    "Every surviving finding in PLAN_AUDIT_REPORT.md has **Class:** immediately after **Severity:**.",
+    "Audit-plan classes are spec_gap or premise_failure only (not the full z-review-all enum).",
+    "Class, not severity, is the discriminator.",
+    "auto_split skips spec_gap findings whose referenced task is already completed [x] in TASKS.md.",
+    "INTENT-mode auto_split batches all spec_gap corrections into one /z-amend call; legacy mode amends one finding at a time.",
+    "force_ask emits a prose alignment summary, never an AskUserQuestion popup.",
+    "Run Brief owns the single user-facing completion surface (outcome/next/approach/status).",
+    "The claim is claim-first: acquire before register, and fixed to the audited slug with no use-new-slug escape.",
+    "skip_recommended plans bypass Phases 1-5 and the Phase 9 elevation proposer, going straight to teardown."
   ],
   "gotchas": [
-    "The embedded comment still mentions z-review-all line 716; use the current enum in z-review-all rather than hardcoding stale line numbers.",
-    "amend-gate-decision.py failures fall safe to force_ask/prose.",
-    "PLAN_AUDIT_REPORT.md must exist before Phase 5 extraction.",
-    "premise_failure may have no single affected task/file.",
-    "halt path must release claim before deregister when claim was acquired."
+    "The Class enum's authoritative source is z-review-all (skills/z-review-all/SKILL.md:773), not a hardcoded line number in a stale comment.",
+    "amend-gate-decision.py / resolve-question failures fall safe to force_ask/prose, never silently skip the gate.",
+    "PLAN_AUDIT_REPORT.md must exist and be parseable before Phase 5 extraction, else audit_artifact_missing + exit 1.",
+    "premise_failure findings may have no single affected task/file; amendment-brief.py's affected field is omitted, not left empty.",
+    "On any post-claim halt, release must run before deregister; release only if CLAIM_RC==0, deregister only if REG_RC==0.",
+    "--command /z-audit-plan is required on every plan-claim.sh call — omitting it breaks --expected-holder identity comparisons."
   ],
   "memories": []
 }

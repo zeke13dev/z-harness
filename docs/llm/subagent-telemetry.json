@@ -1,6 +1,7 @@
 {
   "concept": "subagent-telemetry",
-  "last_updated": "2026-06-24",
+  "summary": "Non-blocking per-subagent-dispatch cost telemetry: host detection, host-stamped event logging, and the retrospective subagent-costs read-side pricer for /z-stats.",
+  "last_updated": "2026-07-09",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 2",
   "source_file": [
     "scripts/detect-host.sh",
@@ -42,24 +43,38 @@
     },
     {
       "file": "scripts/log-subagent.sh",
-      "line": 87,
+      "line": 107,
       "symbol": "PAYLOAD builder",
       "kind": "module",
       "summary": "Builds role/type/model/chars plus optional provider token fields."
     },
     {
+      "file": "scripts/log-subagent.sh",
+      "line": 154,
+      "symbol": "log-event.sh delegation",
+      "kind": "module",
+      "summary": "Emits the built payload via log-event.sh, which stamps host."
+    },
+    {
       "file": "scripts/estimate-tokens.py",
-      "line": 356,
+      "line": 376,
       "symbol": "_compute_event_cost",
       "kind": "fn",
       "summary": "Computes input/output tokens and cost from a subagent_call."
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 415,
+      "line": 444,
       "symbol": "subagent_costs",
       "kind": "fn",
       "summary": "Per-host, per-subagent_type aggregate from repo-wide metrics; retrospective observed-call cost surface distinct from pre-run forecasts."
+    },
+    {
+      "file": "scripts/estimate-tokens.py",
+      "line": 1496,
+      "symbol": "_format_subagent_costs_table",
+      "kind": "fn",
+      "summary": "Human-readable table formatter for the subagent-costs CLI subcommand."
     },
     {
       "file": "scripts/test_subagent_logging.sh",
@@ -105,7 +120,8 @@
     "Char-est cost rows are not equivalent to real-token rows.",
     "Consultant orchestrator dispatches should not double-log because agents self-log.",
     "Opt-out comment for implementer drift guard must be exactly # no-subagent-log: <reason>.",
-    "Do not compare /z-plan pre-run forecast totals to subagent-costs without noting that forecast execute components are wide static projections while subagent-costs reports observed calls only."
+    "Do not compare /z-plan pre-run forecast totals to subagent-costs without noting that forecast execute components are wide static projections while subagent-costs reports observed calls only.",
+    "estimate-tokens.py entry-point line numbers drift fast: the file has grown an estimate/forecast/subagent-costs three-subcommand CLI since the last doc revision; re-verify anchors on every refresh rather than trusting the prior doc."
   ],
   "memories": []
 }

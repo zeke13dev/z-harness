@@ -1,6 +1,7 @@
 {
   "concept": "session-handoff",
-  "last_updated": "2026-06-19",
+  "summary": "Durable SESSION.md context handoff for /z-execute: notable-only breadcrumbs (E2) feed a Haiku context-curator (E3) that folds them into a bounded SESSION.md at clear checkpoints, which E1 re-inlines on resume via a shared done_ids_hash; write-handoff.sh (now fronted by the cross-command write-clear-checkpoint.sh) emits the machine-readable handoff.json continuation token.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/session-helpers.sh",
@@ -12,42 +13,56 @@
   "entry_points": [
     {
       "file": "scripts/session-helpers.sh",
-      "line": 66,
+      "line": 75,
       "symbol": "done_set_hash",
       "kind": "fn",
       "summary": "sha256 of sorted, newline-joined [x] task-ids from TASKS.md; empty set hashes ''; order-independent; DRY contract — writer (curator) and reader (E1) must both call this; never re-implement inline."
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 146,
+      "line": 155,
       "symbol": "last_done_task",
       "kind": "fn",
       "summary": "Prints the id of the last [x] heading in TASKS.md; human hint only, not load-bearing for resume."
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 197,
+      "line": 208,
+      "symbol": "completed_task_ids",
+      "kind": "fn",
+      "summary": "Prints comma-separated ids for EVERY [x] task in file order (not just the last). Metadata contract for parallel-batch and INTENT BFS-level curator dispatch, so the full boundary completion set is passed, not only the last task."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 266,
       "symbol": "next_pending_task",
       "kind": "fn",
       "summary": "Prints the first [ ] task id whose deps are all [x]; dep-gated; used by E1 pending detection — must use this helper, not a bespoke grep, or inline-heading `[ ]` format is missed."
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 321,
+      "line": 390,
+      "symbol": "task_status_counts",
+      "kind": "fn",
+      "summary": "Prints done=<n> pending=<n> in_progress=<n> other=<n> using the same inline-heading/list-checkbox parser as done_set_hash/next_pending_task. Also consumed by check-compaction.sh and scripts/resume-context.py, outside this concept's curator/E1 loop proper."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 474,
       "symbol": "last_curated_marker",
       "kind": "fn",
       "summary": "Prints the ts of the most recent context_curated event in events_file; prints 'none' if absent. Used by E3 to compute since_marker for the next curation delta."
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 369,
+      "line": 522,
       "symbol": "session_frontmatter_field",
       "kind": "fn",
       "summary": "Prints a scalar YAML frontmatter field from SESSION.md (or empty if absent). Used by E1 to read done_ids_hash, schema_version, next_pending, last_gate_task_id cheaply without loading the body."
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 423,
+      "line": 576,
       "symbol": "validate_intent",
       "kind": "fn",
       "summary": "Thin shell wrapper over scripts/intent-schema.py validate-intent (and optionally lint-criteria). Exit 0=valid, 1=errors, 2=usage. CLI-callable: bash scripts/session-helpers.sh validate_intent <INTENT.md> [lint]."
@@ -57,84 +72,93 @@
       "line": 1,
       "symbol": "context-curator",
       "kind": "module",
-      "summary": "Haiku subagent (model: haiku); dispatched synchronously at the compaction breakpoint; 8-step ordered behavior: read prior SESSION.md; read metrics.jsonl delta backward (O(delta)); read TASKS.md + git diff --stat; fold into 4 capped sections with overflow rule; compute done_ids_hash via helper; atomic write; emit context_curated; return STATUS line."
+      "summary": "Haiku subagent (model: haiku); dispatched synchronously at the clear checkpoint; 8-step ordered behavior: read prior SESSION.md; read metrics.jsonl delta backward (O(delta)); read TASKS.md + git diff --stat; fold into 4 capped sections with overflow rule; compute done_ids_hash via helper; atomic write; emit context_curated; return STATUS line."
     },
     {
       "file": "agents/context-curator.md",
       "line": 12,
       "symbol": "Inputs from caller",
       "kind": "module",
-      "summary": "Required prompt fields: plan_dir, run_id, repo_root, last_gate_task_id, tasks_file, event_source ($ZH_BASE/metrics.jsonl — NOT per-plan events.jsonl), slug, since_marker."
+      "summary": "Required prompt fields: plan_dir, run_id, repo_root, last_gate_task_id, completed_task_ids, tasks_file, event_source ($ZH_BASE/metrics.jsonl — NOT per-plan events.jsonl), slug, since_marker."
     },
     {
       "file": "agents/context-curator.md",
-      "line": 156,
+      "line": 161,
       "symbol": "Failure-stub path",
       "kind": "module",
       "summary": "On persistent failure: write frontmatter-only stub with done_ids_hash from done_set_hash helper (event-independent), overflow: true, empty sections. Stub resume key is valid even when event read failed."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 1015,
-      "symbol": "E1 — Resume injection (step 4a)",
+      "line": 1591,
+      "symbol": "4a. Resume from SESSION.md (E1)",
       "kind": "module",
       "summary": "After TASKS.md read, before first dispatch: compute CUR_HASH via done_set_hash; read SESSION.md frontmatter via session_frontmatter_field; check pending via next_pending_task helper; use SESSION.md iff schema_version in supported set ('1') AND done_ids_hash==CUR_HASH AND pending non-empty. Inline body via explicit Read; emit session_resumed. Else emit session_resume_skipped {reason: no_session_file|schema_unsupported|done_set_mismatch|no_pending}."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 1196,
-      "symbol": "E3 — Curator dispatch at compaction breakpoint",
+      "line": 1744,
+      "symbol": "## Clear checkpoint policy",
       "kind": "module",
-      "summary": "After compaction_pause emit, before push-notify: dispatch context-curator synchronously with Z_SESSION_CURATOR_TIMEOUT_S (default 120). One inline retry at 2x timeout. Verify returned done_ids_hash against current TASKS.md done-set. On success + hash match: call write-handoff.sh (gated by hermes_enabled), emit /clear & resume. On failure/disabled: emit context_curation_failed, push /compact notice."
+      "summary": "INTENT-mode DAG settle-point vs legacy batch/task-settle clear-checkpoint triggers; defines the reusable execute_clear_checkpoint_protocol block shared by both modes."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2531,
-      "symbol": "E2 — Notable-only breadcrumb (step 8.3b)",
+      "line": 1791,
+      "symbol": "execute_clear_checkpoint_protocol() (E3)",
       "kind": "module",
-      "summary": "After a task hits [x]: emit context_breadcrumb {task, intent} ONLY when a concrete trigger held (decision_gate, task_halt_recovered, spec_deviation, reviewer_retry). Clean completions emit nothing — keeps curator mining high-signal."
+      "summary": "Computes since_marker, dispatches context-curator synchronously with Z_SESSION_CURATOR_TIMEOUT_S (default 120), one inline retry at 2x timeout. Re-verifies returned done_ids_hash against a fresh done_set_hash read of CHECKPOINT_TASKS_FILE (guards a stale return). On success + hash match: calls write-clear-checkpoint.sh UNCONDITIONALLY (not hermes-gated) and emits exactly one /clear & resume push-notify. On failure/disabled: emits context_curation_failed only when actually dispatched-and-failed, then a differently-worded push-notify."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 3208,
+      "symbol": "3b. Notable-only breadcrumb (E2)",
+      "kind": "module",
+      "summary": "After a task hits [x]: emit context_breadcrumb {task, intent} ONLY when a concrete trigger held, priority order decision_gate > task_halt_recovered > spec_deviation > reviewer_retry. Clean completions emit nothing — keeps curator mining high-signal."
     },
     {
       "file": "scripts/write-handoff.sh",
       "line": 1,
       "symbol": "write-handoff.sh",
       "kind": "module",
-      "summary": "Produces handoff.json in $Z_HARNESS_PLAN_DIR. Protocol 1.0 (default, for Hermes compaction — gated by hermes_enabled at the compaction breakpoint) or protocol 1.1 (for /z-attend yield, when Z_HARNESS_ATTEND_RESUME=1 with all 5 attend env vars set). Extracts task counts from TASKS.md and session metadata from SESSION.md. Atomic tmp+rename write. STATUS: written on success; exits non-zero on missing Z_HARNESS_PLAN_DIR or incomplete attend vars."
+      "summary": "Low-level schema writer for handoff.json in $Z_HARNESS_PLAN_DIR. Protocol 1.0 (default) or protocol 1.1 (for /z-attend yield, when Z_HARNESS_ATTEND_RESUME=1 with all 5 attend env vars set). Extracts task counts from TASKS.md and session metadata from SESSION.md. Atomic tmp+rename write. STATUS: written on success; exits non-zero on missing Z_HARNESS_PLAN_DIR or incomplete attend vars. Called directly by /z-attend; called indirectly (and unconditionally, not hermes-gated) by /z-execute's clear checkpoint via scripts/write-clear-checkpoint.sh (out of this concept's source_file scope)."
     }
   ],
   "depends_on": [
     "commands",
     "scripts",
     "agents",
-    "intent-schema"
+    "intent-schema",
+    "handoff-protocol"
   ],
   "consumed_by": [
     "commands",
-    "attend"
+    "attend",
+    "adaptive-intent"
   ],
   "invariants": [
     "done_ids_hash is always computed via scripts/session-helpers.sh done_set_hash — never inline; writer (curator) and reader (E1) use the same helper to guarantee byte-identical hashes.",
-    "The '/clear & resume' notice fires ONLY when context-curator returned STATUS: curated AND the curator's done_ids_hash matches the current TASKS.md done-set after curator return.",
+    "The '/clear & resume' notice fires ONLY when context-curator returned STATUS: curated AND the curator's done_ids_hash matches the current TASKS.md done-set after curator return (re-verified via a fresh done_set_hash read, not trusted from the curator's own report).",
     "context-curator never touches files other than SESSION.md (+ its .tmp.<PID> staging file). Never edits TASKS.md, SPEC.md, PLAN.md, or any production code.",
     "Curator reads event_source ($ZH_BASE/metrics.jsonl) — not the per-plan events.jsonl or orchestration-only events.jsonl — because only metrics.jsonl aggregates both task-tier and orchestration-tier events.",
     "Curator reads events backward from EOF, stopping at ts <= since_marker (O(delta), not O(total log)).",
     "SESSION.md is written atomically via tmp+rename; a partial prior write is overwritten cleanly on retry.",
     "E1 resume predicate is set-based and position-independent: same [x] set in any TASKS.md line order → same hash → resume fires. Any change to the [x] set → hash mismatch → safe skip.",
     "E1 pending detection uses next_pending_task helper (Python-based), not a bespoke grep. Bespoke line-start grep misses inline-heading `[ ]` format and makes the feature inert for all production plans.",
-    "Z_SESSION_CURATOR_TIMEOUT_S=0 disables the curator; behavior identical to pre-handoff (no SESSION.md written, no '/clear & resume' notice).",
+    "Z_SESSION_CURATOR_TIMEOUT_S=0 disables the curator; behavior identical to pre-handoff (no SESSION.md written, no '/clear & resume' notice); context_curation_failed is correctly NOT emitted in this disabled path.",
     "All [x] detection in session-helpers.sh uses the orchestrator's canonical pattern ^\\s*[-*]?\\s*\\[x\\] — no divergence.",
     "Failure-stub path writes a valid done_ids_hash from TASKS.md directly (event-independent) so the stub's resume key is valid even when the event read failed.",
     "session-helpers.sh functions are stdout-only, no side effects, exit 0 always (empty output = not found).",
     "context_curated event is emitted with label 'orchestration' AFTER the atomic rename succeeds so the next curation's since_marker lookup finds it in metrics.jsonl.",
-    "write-handoff.sh at the compaction breakpoint is called only when workflow.hermes_enabled=true (Invariant 6 of hermes-orchestration). /z-attend calls it unconditionally at yield points.",
-    "Protocol-1.1 handoff (Z_HARNESS_ATTEND_RESUME=1) requires all 5 attend env vars non-empty; write-handoff.sh exits non-zero if any are missing."
+    "CORRECTED 2026-07-09: write-clear-checkpoint.sh (and thus write-handoff.sh when invoked through it from /z-execute's clear checkpoint) is called UNCONDITIONALLY on curator success — it is NOT gated by workflow.hermes_enabled. That gating claim in the prior doc revision was already stale relative to shipped code.",
+    "Protocol-1.1 handoff (Z_HARNESS_ATTEND_RESUME=1) requires all 5 attend env vars non-empty; write-handoff.sh exits non-zero if any are missing. /z-attend calls write-handoff.sh directly, not through write-clear-checkpoint.sh."
   ],
   "gotchas": [
     "Re-implementing done_set_hash inline in the curator or any other caller breaks the DRY contract: writer and reader produce different hashes and resume silently never fires.",
     "Reading the per-plan events.jsonl or orchestration-only events.jsonl instead of metrics.jsonl makes the landmine backstop inert — task-tier events only appear in metrics.jsonl.",
     "The '/clear & resume' notice must NOT be emitted until AFTER curation succeeds AND the done-set hash matches. Emitting it before the hash verification is a security-of-resume contract violation.",
     "E1 pending detection must use next_pending_task helper. A bespoke '[ ]' grep misses inline-heading status format and returns 0 pending for all production plans, making the resume predicate fall through to no_pending (feature inert).",
-    "write-handoff.sh at the compaction breakpoint is gated by hermes_enabled. When hermes_enabled=false (default), no handoff.json is written at compaction time; /z-attend always writes it regardless.",
+    "write-clear-checkpoint.sh (the actual caller of write-handoff.sh from /z-execute's clear checkpoint) is NOT gated by hermes_enabled and always writes handoff.json on curator success; do not assume Hermes must be enabled for a watcher-readable checkpoint to appear.",
     "done_set_mismatch on E1 resume means TASKS.md was modified between the pause and the resume. SESSION.md is NOT inlined — a one-line note is surfaced to the user.",
     "schema_unsupported on E1 triggers session_resume_skipped {reason: schema_unsupported} — the orchestrator must never attempt to parse an unknown schema.",
     "Z_SESSION_CURATOR_TIMEOUT_S=0 disables the whole subsystem. Callers testing resume behavior must set this to a positive value.",
@@ -142,7 +166,9 @@
     "context_curated must be emitted AFTER the atomic rename succeeds (not before); otherwise a crash between write and event leaves metrics.jsonl with a stale since_marker.",
     "The failure-stub SESSION.md has overflow: true and empty sections; E1 still resumes (the done_ids_hash is valid), but body inlining provides no useful context.",
     "git diff --stat only — never capture full hunks; full hunks can be arbitrarily large and blow the SESSION.md ceiling immediately.",
-    "INTENT BFS .bfs_level_state checkpoint also uses done_set_hash; a hash mismatch there restarts BFS from level 0 (safe but potentially redundant work)."
+    "INTENT BFS .bfs_level_state checkpoint also uses done_set_hash; a hash mismatch there restarts BFS from level 0 (safe but potentially redundant work).",
+    "execute_clear_checkpoint_protocol re-verifies the curator's returned done_ids_hash against a fresh done_set_hash read before trusting it; a mismatch (TASKS.md changed between dispatch and return) is treated as a checkpoint failure (done_ids_hash_mismatch), not a success — do not shortcut this re-check.",
+    "write-clear-checkpoint.sh and check-compaction.sh are now shared across many commands beyond /z-execute (z-plan, z-audit, z-test, z-explore, z-debug, z-uplift, z-research, z-review-all, z-handoff, z-clear-checkpoint, z-maintain-docs); those two scripts are out of this concept's source_file scope and may warrant their own concept doc."
   ],
   "memories": []
 }

@@ -1,26 +1,28 @@
 {
   "concept": "plan-claim",
-  "last_updated": "2026-06-19",
+  "summary": "Slug-level hard flock claim lock (plan-claim.sh over sink-lock.sh) that prevents two Claude sessions from double-working the same /z-plan or /z-audit-plan slug; orthogonal to the advisory active-plan-registry.",
+  "last_updated": "2026-07-09",
   "covers_spec": "cross-session-claim-locks",
   "source_file": [
     "scripts/plan-claim.sh",
     "scripts/sink-lock.sh",
     "scripts/plan-path.sh",
-    "commands/z-plan.md",
-    "commands/z-audit-plan.md",
+    "skills/z-plan/SKILL.md",
+    "skills/z-audit-plan/SKILL.md",
     "docs/human/plan-claim.md"
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "scripts/plan-claim.sh", "line": 215, "symbol": "cmd_acquire", "kind": "fn", "summary": "Acquire slug claim lock; exit 0=acquired/self-reentry/disabled, 1=live-peer, 2=stale-takeover, 3=corrupt"},
-    {"file": "scripts/plan-claim.sh", "line": 300, "symbol": "cmd_heartbeat", "kind": "fn", "summary": "Refresh TTL and detect lost claim; exit 0=ok/transient-error, 9=confirmed-lost"},
-    {"file": "scripts/plan-claim.sh", "line": 368, "symbol": "cmd_release", "kind": "fn", "summary": "Release lock best-effort using --expected-holder guard; always exit 0"},
-    {"file": "scripts/plan-claim.sh", "line": 395, "symbol": "cmd_status", "kind": "fn", "summary": "Read-only holder JSON read; exit 0=printed, 3=corrupt"},
+    {"file": "scripts/plan-claim.sh", "line": 222, "symbol": "cmd_acquire", "kind": "fn", "summary": "Acquire slug claim lock; exit 0=acquired/self-reentry/disabled, 1=live-peer, 2=stale-takeover, 3=corrupt"},
+    {"file": "scripts/plan-claim.sh", "line": 307, "symbol": "cmd_heartbeat", "kind": "fn", "summary": "Refresh TTL and detect lost claim; exit 0=ok/transient-error, 9=confirmed-lost"},
+    {"file": "scripts/plan-claim.sh", "line": 375, "symbol": "cmd_release", "kind": "fn", "summary": "Release lock best-effort using --expected-holder guard; always exit 0"},
+    {"file": "scripts/plan-claim.sh", "line": 402, "symbol": "cmd_status", "kind": "fn", "summary": "Read-only holder JSON read; exit 0=printed, 3=corrupt"},
+    {"file": "scripts/plan-claim.sh", "line": 421, "symbol": "cmd_reap_stale", "kind": "fn", "summary": "Read-only stale classification via sink-lock check-stale; never mutates; exit 0=held,1=free,2=stale,3=corrupt"},
     {"file": "scripts/plan-path.sh", "line": 346, "symbol": "claims_dir", "kind": "fn", "summary": "Returns <z_harness_base>/active-plans/claims — lock directory path resolver"},
     {"file": "scripts/sink-lock.sh", "line": 1, "symbol": "sink-lock.sh", "kind": "module", "summary": "Low-level flock+daemon+TTL primitive; plan-claim.sh delegates all flock mechanics to it"}
   ],
   "depends_on": ["scripts", "active-plan-registry", "config"],
-  "consumed_by": ["commands", "hermes-orchestration"],
+  "consumed_by": ["z-plan", "z-audit-plan", "z-reconcile", "hermes-orchestration"],
   "invariants": [
     "The lockless awareness registry (active-plan-registry.py) stays ADVISORY. The claim lock is a SEPARATE hard lock. Claim acquire/heartbeat/release MUST NEVER write a peer's registry record. The registry's overlap output is NEVER a hard gate. (Invariant 1)",
     "Claim acquire is the FIRST action after slug+run-id resolution — before run-brief init, before register, before any artifact write. (Invariant 2)",
@@ -28,7 +30,8 @@
     "Unattended contention/takeover ABORTS by default; Z_HARNESS_CLAIM_OVERRIDE=1 is explicit opt-in. Z_HARNESS_CLAIM_DISABLE=1 skips claiming entirely. (Invariant 4)",
     "Holder string is the only carrier of identity: <session>::<run>::<command>. Colon in any field is rejected (exit 2) to preserve '::' delimiter unambiguity. (Invariant 6)",
     "Session id is export-once AND persisted to archive/$RUN/session-id; restored on resume before every acquire call. plan-claim.sh never calls session-id itself. (Invariant 7)",
-    "Cross-plan (Hermes) acquires plan-claim locks in sorted ascending slug order to guarantee deadlock-freedom. (INV-6 in hermes-orchestration)"
+    "Cross-plan (Hermes) acquires plan-claim locks in sorted ascending slug order to guarantee deadlock-freedom. (INV-6 in hermes-orchestration)",
+    "reap-stale is strictly read-only: it never acquires, releases, or kills. Callers (z-reconcile) must independently confirm the daemon PID is dead before removing a lock file, even when reap-stale reports 'stale'."
   ],
   "exit_codes": {
     "acquire": {
@@ -47,6 +50,12 @@
     "status": {
       "0": "printed held or free JSON",
       "3": "corrupt lock content"
+    },
+    "reap-stale": {
+      "0": "held — lock is live and held by a live process",
+      "1": "free — no lock file or empty",
+      "2": "stale — lock held by a dead PID or expired heartbeat",
+      "3": "corrupt — non-empty but unparseable JSON"
     }
   },
   "env_knobs": {
@@ -78,7 +87,9 @@
     "plan-claim.sh must pass --ttl-seconds to sink-lock read-holder so the stale flag is consistent with the TTL acquire uses. Omitting it causes read-holder to use sink-lock's default (7200), which can report stale:false for a slug that acquire would actually take over (2700 basis).",
     "CLAIM_HELD flag must be set to exactly 1 or 0 by the caller immediately after the acquire branch resolves. All downstream heartbeat and release guards evaluate ${CLAIM_HELD:-0}; a missing assignment causes heartbeats to silently skip and the lock to leak.",
     "z-audit-plan fires an early heartbeat before the slug-select AskUserQuestion even before the claim gate fully resolves — only if CLAIM_RC==0 at that point. This is distinct from the main phase-boundary heartbeat cadence.",
-    "Hermes cross-plan acquires claim locks in sorted ascending slug order (deadlock-free). Any new cross-plan callers must follow the same ordering invariant."
+    "Hermes cross-plan acquires claim locks in sorted ascending slug order (deadlock-free). Any new cross-plan callers must follow the same ordering invariant.",
+    "commands/z-plan.md and commands/z-audit-plan.md no longer exist in this repo (commands/ was retired in the 2026-06-20 skills-atom re-flip). The caller-side wiring is exclusively in skills/z-plan/SKILL.md and skills/z-audit-plan/SKILL.md; any doc or memory referencing the old commands/ paths is stale.",
+    "reap-stale is a distinct, purely read-only subcommand (not part of the acquire/heartbeat/release triad). It is consumed by z-reconcile for workspace-audit lock classification and must never be used to justify an automatic rm — a lock with a live daemon PID must never be removed regardless of reap-stale's reported state."
   ],
   "memories": []
 }

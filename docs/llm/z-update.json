@@ -1,13 +1,16 @@
 {
   "concept": "z-update",
-  "last_updated": "2026-06-24",
+  "summary": "Deterministic z-harness update path: a thin /z-update host skill delegates all release-manifest fetch, version comparison, and install-mode dispatch to z_harness_cli/commands/update.py + release.py, with install.sh owning the actual symlink/tarball plugin install and atomic-swap mechanics.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "install.sh",
     "scripts/bundle-plugin.sh",
     "scripts/version.sh",
     "skills/z-update/SKILL.md",
-    "docs/human/INSTALL.md"
+    "docs/human/INSTALL.md",
+    "z_harness_cli/commands/update.py",
+    "z_harness_cli/release.py"
   ],
   "confidence": "high",
   "entry_points": [
@@ -16,70 +19,112 @@
       "line": 10,
       "symbol": "/z-update",
       "kind": "skill",
-      "summary": "Locate plugin root, detect install mode, run update path, refresh caches, emit harness_updated."
+      "summary": "Thin host wrapper; no manifest/tarball logic in prose, delegates entirely to the CLI."
     },
     {
       "file": "skills/z-update/SKILL.md",
-      "line": 64,
-      "symbol": "legacy layout detection",
+      "line": 18,
+      "symbol": "z-harness update dispatch",
       "kind": "section",
-      "summary": "Detect exports-only legacy layout and emit migration_nudge without blocking update."
+      "summary": "Runs `z-harness update` or falls back to `python3 -m z_harness_cli update`."
     },
     {
-      "file": "skills/z-update/SKILL.md",
-      "line": 204,
-      "symbol": "Codex cache refresh",
-      "kind": "section",
-      "summary": "Rerun codex plugin add after symlink update when marketplace metadata exists."
+      "file": "z_harness_cli/commands/update.py",
+      "line": 266,
+      "symbol": "run",
+      "kind": "fn",
+      "summary": "Entry point: fetch manifest, compare_versions, dispatch by result (equal/newer/dev_unknown/stale)."
     },
     {
-      "file": "skills/z-update/SKILL.md",
-      "line": 213,
-      "symbol": "Claude cache refresh",
-      "kind": "section",
-      "summary": "Resolve installed marketplace key, update marketplace/plugin cache, verify cached SHA."
+      "file": "z_harness_cli/commands/update.py",
+      "line": 139,
+      "symbol": "_apply_update",
+      "kind": "fn",
+      "summary": "Routes to uv upgrade, symlink update, or reinstall-hint based on detected install mode."
+    },
+    {
+      "file": "z_harness_cli/commands/update.py",
+      "line": 153,
+      "symbol": "_apply_uv_upgrade",
+      "kind": "fn",
+      "summary": "Downloads wheel, verifies sha256 against manifest, installs via `uv tool install --upgrade`; aborts on mismatch."
+    },
+    {
+      "file": "z_harness_cli/commands/update.py",
+      "line": 195,
+      "symbol": "_apply_symlink_update",
+      "kind": "fn",
+      "summary": "Aborts on dirty checkout; otherwise `git pull --ff-only` only. Does not refresh Claude/Codex plugin caches."
+    },
+    {
+      "file": "z_harness_cli/commands/update.py",
+      "line": 243,
+      "symbol": "_apply_reinstall_hint",
+      "kind": "fn",
+      "summary": "Tarball/runtime installs are never self-swapped by update; prints manifest-backed `z-harness install --force` command and exits 1."
+    },
+    {
+      "file": "z_harness_cli/release.py",
+      "line": 124,
+      "symbol": "fetch_manifest",
+      "kind": "fn",
+      "summary": "Fetches/parses latest.json from Z_HARNESS_RELEASE_URL or DEFAULT_RELEASE_URL; rejects unsupported schema_version."
+    },
+    {
+      "file": "z_harness_cli/release.py",
+      "line": 274,
+      "symbol": "compare_versions",
+      "kind": "fn",
+      "summary": "Semver / dev-SHA / PEP440 comparison producing EQUAL, NEWER, DEV_UNKNOWN, or STALE."
     },
     {
       "file": "install.sh",
-      "line": 126,
+      "line": 130,
       "symbol": "install_claude_symlink",
       "kind": "fn",
       "summary": "Create Claude Code plugin symlink to live repo."
     },
     {
       "file": "install.sh",
-      "line": 151,
+      "line": 155,
       "symbol": "write_codex_marketplace",
       "kind": "fn",
       "summary": "Write/update Codex personal marketplace entry."
     },
     {
       "file": "install.sh",
-      "line": 191,
+      "line": 195,
       "symbol": "install_codex_symlink",
       "kind": "fn",
       "summary": "Create Codex plugin symlink and register plugin."
     },
     {
       "file": "install.sh",
-      "line": 264,
+      "line": 477,
       "symbol": "extract_tarball_to",
       "kind": "fn",
-      "summary": "Download/extract tarball and atomically move destination."
+      "summary": "Download/extract tarball and hand off to staged atomic replacement."
+    },
+    {
+      "file": "install.sh",
+      "line": 343,
+      "symbol": "replace_with_staged_install",
+      "kind": "fn",
+      "summary": "Stage existing install aside, move new payload into place, roll back on failure."
     },
     {
       "file": "scripts/bundle-plugin.sh",
       "line": 1,
       "symbol": "bundle-plugin.sh",
       "kind": "module",
-      "summary": "Build audited distributable tarball."
+      "summary": "Build audited distributable tarball; resolves version via version.sh, runs audit-tarball.sh."
     },
     {
       "file": "scripts/version.sh",
       "line": 1,
       "symbol": "version.sh",
       "kind": "module",
-      "summary": "Emit z-harness version stamp JSON."
+      "summary": "Emit z-harness version stamp JSON (sha/dirty/branch/tag) used at run_start events."
     }
   ],
   "depends_on": [
@@ -90,18 +135,20 @@
   "consumed_by": [],
   "invariants": [
     "Symlink mode aborts on dirty git tree and uses git pull --ff-only; never force-merges or resets.",
-    "Tarball and runtime modes use full-directory atomic swap with rollback on failed second move.",
-    "Runtime installs update runtime/ tree by replacing the full plugin directory.",
-    "Placeholder release URL must not be used; tarball/runtime update requires a real Z_HARNESS_RELEASE_URL.",
-    "Claude Code and Codex caches are refreshed after successful symlink updates when their CLIs/registries are present.",
-    "harness_updated includes mode, old_version, and new_version."
+    "Tarball/runtime installs are never self-swapped by `z-harness update` / `/z-update`; update only prints a manifest-backed `z-harness install --target=<host> --force` reinstall command and exits 1.",
+    "install.sh tarball replacement is staged and atomic, with rollback to the pre-existing backup if either move fails (replace_with_staged_install / replace_two_staged_installs_atomically).",
+    "uv wheel upgrade verifies sha256 against the manifest before installing; mismatch aborts with exit 1.",
+    "Newer manifest schema_version than SUPPORTED_SCHEMA_VERSION (1) is a hard error, never a silent proceed.",
+    "harness_updated-style version stamps come from scripts/version.sh (sha/dirty/branch/tag), independent of the update CLI's own version comparison.",
+    "No auto-update without an explicit `z-harness update` / `/z-update` invocation; MCP `z_update` tool is read-only."
   ],
   "gotchas": [
+    "As of the 2026-06-29 SKILL.md rewrite, symlink-mode update no longer refreshes the Claude Code plugin cache or re-runs `codex plugin add` after `git pull --ff-only` — only install.sh's install path (not update) touches the Codex marketplace file. Hosts loading from a versioned plugin cache may not pick up the update without a manual restart or a manual `codex plugin add z-harness@personal`.",
     "Claude Code loads from a versioned plugin cache, not necessarily the live repo symlink.",
-    "Pinned plugin version strings must be bumped or cache invalidation may not happen.",
-    "Legacy exports-only layout emits migration_nudge but still proceeds.",
-    "A tarball containing .git would be classified as symlink mode.",
-    "install.sh --legacy is deprecated and transitional."
+    "A tarball containing .git would be classified as a symlink install by _detect_plugin_install (checks .git existence + payload shape before runtime/-only tarball heuristic).",
+    "install.sh --legacy is deprecated and transitional (copies frozen scripts/export-*.py exporters; symlink mode is a no-op since the symlink already exposes them).",
+    "SKILL.md intentionally contains zero manifest/tarball logic; any behavior change belongs in z_harness_cli/commands/update.py, z_harness_cli/release.py, or install.sh — not in the skill prose.",
+    "The given source_file list from callers historically omitted z_harness_cli/commands/update.py and z_harness_cli/release.py even though they now hold nearly all update behavior; this refresh added them."
   ],
   "memories": []
 }

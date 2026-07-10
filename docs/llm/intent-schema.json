@@ -1,6 +1,7 @@
 {
   "concept": "intent-schema",
-  "last_updated": "2026-06-24",
+  "summary": "Schema validator/mutator for INTENT.md and LEDGER.md (INTENT-mode planning contract + BFS realization trail), plus TASKS.md/SESSION.md query helpers used by /z-execute and the context curator.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/intent-schema.py",
@@ -10,84 +11,119 @@
   "entry_points": [
     {
       "file": "scripts/intent-schema.py",
-      "line": 216,
+      "line": 219,
       "symbol": "validate_intent",
       "kind": "fn",
       "summary": "Validates INTENT.md frontmatter (6 fields) + required sections per level; returns ValidationResult"
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 297,
+      "line": 300,
       "symbol": "lint_criteria",
       "kind": "fn",
       "summary": "Flags bare 'runs'/'works' criteria with no observable object; returns list[LintFailure]"
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 339,
+      "line": 342,
       "symbol": "validate_ledger",
       "kind": "fn",
       "summary": "Validates LEDGER.md frontmatter (artifact, slug, intent_frozen_at)"
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 439,
-      "symbol": "freeze_intent",
-      "kind": "fn",
-      "summary": "Idempotent UTC ISO stamp into frozen_at; returns (was_frozen_now, frozen_at_value)"
-    },
-    {
-      "file": "scripts/intent-schema.py",
-      "line": 377,
+      "line": 380,
       "symbol": "reopen_intent",
       "kind": "fn",
       "summary": "Sets frozen_at back to 'pending' for amendment; idempotent; returns (was_reopened, 'pending')"
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 494,
+      "line": 442,
+      "symbol": "freeze_intent",
+      "kind": "fn",
+      "summary": "Idempotent UTC ISO stamp into frozen_at; returns (was_frozen_now, frozen_at_value)"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 497,
       "symbol": "bootstrap_ledger",
       "kind": "fn",
       "summary": "Creates LEDGER.md with required frontmatter if absent; idempotent; returns bool"
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 635,
+      "line": 713,
+      "symbol": "validate_tasks",
+      "kind": "fn",
+      "summary": "Phase 8 TASKS.md sanity checks: canonical headings, acyclic deps, criterion coverage/deferral"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 865,
       "symbol": "evaluate_acceptance",
       "kind": "fn",
       "summary": "Per-criterion met|unmet|unknown + done|continue verdict from INTENT+LEDGER+diff; conservative"
     },
     {
+      "file": "scripts/intent-schema.py",
+      "line": 1102,
+      "symbol": "compute_aggregate_review_gate",
+      "kind": "fn",
+      "summary": "Computes /z-execute final aggregate-review required/not-required decision from TASKS+workstreams+flags"
+    },
+    {
       "file": "scripts/session-helpers.sh",
-      "line": 66,
+      "line": 75,
       "symbol": "done_set_hash",
       "kind": "fn",
       "summary": "sha256 of sorted [x] task-ids; canonical resume key shared between curator and orchestrator"
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 197,
+      "line": 155,
+      "symbol": "last_done_task",
+      "kind": "fn",
+      "summary": "Id of the last [x] heading in file order; human hint only, not load-bearing"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 208,
+      "symbol": "completed_task_ids",
+      "kind": "fn",
+      "summary": "Comma-separated ids for every [x] task in file order; checkpoint-boundary completion set for curator prompts"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 266,
       "symbol": "next_pending_task",
       "kind": "fn",
       "summary": "First [ ] task whose declared deps are all in done-set"
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 321,
+      "line": 390,
+      "symbol": "task_status_counts",
+      "kind": "fn",
+      "summary": "Prints done/pending/in_progress/other counts; used by check-compaction.sh and context-curator done_count"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 474,
       "symbol": "last_curated_marker",
       "kind": "fn",
       "summary": "Timestamp of most recent context_curated event from metrics.jsonl"
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 369,
+      "line": 522,
       "symbol": "session_frontmatter_field",
       "kind": "fn",
       "summary": "Extracts scalar YAML frontmatter field from SESSION.md"
     },
     {
       "file": "scripts/session-helpers.sh",
-      "line": 423,
+      "line": 576,
       "symbol": "validate_intent",
       "kind": "fn",
       "summary": "Shell wrapper delegating to intent-schema.py validate-intent (+ optional lint)"
@@ -109,7 +145,9 @@
     "freeze_intent is idempotent: already-frozen INTENT.md returns (False, existing_ts) without modification",
     "reopen_intent operates only on the frontmatter block; body text with matching 'frozen_at:' lines is never touched",
     "bootstrap_ledger is creation-only: existing LEDGER.md with any content is left untouched",
-    "All session-helpers.sh functions are stdout-only, exit 0, no side effects"
+    "All session-helpers.sh functions are stdout-only, exit 0, no side effects",
+    "validate_tasks requires every current-level criterion to be advanced by a task's Advances line or explicitly deferred; unions of coverage across Advances + deferred must equal the target criterion set",
+    "compute_aggregate_review_gate is a pure OR of 6 triggers (task_count>8, workstream_count>1, parallel_batch_count>1, high_risk_flag, criteria_mapped_to_multiple_workstreams, metadata_missing_or_invalid); missing/unreadable/invalid workstreams or execution-strategy input is itself a trigger, not a silent skip"
   ],
   "gotchas": [
     "evaluate_acceptance: ledger-cited criterion with empty or missing diff is 'unknown' (not 'met') — no diff = cannot confirm code changed",
@@ -118,7 +156,10 @@
     "Level L1 (quick) requires only Acceptance checklist; L2 (standard) and L3 (deep) also require Not doing + Consider for this",
     "planning_mode valid values: 'intent' or 'full' only — any other value is a validation error",
     "lint heuristic: 'runs and exits 0' passes; bare 'runs' or 'works' with only filler words after it fails",
-    "CLI exit codes: 0=valid/done, 1=errors/continue, 2=usage error — evaluate-acceptance exits 1 for VERDICT:continue"
+    "CLI exit codes: 0=valid/done, 1=errors/continue, 2=usage error — evaluate-acceptance exits 1 for VERDICT:continue",
+    "validate_tasks treats a task's '**Depends on:**' as invalid unless it is the literal em-dash '—'; any other value is flagged even while still being parsed into the dependency graph for cycle detection",
+    "compute_aggregate_review_gate only counts tasks whose heading carries a done marker ([x] or {status}); active workstreams exclude status=='failed'; a done task with no workstream mapping forces workstreams_missing_task_mapping",
+    "task_status_counts and completed_task_ids/last_done_task were added to session-helpers.sh after the prior doc snapshot — task_status_counts backs check-compaction.sh + context-curator done_count, completed_task_ids backs curator checkpoint-boundary prompts"
   ],
   "memories": [
     {

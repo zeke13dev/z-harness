@@ -1,6 +1,7 @@
 {
   "concept": "invariants",
-  "last_updated": "2026-06-24",
+  "summary": "Canonical optional registry of stable repo-specific behavioral invariants (docs/INVARIANTS.json) consumed by /z-test, /z-execute, /z-review-all, and adaptive INTENT.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "docs/INVARIANTS.json"
@@ -12,32 +13,57 @@
       "line": 1,
       "symbol": "invariants[]",
       "kind": "registry",
-      "summary": "Schema v1 registry with 14 stable invariant entries (inv_001, inv_002, inv_003, inv_004, inv_005, inv_006, inv_007, inv_008, inv_009, inv_010, inv_011, inv_012, inv_013, inv_014)."
+      "summary": "Schema v1 registry with 14 stable invariant entries (inv_001..inv_014)."
+    },
+    {
+      "file": "docs/schemas/invariant.schema.json",
+      "line": 1,
+      "symbol": "Invariant Entry schema",
+      "kind": "module",
+      "summary": "Required fields, tag enum, severity enum (blocker/major/minor), source enum for each entry."
+    },
+    {
+      "file": "scripts/validate-invariants.py",
+      "line": 1,
+      "symbol": "validate-invariants.py",
+      "kind": "fn",
+      "summary": "CLI validator: id uniqueness, tag-set subset, fixture_schema/defaults consistency, severity/source enums."
+    },
+    {
+      "file": "scripts/invariant-check.sh",
+      "line": 1,
+      "symbol": "invariant-check.sh",
+      "kind": "fn",
+      "summary": "CI gate: runs tests, exits non-zero on uncovered blocker invariants or mandatory-test failure."
     }
   ],
   "depends_on": [
     "z-test",
+    "z-execute",
     "z-review-all",
     "adaptive-intent"
   ],
   "consumed_by": [
     "z-test",
+    "z-execute",
     "z-review-all",
     "adaptive-intent"
   ],
   "invariants": [
-    "INVARIANTS.json is user-authored and optional; absence is normal and consumers fall back gracefully.",
-    "IDs are stable inv_NNN values and must not be reused.",
-    "Writes to the registry must be atomic.",
-    "Tags must remain within the controlled docs/memory tag set.",
-    "fixture_defaults requires fixture_schema.",
-    "Optional sighting fields may be absent until a review run observes a match."
+    "INVARIANTS.json is user-authored and optional; no generator exists; absence is normal and consumers fall back gracefully.",
+    "IDs are stable inv_NNN values (zero-padded 3-digit) and must not be reused; rename = new id + deprecate old.",
+    "Writes to the registry must be atomic (tempfile + fsync + os.replace()).",
+    "Tags must remain within the controlled set in docs/llm/TAGS.txt.",
+    "fixture_defaults requires fixture_schema and must validate against it.",
+    "severity must be one of blocker/major/minor; source must be one of spec/plan/user-concern/code-review/axiom-derived.",
+    "source_files must be non-empty."
   ],
   "gotchas": [
     "Do not auto-generate invariants from vague prose.",
-    "Entry source_files inside the registry can drift independently from the invariant behavior.",
-    "Current registry contains 14 entries.",
-    "Some old source paths in entry metadata may need future cleanup while the behavior remains valid."
+    "Entry source_files inside the registry can drift independently from the invariant behavior it describes.",
+    "Current registry contains 14 entries, all severity blocker or major, all source=spec.",
+    "sighting_count/last_sighting/anchor_module are schema-declared as set by 'z-review-all Phase 5.5 on first match', but the actual Phase 5.5 in skills/z-review-all/SKILL.md accumulates tier2-context.json review patterns, not per-invariant sightings -- treat as reserved/forward-looking, not live.",
+    "/z-init-docs --invariants discovery and /z-maintain-docs source_files-mtime staleness detection are referenced in schema field descriptions but have no corresponding logic in skills/z-init-docs/SKILL.md or skills/z-maintain-docs/SKILL.md today."
   ],
   "memories": []
 }

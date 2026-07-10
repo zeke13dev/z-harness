@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-07-03
+> Last updated: 2026-07-09
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview

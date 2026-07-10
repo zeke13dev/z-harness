@@ -1,6 +1,6 @@
 # plan-claim — Slug-level claim lock
 
-> Last updated: 2026-06-19
+> Last updated: 2026-07-09
 > Covers source: scripts/plan-claim.sh, scripts/sink-lock.sh, scripts/plan-path.sh (claims_dir), skills/z-plan/SKILL.md, skills/z-audit-plan/SKILL.md
 
 ## Overview
@@ -12,7 +12,9 @@ The claim lock is orthogonal to the **lockless awareness registry** (`scripts/ac
 - **Awareness registry** — lockless, advisory, per-run JSON records in `<base>/active-plans/`. Overlap output is never a hard gate (Invariant 1).
 - **Claim lock** — hard per-slug flock in `<base>/active-plans/claims/<slug>.lock`. First acquirer wins; contender is told to wait, abort, or use a new slug.
 
-The Hermes parallelism layer (`scripts/hermes-execute.py`, `scripts/hermes/cross_plan.py`) also acquires claim locks directly when scheduling multiple plans concurrently — always in sorted ascending slug order to guarantee deadlock-freedom (INV-6 in hermes-orchestration).
+The Hermes parallelism layer (`scripts/hermes-execute.py`, `scripts/hermes/cross_plan.py`) also acquires claim locks directly when scheduling multiple plans concurrently — always in sorted ascending slug order to guarantee deadlock-freedom (INV-6 in hermes-orchestration). `/z-reconcile` is a third, read-only consumer: it uses the `reap-stale` subcommand to classify lock files during a workspace audit without ever acquiring, releasing, or killing anything.
+
+**Note on source of truth:** the caller-side wiring for `/z-plan` and `/z-audit-plan` lives in `skills/z-plan/SKILL.md` and `skills/z-audit-plan/SKILL.md`, not in `commands/*.md` — the `commands/` directory was retired (skills-atom re-flip, 2026-06-20) and no longer exists in this repo.
 
 ---
 
@@ -66,10 +68,11 @@ The orchestrator MUST set `CLAIM_HELD` to exactly `1` or `0` immediately after t
 
 ## Key entry points
 
-- `scripts/plan-claim.sh:215` — `cmd_acquire` — Acquire slug claim lock; exit 0=acquired/self-reentry/disabled, 1=live-peer, 2=stale-takeover, 3=corrupt
-- `scripts/plan-claim.sh:300` — `cmd_heartbeat` — Refresh TTL and detect lost claim; exit 0=ok/transient-error, 9=confirmed-lost
-- `scripts/plan-claim.sh:368` — `cmd_release` — Release lock best-effort using `--expected-holder` guard; always exit 0
-- `scripts/plan-claim.sh:395` — `cmd_status` — Read-only holder JSON; exit 0=printed, 3=corrupt
+- `scripts/plan-claim.sh:222` — `cmd_acquire` — Acquire slug claim lock; exit 0=acquired/self-reentry/disabled, 1=live-peer, 2=stale-takeover, 3=corrupt
+- `scripts/plan-claim.sh:307` — `cmd_heartbeat` — Refresh TTL and detect lost claim; exit 0=ok/transient-error, 9=confirmed-lost
+- `scripts/plan-claim.sh:375` — `cmd_release` — Release lock best-effort using `--expected-holder` guard; always exit 0
+- `scripts/plan-claim.sh:402` — `cmd_status` — Read-only holder JSON; exit 0=printed, 3=corrupt
+- `scripts/plan-claim.sh:421` — `cmd_reap_stale` — Read-only stale check (delegates to `sink-lock.sh check-stale`); NEVER acquires/releases/kills; exit 0=held, 1=free, 2=stale, 3=corrupt
 - `scripts/plan-path.sh:346` — `claims_dir` — Returns `<z_harness_base>/active-plans/claims`
 - `scripts/sink-lock.sh` — `sink-lock.sh` — Low-level flock+daemon+TTL primitive; plan-claim.sh delegates all flock mechanics to it
 
@@ -91,6 +94,7 @@ Thin, non-interactive wrapper over `sink-lock.sh`. Computes the canonical lock p
 | `heartbeat` | `--slug S --run-id R --session SID --command C [--ttl N]` | Refresh TTL; detect lost claim |
 | `release` | `--slug S --run-id R --session SID --command C [--ttl N]` | Release the lock (best-effort) |
 | `status` | `--slug S [--ttl N]` | Print holder JSON (read-only, no events) |
+| `reap-stale` | `--slug S [--ttl N]` | Read-only stale classification (no events; never mutates the lock) |
 
 #### Exit codes — `acquire`
 
@@ -125,6 +129,19 @@ Always exits 0 (best-effort). Uses `--expected-holder` so a non-matching holder 
 
 **The holder JSON printed by `status` and by `acquire` (on exit 1/2) is best-effort and TOCTOU.** It is re-read *after* `sink-lock` already returned an exit code, so the holder may have changed or been freed in the interval. The gate keys on the exit code, not on the JSON — the JSON is display-only.
 
+#### Exit codes — `reap-stale`
+
+Read-only; delegates to `sink-lock.sh check-stale`. Prints exactly one lowercase word to stdout:
+
+| Code | Word printed | Meaning |
+|------|--------------|---------|
+| 0 | `held` | Lock is live and held by a live process |
+| 1 | `free` | No lock file or empty |
+| 2 | `stale` | Lock held by a dead PID or expired heartbeat |
+| 3 | `corrupt` | Non-empty but unparseable JSON |
+
+`reap-stale` NEVER acquires, releases, or kills anything — it is a pure classification read used by `/z-reconcile` (see below) to decide whether a lock file is safe to manually remove. It is not part of the `/z-plan` / `/z-audit-plan` claim-first flow.
+
 ### `scripts/sink-lock.sh`
 
 Low-level flock + heartbeat + stale-takeover primitive. `plan-claim.sh` delegates all flock mechanics to it. The `read-holder` subcommand is used internally by `plan-claim.sh` to read the current holder without re-implementing `.hb.lock` serialization:
@@ -158,7 +175,7 @@ At exit-2 abort, release must be called first (we hold the lock we just took ove
 
 `plan-claim.sh heartbeat` is called:
 
-1. At every phase boundary (phase_end/phase-start telemetry points already in the commands).
+1. At every phase boundary (phase_end/phase-start telemetry points already in the skills).
 2. **Before every `AskUserQuestion`** — this is the **load-bearing call**: it extends the TTL to survive the upcoming user-wait. The after-gate heartbeat (`user_wait_end`) is optional when the next phase heartbeat is imminent.
 
 In `/z-audit-plan`, there is also an early heartbeat before the slug-select `AskUserQuestion` that can fire before the main claim gate resolves (guarded by `CLAIM_RC==0` at that point).
@@ -188,24 +205,28 @@ Consequence: after a hard-kill, the detached daemon **leaks** until the next sam
 
 ## Manual unlock
 
-If a plan is abandoned abnormally (hard-kill + no resume), the claim can be manually cleared:
+If a plan is abandoned abnormally (hard-kill + no resume), the claim can be manually cleared. Prefer `/z-reconcile`, which drives this exact workflow through `plan-claim.sh reap-stale` and only proposes removal for locks it has confirmed are dead:
 
 ```bash
 # Find the claims directory
 bash scripts/plan-path.sh claims_dir
 
-# Remove the lock files for a specific slug
+# Classify a specific slug's lock (read-only, no mutation)
+bash scripts/plan-claim.sh reap-stale --slug <slug>
+
+# If reap-stale reports "stale" or "free" AND the daemon PID is confirmed dead,
+# remove the lock files for that slug:
 rm <claims_dir>/<slug>.lock <claims_dir>/<slug>.lock.hb.lock
 ```
 
-This is safe once you have confirmed no other session holds the slug (e.g. via `plan-claim.sh status --slug <slug>`).
+This is safe once you have confirmed no other session holds the slug (e.g. via `plan-claim.sh status --slug <slug>` or `reap-stale`). Never `rm` a lock file directly without first calling `reap-stale` — a lock whose daemon PID is alive must never be removed, regardless of what `reap-stale` reports.
 
 ---
 
 ## Env knobs
 
 | Env var | Default | Scope | Description |
-|---------|---------|-------|-------------|
+|---------|---------|-------|--------------|
 | `Z_HARNESS_CLAIM_TTL_SECS` | `2700` | Env-only | TTL (seconds) for claim liveness. A heartbeat not refreshed within this window triggers a stale-takeover on the next `acquire`. Read by `plan-claim.sh` directly; not a TOML config key; not emitted by `export-env`. |
 | `Z_HARNESS_CLAIM_OVERRIDE` | _(unset)_ | Env-only | Set to `1` to allow an unattended (`Z_HARNESS_NO_ASK`) run to proceed through contention (exit 1), stale-takeover (exit 2), or corrupt lock (exit 3) without aborting. Default-safe: absent or `0` = unattended contention always aborts. |
 | `Z_HARNESS_CLAIM_DISABLE` | _(unset)_ | Env-only | Set to `1` to skip all claim locking entirely. Every subcommand (`acquire`, `heartbeat`, `release`) becomes an immediate exit-0 no-op. Use as an escape hatch (CI, testing). When disabled, `release` is a safe no-op and the release path is not gated on event presence — it always exits 0 regardless of whether an acquire event was emitted. |
@@ -227,20 +248,22 @@ This is safe once you have confirmed no other session holds the slug (e.g. via `
 | `heartbeat_error` | Heartbeat exit 0 due to transient read failure (non-fatal) |
 | `registry_error` | Acquire exit 3 (corrupt lock) |
 
-Event emission is non-fatal — claim correctness never depends on telemetry. Failures in `log-event.sh` are swallowed.
+`status` and `reap-stale` emit no events (pure reads). Event emission is otherwise non-fatal — claim correctness never depends on telemetry. Failures in `log-event.sh` are swallowed.
 
 ---
 
 ## Edge cases / gotchas
 
 - **CLAIM_HELD flag missing** — all downstream heartbeat and release guards evaluate `${CLAIM_HELD:-0}` silently to false; the lock leaks and heartbeats never fire. Setting this flag is not optional.
-- **Slug with `/` or `..`** — rejected at acquire with exit 2/usage. Slugs are kebab-safe by construction; this is defense-in-depth.
+- **Slug with `/` or `..`** — rejected at acquire (and at `status`/`reap-stale`, which also validate the slug) with exit 2/usage. Slugs are kebab-safe by construction; this is defense-in-depth.
 - **Empty/missing base** — `plan-path.sh:claims_dir()` inherits the FATAL empty-base guard from `z_harness_base()`; the error is surfaced before any lock path is composed.
 - **Event-logging failure** — non-fatal; claim correctness does not depend on telemetry.
 - **Transient read error during heartbeat** — emits `heartbeat_error`, exits 0 (non-fatal). This is **not** exit 9. Only a confirmed ownership change (different holder present, or lock free) triggers exit 9.
 - **`Z_HARNESS_CLAIM_DISABLE=1` with release** — release is a safe no-op; it does not gate on an acquire event being present. The release path always exits 0.
 - **plan-claim.sh `--ttl-seconds` mismatch** — `plan-claim.sh` must pass its own TTL to `sink-lock read-holder`. Omitting it causes `read-holder` to use its own default (7200s), producing a `stale:false` report for a lock that `acquire` (using 2700s basis) would actually take over.
 - **Hermes cross-plan lock ordering** — `scripts/hermes/cross_plan.py` acquires claim locks in sorted ascending slug order. Any new cross-plan caller must follow the same convention to preserve deadlock-freedom.
+- **`reap-stale` is read-only by design** — it must never be used as a substitute for `acquire`/`release`. `/z-reconcile` never removes a lock file itself without confirming the daemon PID is dead, even when `reap-stale` reports `stale`.
+- **`commands/*.md` no longer exists** — the caller-side wiring for `/z-plan` and `/z-audit-plan` lives entirely in `skills/z-plan/SKILL.md` and `skills/z-audit-plan/SKILL.md`. Any reference to `commands/z-plan.md` or `commands/z-audit-plan.md` is stale (retired 2026-06-20, skills-atom re-flip).
 
 ---
 
@@ -248,6 +271,7 @@ Event emission is non-fatal — claim correctness never depends on telemetry. Fa
 
 - **`skills/z-plan/SKILL.md`** — calls `acquire` at setup (claim-first, before register), `heartbeat` at every phase boundary and before every AskUserQuestion, `release` at every halt path and at Phase 9. Offers `use-new-slug` on exit-1 contention.
 - **`skills/z-audit-plan/SKILL.md`** — same heartbeat/release pattern; no `use-new-slug` option (slug is fixed to the plan being audited); early heartbeat before slug-select gate.
+- **`skills/z-reconcile/SKILL.md`** — read-only consumer. Uses `plan-claim.sh reap-stale --slug <slug>` (via `scripts/plan-path.sh claims_dir` for the lock path) to classify each existing lock file as `held`/`free`/`stale`/`corrupt`/`unknown` as part of a workspace audit. Never acquires, releases, heartbeats, or kills a daemon; a lock is only proposed for manual removal after confirming the daemon PID is dead.
 - **`scripts/sink-lock.sh`** — provides the underlying flock + daemon + TTL mechanics. `plan-claim.sh` is a thin policy wrapper.
 - **`scripts/plan-path.sh`** — provides `claims_dir()` (the lock directory path resolver).
 - **`scripts/active-plan-registry.py`** — **orthogonal**. The registry stays lockless and advisory. The claim lock and the registry write to different files under the same external base. Neither reads nor modifies the other.

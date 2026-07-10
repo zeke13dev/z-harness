@@ -1,40 +1,45 @@
 # Plan Layout Migration
 
-> Last updated: 2026-06-03
+> Last updated: 2026-07-09
 > Covers source: scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/log-event.sh, docs/human/PLAN-LAYOUT.md
 
 ## Overview
 
 All z-harness plan artifacts resolve under an external artifact base directory, returned by `z_harness_base()` in `scripts/plan-path.sh`. The base follows a 5-tier fallback chain: an explicit `Z_HARNESS_BASE_DIR` env var (tier 1, escape hatch), then `$XDG_STATE_HOME/z-harness/<repo-id>` (tier 2), then `$HOME/.local/state/z-harness/<repo-id>` (tier 3), then `<git-common-dir>/z-harness` (tier 4), then `$(pwd)/z-harness` (tier 5, last resort). The external tiers are active by default (`Z_HARNESS_EXTERNAL_DEFAULT` unset equals 1), meaning plans are stored outside the repo worktree and survive a `git clean`. Set `Z_HARNESS_EXTERNAL_DEFAULT=0` to revert to the old in-repo tier-5 behavior.
 
-Within the chosen base the directory structure is: `<base>/plans/<slug>/` for plan artifacts, `<base>/active-plans/` for the coordination registry, `<base>/followups/` for the follow-up queue, and `<base>/metrics.jsonl` for the aggregate event log. A `<git-common-dir>/.z-harness-base` anchor file locks tiers 2-5 to a single resolved path (split-brain guard); any mismatch is a hard fatal. Tier-1 explicit `Z_HARNESS_BASE_DIR` bypasses the anchor entirely so CI and benchmark environments can relocate artifacts without conflicting with a developer machine's pre-existing anchor.
+Within the chosen base the directory structure is: `<base>/plans/<slug>/` for plan artifacts, `<base>/active-plans/` for the coordination registry, `<base>/active-plans/claims/` for per-slug hard claim locks, `<base>/followups/` for the follow-up queue, and `<base>/metrics.jsonl` for the aggregate event log. A `<git-common-dir>/.z-harness-base` anchor file locks tiers 2-5 to a single resolved path (split-brain guard); any mismatch is a hard fatal. Tier-1 explicit `Z_HARNESS_BASE_DIR` bypasses the anchor entirely so CI and benchmark environments can relocate artifacts without conflicting with a developer machine's pre-existing anchor. `scripts/log-event.sh` is the shared append point for both per-run `events.jsonl` and the aggregate `metrics.jsonl`, and (since 2026-06-29) also fans out a best-effort Hermes liveness marker when `HERMES_MARKER_FILE` is set, so hermes-managed sessions get status/heartbeat signals for free without changing the base-resolution logic.
 
 ## Key entry points
 
-<!-- AUTO-START: entry-points -->
 - `scripts/plan-path.sh:9` — `z_harness_repo_id` — stable `<basename>-<8hex>` identifier from `git-common-dir` SHA-256; identical across all worktrees of one repo
 - `scripts/plan-path.sh:52` — `_z_harness_probe_writable` — non-littering writability probe; creates and removes temp tree without side effects
 - `scripts/plan-path.sh:112` — `_z_harness_anchor_write` — atomic tmpfile+rename anchor creation; validates on existing anchor, no-ops on tier-1
 - `scripts/plan-path.sh:178` — `z_harness_base` — 5-tier base resolver with anchor enforcement; source-loop guard via `_Z_HARNESS_RESOLVING_BASE`
+- `scripts/plan-path.sh:287` — `_z_harness_emit_base_resolved` — emits `base_resolved` telemetry at most once per process; guarded by the source-loop sentinel
+- `scripts/plan-path.sh:317` — `z_harness_base_override` — validates and returns `Z_HARNESS_BASE_DIR` or empty
 - `scripts/plan-path.sh:331` — `base_dir` — alias for `z_harness_base`; used in diagnostics and stats
 - `scripts/plan-path.sh:337` — `active_plans_dir` — returns `<base>/active-plans`; propagates `z_harness_base` failures
-- `scripts/plan-path.sh:346` — `followups_dir` — returns `<base>/followups`; propagates `z_harness_base` failures
-- `scripts/plan-path.sh:366` — `plan_dir` — `<base>/plans/<slug>` with `Z_HARNESS_PLANS_DIR` override; enforces absolute constraint when `Z_HARNESS_BASE_DIR` is also set
-- `scripts/plan-path.sh:404` — `legacy_plan_dir` — returns `z-harness/<slug>` (flat legacy path)
-- `scripts/plan-path.sh:416` — `legacy_plan_dir_secondary` — returns `z-harness/plans/<slug>` (in-repo plans/ legacy path)
-- `scripts/plan-path.sh:429` — `resolve_plan_path` — dual-read: tries new path first, then `z-harness/plans/<slug>`, then `z-harness/<slug>`; emits deprecation warning (once per parent PID)
-- `scripts/plan-path.sh:473` — `all_plan_slugs` — deduplicated slugs from both new layout and legacy flat under the resolved base
-- `scripts/plan-path.sh:317` — `z_harness_base_override` — validates and returns `Z_HARNESS_BASE_DIR` or empty
+- `scripts/plan-path.sh:346` — `claims_dir` — returns `<base>/active-plans/claims`; per-slug hard claim-lock files for `plan-claim.sh`
+- `scripts/plan-path.sh:355` — `followups_dir` — returns `<base>/followups`; propagates `z_harness_base` failures
+- `scripts/plan-path.sh:375` — `plan_dir` — `<base>/plans/<slug>` with `Z_HARNESS_PLANS_DIR` override; enforces absolute constraint when `Z_HARNESS_BASE_DIR` is also set
+- `scripts/plan-path.sh:413` — `legacy_plan_dir` — returns `z-harness/<slug>` (flat legacy path)
+- `scripts/plan-path.sh:425` — `legacy_plan_dir_secondary` — returns `z-harness/plans/<slug>` (in-repo plans/ legacy path)
+- `scripts/plan-path.sh:438` — `resolve_plan_path` — dual-read: tries new path first, then `z-harness/plans/<slug>`, then `z-harness/<slug>`; emits deprecation warning (once per parent PID)
+- `scripts/plan-path.sh:482` — `all_plan_slugs` — deduplicated slugs from both new layout and legacy flat under the resolved base
 - `scripts/migrate-plan-layout.sh:121` — `canonicalize_path` — resolves paths via Python3 realpath; exits on unresolvable path; prevents self-migration false-negative
 - `scripts/migrate-plan-layout.sh:167` — `detect_live_runs` — queries active-plan registry for `status:running`; exits on liveness query failure
 - `scripts/migrate-plan-layout.sh:299` — `safe_move` — copy -> byte-verify -> mtime-verify -> rm; refuse-on-conflict; idempotent
 - `scripts/migrate-plan-layout.sh:370` — `merge_metrics` — dedup-append of `metrics.jsonl`; idempotent across crash/re-run
 - `scripts/migrate-plan-layout.sh:485` — `migrate_plan_slug` — migrates one slug from both legacy sources to `<base>/plans/<slug>`
 - `scripts/migrate-plan-layout.sh:612` — `migrate_full` — full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup
-<!-- AUTO-END: entry-points -->
+- `scripts/log-event.sh:91` — `resolve_run_dir` — slug-aware run-archive-dir resolution; mid-flight legacy-dir detection when `Z_HARNESS_BASE_DIR` is unset
+- `scripts/log-event.sh:178` — Hermes marker fan-out — best-effort call into `emit-hermes-marker.sh` (status/heartbeat) when `HERMES_MARKER_FILE` is set; strict no-op otherwise
+
 ## How it interacts with others
 
 - `active-plan-registry` — `active_plans_dir()` feeds the registry's storage path; `migrate-plan-layout.sh` calls `active-plan-registry.py list --json` for the live-run barrier before any real move
+- `plan-claim` — `claims_dir()` (`<base>/active-plans/claims`) is the canonical lock-file directory for `plan-claim.sh`'s per-slug hard mutex
+- `hermes-orchestration` — `log-event.sh` best-effort forwards a status/heartbeat marker to `emit-hermes-marker.sh` whenever `HERMES_MARKER_FILE` is set (hermes-managed sessions only); this is additive and never changes base-resolution or event-append behavior for non-hermes runs
 - `scripts` — `log-event.sh` sources `plan-path.sh` to route events and metrics under the resolved base; source-loop guard (`_Z_HARNESS_RESOLVING_BASE`) prevents infinite recursion when `z_harness_base()` tries to emit `base_resolved`
 - `followup-sink` — `followups_dir()` from plan-path.sh is the canonical path for the follow-up queue; `migrate-plan-layout.sh` skips followups by default (`--with-followups` opts in) to avoid stranding in-flight locks
 - `commands` — every command that constructs plan-relative paths sources or invokes `plan-path.sh` helpers; inline `z-harness/` literals are a DRY violation and fail the command-coverage audit
@@ -51,6 +56,8 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `all_plan_slugs()` excludes the infrastructure names `plans`, `archive`, `adhoc`, `followups`, `improvements`, `active-plans`, `metrics.jsonl`, and `bench`.
 - The `--slug NAME` flag is required to migrate a flat `z-harness/TASKS.md` (no-slug layout); without it the file is skipped with a loud warning.
 - Archiving a session **worktree** that still holds in-repo z-harness state (legacy tier-5 layout) permanently discards those logs. `migrate-plan-layout.sh` cannot rescue them: it REFUSES while a run is `status:running` (invariant 8) and SKIPs on a non-empty target. Use `rescue-worktree-state.sh` instead — the inverse operation: it COPIES (never moves) the worktree's `plans/`, `archive/`, `improvements/`, `adhoc/`, and `metrics.jsonl` to the external base with no live-run barrier, displaced destination files are preserved as `*.pre-rescue`, and `metrics.jsonl` is dedup-appended. It never copies `active-plans/` (would create a zombie `running` record), `*.lock`, or `followups/`. Run it from inside the worktree before archiving.
+- `log-event.sh`'s Hermes marker fan-out (added 2026-06-29) is strictly best-effort and gated on `HERMES_MARKER_FILE`: `emit-hermes-marker.sh` exits 0 immediately when the env var is unset, so non-hermes runs pay only the cost of one cheap env-var test, not a subprocess fork. `kind` maps `context_pressure` events to `heartbeat`; every other event kind maps to `status`.
+- `claims_dir()` returns `<base>/active-plans/claims` (not `<base>/claims`) — the `plan-claim.sh` mutex stores per-slug `.lock` files there.
 
 ## Memories
 

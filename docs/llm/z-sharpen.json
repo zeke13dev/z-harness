@@ -1,12 +1,12 @@
 {
   "concept": "z-sharpen",
-  "last_updated": "2026-06-26",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-plan-redesign",
   "source_file": [
     "skills/z-sharpen/SKILL.md"
   ],
   "confidence": "high",
-  "summary": "Reusable bounded idea-sharpening component plus /z-sharpen wrapper. The component assesses clarity and alternatives, returns proceed/sharpen_more/route_to_brainstorm plus GRILL.md content when ready; the wrapper owns slug, collision, telemetry, final write, and advisory handoff.",
+  "summary": "Reusable bounded idea-sharpening component plus /z-sharpen wrapper. The component assesses clarity and alternatives, returns proceed/sharpen_more/route_to_brainstorm plus GRILL.md content when ready; the wrapper owns slug, collision, telemetry, final write, and advisory handoff. /z-plan now invokes the component as a mandatory pre-Premise-check step (0-sharpen).",
   "entry_points": [
     {
       "file": "skills/z-sharpen/SKILL.md",
@@ -91,7 +91,8 @@
     "Never exhaustively interrogate every dimension — that is /z-grill's job.",
     "Writes GRILL.md, never BRAINSTORM.md.",
     "Advisory handoff only — never auto-dispatches to /z-plan or /z-brainstorm.",
-    "No active-plan registration — /z-sharpen is not a plan-family command."
+    "No active-plan registration — /z-sharpen is not a plan-family command.",
+    "/z-plan's 0-sharpen step is mandatory and conversational (not opt-out) as of the intent-compiler redesign; it runs before the Premise check and before Phase 0.5's separate brainstorm-ask gate."
   ],
   "gotchas": [
     "Do not invoke the /z-sharpen wrapper from /z-brainstorm; use the reusable component contract only.",
@@ -99,7 +100,8 @@
     "route_to_brainstorm means parallel framing is useful, not that the component should write BRAINSTORM.md.",
     "Precontext-only collision is silent overwrite (no prompt); finished-plan collision requires AskUserQuestion.",
     "GRILL.md schema is shared with /z-grill — last-writer-wins if both run on the same slug.",
-    "No active-plan registration — /z-sharpen is not a plan-family command."
+    "No active-plan registration — /z-sharpen is not a plan-family command.",
+    "/z-plan dropped its old opt-out auto-sharpen path (--no-sharpen flag, workflow.auto_sharpen config, handoff-input heuristics) in favor of a mandatory 0-sharpen step; the sharpen_gate event schema changed to decision (existing_grill|sharpened) plus a new recommendation field (proceed|ask_brainstorm)."
   ],
   "memories": []
 }

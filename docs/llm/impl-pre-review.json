@@ -1,65 +1,57 @@
 {
   "concept": "impl-pre-review",
-  "last_updated": "2026-06-24",
+  "summary": "Opt-in Flash/Haiku pre-review layer: per-task /z-execute gate-down via runtime.impl_pre_review (skips codex on eligible low-tier CLEAN verdicts) plus the shared pre-reviewer/complexity-classifier subagents; both gate-down and the sibling runtime.pre_review context-prep cycles (z-review-all, z-audit-plan) default off and fail safe toward full reviewer coverage.",
+  "last_updated": "2026-07-09",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 3",
-  "source_files": [
+  "source_file": [
     "skills/z-execute/SKILL.md",
-    "skills/z-review-all/SKILL.md",
     "scripts/audit-preview-misses.sh",
     "agents/pre-reviewer.md",
     "agents/complexity-classifier.md"
   ],
   "confidence": "high",
-  "summary": "Opt-in Flash/Haiku pre-review features: per-task /z-execute gate-down via runtime.impl_pre_review and /z-review-all Phase 3.6 pre-review cycle via runtime.pre_review; both default off and fail safe toward full reviewer coverage.",
   "entry_points": [
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2082,
+      "line": 2628,
       "symbol": "runtime.impl_pre_review block",
       "kind": "module",
-      "summary": "Default-off per-task Flash gate-down; documents cost-inversion caveat and no-op fallthrough."
+      "summary": "Default-off per-task gate-down header; cost-inversion caveat and unconditional-init requirement."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2100,
+      "line": 2646,
       "symbol": "outer knob gate",
       "kind": "module",
       "summary": "Requires runtime.impl_pre_review=true and CYCLE==1; retry cycles bypass gate-down."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2105,
+      "line": 2651,
       "symbol": "Step 6.P1 tier-drift re-check",
       "kind": "module",
       "summary": "Strips cached **Complexity:** line, dispatches complexity-classifier, drift-up forces codex."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2150,
+      "line": 2696,
       "symbol": "Step 6.P2 low-tier gate-down",
       "kind": "module",
       "summary": "Eligible low-tier tasks call pre-reviewer; CLEAN emits review_gated_down and skips codex; blockers/majors prepend and escalate."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2229,
+      "line": 2775,
       "symbol": "Step 6.P3 medium/high advisory",
       "kind": "module",
-      "summary": "Flash may supply advisory prepend for medium/high tiers but cannot gate codex."
+      "summary": "Pre-reviewer may supply advisory FLASH_PREPEND for medium/high tiers but cannot gate codex."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 2255,
+      "line": 2804,
       "symbol": "PRE_REVIEW_GATED_DOWN guard",
       "kind": "module",
-      "summary": "Codex/self-review/advisory reviewer sections are nested under PRE_REVIEW_GATED_DOWN != 1."
-    },
-    {
-      "file": "skills/z-review-all/SKILL.md",
-      "line": 269,
-      "symbol": "Phase 3.6 pre-review cycle",
-      "kind": "module",
-      "summary": "Separate runtime.pre_review opt-in cycle; runs three pre-reviewer modes before final consultants."
+      "summary": "Codex/self-review/advisory reviewer sections nested under PRE_REVIEW_GATED_DOWN != 1 (closes at line 2916)."
     },
     {
       "file": "scripts/audit-preview-misses.sh",
@@ -86,28 +78,30 @@
   "depends_on": [
     "agents",
     "config",
-    "subagent-telemetry",
-    "z-review-all"
+    "subagent-telemetry"
   ],
   "consumed_by": [
     "z-execute",
-    "z-review-all"
+    "z-review-all",
+    "z-audit-plan"
   ],
   "invariants": [
     "Both knobs default false and ship inert.",
     "runtime.impl_pre_review gate-down only runs on cycle 1.",
-    "Flash provider unavailable or malformed verdict falls through to codex.",
+    "Pre-reviewer provider unavailable or malformed verdict falls through to codex.",
     "Only eligible low-tier CLEAN can set PRE_REVIEW_GATED_DOWN=1.",
-    "Medium/high Flash use is advisory-only.",
+    "Medium/high pre-reviewer use is advisory-only.",
     "PRE_REVIEW_GATE_DOWN and PRE_REVIEW_GATED_DOWN are distinct and load-bearing.",
-    "runtime.pre_review in /z-review-all never skips production consultants."
+    "runtime.pre_review in z-review-all and z-audit-plan never skips production consultants."
   ],
   "gotchas": [
     "Cost inversion is possible; audit review_gated_down misses before recommending enablement.",
     "The cached **Complexity:** line must be stripped before tier-drift re-check.",
     "pre-reviewer is line-cited and noise-averse, not a final correctness oracle.",
     "Legacy env aliases exist, but TOML runtime.* keys are canonical.",
-    "A malformed VERDICT is treated as empty and falls through to codex."
+    "A malformed VERDICT is treated as empty and falls through to codex.",
+    "skills/z-execute/SKILL.md line numbers shift substantially between refreshes due to unrelated feature growth earlier in the file; re-verify every refresh.",
+    "runtime.pre_review now also gates a Phase 2.5 cycle in z-audit-plan (skills/z-audit-plan/SKILL.md:397), not just z-review-all Phase 3.6 — discovered this refresh."
   ],
   "memories": []
 }

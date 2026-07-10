@@ -1,6 +1,7 @@
 {
   "concept": "run-brief",
-  "last_updated": "2026-06-24",
+  "summary": "Unified Run Brief receipt (archive/$RUN/run-brief.json) emitted at finalize by 9 registry commands; render-run-brief.py renders chat/push text from it; /z-do is now a deprecated pass-through alias to /z-plan --quick and no longer independently participates.",
+  "last_updated": "2026-07-09",
   "covers_spec": "unified-command-output",
   "source_file": [
     "docs/llm/run-brief-contract.json",
@@ -8,10 +9,11 @@
     "docs/human/run-brief.md",
     "scripts/run-brief.sh",
     "scripts/render-run-brief.py",
+    "scripts/render-cost-summary.py",
+    "scripts/notify-discord.sh",
     "scripts/lint-run-brief.sh",
-    "commands/_fragments/run-brief-finalize.md",
-    "commands/_fragments/run-brief-halt-finalize-implement-all.md",
-    "commands/_fragments/run-brief-halt-finalize-implement-next.md",
+    "_fragments/run-brief-finalize.md",
+    "_fragments/run-brief-halt-finalize-execute.md",
     "skills/z-plan/SKILL.md"
   ],
   "confidence": "high",
@@ -66,22 +68,43 @@
       "summary": "Empty-only fallback: extracts up to 4 bullet/numbered lines from artifact; rejects lines with file.ext: tokens or slash segments."
     },
     {
-      "file": "commands/_fragments/run-brief-finalize.md",
+      "file": "scripts/render-cost-summary.py",
+      "line": 68,
+      "symbol": "render",
+      "kind": "fn",
+      "summary": "Reads events.jsonl, produces cost summary Markdown text; passed via --cost-summary-text to render-run-brief.py; non-fatal if absent."
+    },
+    {
+      "file": "scripts/notify-discord.sh",
+      "line": 1,
+      "symbol": "notify-discord.sh",
+      "kind": "module",
+      "summary": "Posts Discord webhook embed (title + push-format body) from notify.discord_webhook_url config; 3s timeout, non-fatal."
+    },
+    {
+      "file": "_fragments/run-brief-finalize.md",
       "line": 1,
       "symbol": "run-brief-finalize",
       "kind": "module",
-      "summary": "Shared finalize fragment inlined by /z-export into registry commands; 6-step sequence (1 aggregate, 2 artifact/approach, 3 finalize, 3.5 cost, 4 chat, 5 push, 5.5 discord, 6 hard-gate); step 2 requires orchestrator to author approach before finalize on success."
+      "summary": "Shared finalize fragment inlined via <!-- include: --> markers expanded by runtime/drivers/_export_utils.py; 6-step sequence (1 aggregate, 2 artifact/approach, 3 finalize, 3.5 cost, 4 chat, 5 push, 5.5 discord, 6 hard-gate); step 2 requires orchestrator to author approach before finalize on success."
+    },
+    {
+      "file": "_fragments/run-brief-halt-finalize-execute.md",
+      "line": 1,
+      "symbol": "run-brief-halt-finalize-execute",
+      "kind": "module",
+      "summary": "Halt-path preamble for /z-execute; sets outcome + next then includes the shared finalize fragment. The only per-command halt-finalize fragment that actually exists on disk."
     },
     {
       "file": "scripts/lint-run-brief.sh",
       "line": 1,
       "symbol": "lint-run-brief.sh",
       "kind": "module",
-      "summary": "Schema + registry + renderer self-test + _test_finalize_preserves_decisions integration test (default mode). --registry-only greps all 11 commands for finalize fragment include and implement-family halt fragment includes."
+      "summary": "Schema + registry + renderer self-test + _test_finalize_preserves_decisions integration test (default mode). --registry-only greps 9 registry commands for finalize fragment include plus z-execute halt-fragment include; CURRENTLY FAILING on /z-do (deprecated alias, no longer self-finalizes)."
     },
     {
       "file": "skills/z-plan/SKILL.md",
-      "line": 862,
+      "line": 982,
       "symbol": "zplan_cost_gate_halt_finalize",
       "kind": "fn",
       "summary": "/z-plan pre-subagent cost-gate terminal cleanup: set halted outcome/next, finalize, render with optional cost summary, require, then release claim before deregister."
@@ -109,20 +132,26 @@
     "Cost summary (step 3.5) and Discord render (step 5.5) are non-fatal — failures do not block the hard gate or abort the run.",
     "Full-profile complete path: even if artifact has no bullet lines, finalize preserves existing decisions and uses ensure_approach_for_full (not lite downgrade).",
     "/z-plan pre-subagent cost-gate terminal paths reuse Run Brief halt-finalize semantics before claim release and active-plan deregister.",
-    "Cost summary injection in render-run-brief.py is optional and non-fatal; run-brief --require remains the hard validation gate before cleanup."
+    "Cost summary injection in render-run-brief.py is optional and non-fatal; run-brief --require remains the hard validation gate before cleanup.",
+    "/z-do is a deprecated pass-through alias (routes to /z-plan --quick) and does not independently participate in the run-brief lifecycle; any brief tied to a /z-do invocation is actually /z-plan --quick's full-profile brief."
   ],
   "gotchas": [
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
     "Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses ensure_approach_for_full, not lite downgrade.",
     "/z-execute compaction_pause exit skips the brief (non-terminal).",
-    "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync. Old scripts/export-*.py are deleted; use runtime/drivers/<target>/export.py or /z-export.",
+    "Export must inline _fragments/run-brief-finalize.md so Cursor/Codex/Antigravity copies stay in sync. Old scripts/export-*.py are deleted; use runtime/drivers/<target>/export.py or /z-export.",
     "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable run-brief.md mirror for local debugging (not default).",
     "extract_approach_bullets only runs when approach is empty at finalize; an authored approach always wins.",
     "Old ALL-CAPS labeled block format (INTENT:/APPROACH:/DECISIONS:/OUTCOME:/NEXT:) is obsolete — render_chat now emits glyph-titled Briefing markdown.",
     "render_push format is UNCHANGED — single line: intent[:80] · outcome[:60] · Next: label. Discord step 5.5 uses the same push-format body via notify-discord.sh.",
     "Decision source enum is event|artifact — no other values are schema-valid.",
     "_test_finalize_preserves_decisions in lint-run-brief.sh proves that finalize keeps decisions[] intact when the artifact has no bullet lines on a complete path — guards against regression in the prose-only artifact code path.",
-    "/z-plan cost-gate cleanup happens after run-brief init/register; if register failed and no active-plan record exists, cleanup must not call deregister."
+    "/z-plan cost-gate cleanup happens after run-brief init/register; if register failed and no active-plan record exists, cleanup must not call deregister.",
+    "CORRECTED THIS REFRESH: prior source_file list used commands/_fragments/run-brief-finalize.md (stale prefix; commands/ was deleted, real path is _fragments/run-brief-finalize.md) and listed commands/_fragments/run-brief-halt-finalize-implement-all.md / -implement-next.md, which have never existed anywhere in git history (git log --all confirms) — leftovers from before the z-implement-all/z-implement-next -> z-execute rename (2731f1d). Real halt fragment for the unified implement command is _fragments/run-brief-halt-finalize-execute.md.",
+    "skills/z-plan/SKILL.md contains 10 occurrences of a bash comment `# include: _fragments/run-brief-halt-finalize-plan.md` referencing a fragment that has never existed. These sit inside fenced bash code blocks, so the real include-expansion mechanism (expand_includes in runtime/drivers/_export_utils.py, which skips markers inside fenced code) never processes them — they are inert documentation comments, not a functional dependency; the actual halt logic is inlined at each site instead.",
+    "/z-do (skills/z-do/SKILL.md) is now a deprecated pass-through alias that immediately routes to /z-plan --quick and stops; it never reaches its own run-brief finalize. The registry (docs/llm/run-brief-registry.json) still declares /z-do as lite profile, but that path is not exercised in current behavior — the only live entry into lite profile is run-brief.sh's automatic apply_lite_downgrade on a full-profile halt with no artifact.",
+    "scripts/lint-run-brief.sh --registry-only currently FAILS: it greps skills/z-do/SKILL.md for a run-brief-finalize include and finds none, because of the /z-do deprecation-alias conversion above. The lint script has not been updated to reflect this; treat --registry-only as a known-red check pending a fix (skip /z-do, or assert it delegates to /z-plan instead).",
+    "docs/llm/INDEX.json's run-brief entry still carries the same stale commands/_fragments/... paths as the old concept JSON; /z-maintain-docs (not this doc-updater run) owns applying the corrected source_file list from this JSON into the index."
   ],
   "memories": []
 }

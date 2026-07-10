@@ -1,6 +1,7 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-06-24",
+  "summary": "Runtime provider registry (.z-harness/providers.json) resolving consultant/reviewer roles to CLI invocation descriptors, layered under a TOML role-runtime override axis with legacy [models]/providers.json.roles fallbacks, alias resolution, and per-dispatch auth/PATH preflight.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -21,42 +22,63 @@
       "line": 1,
       "symbol": "resolve-provider.sh",
       "kind": "module",
-      "summary": "Thin wrapper used by reviewer/consultant agents."
+      "summary": "Thin wrapper (exec python3 resolve-provider.py) used by reviewer/consultant agents."
     },
     {
       "file": "scripts/resolve-provider.py",
-      "line": 634,
+      "line": 899,
       "symbol": "main",
       "kind": "fn",
-      "summary": "Consult-off sentinel, config load/merge, TOML override path, legacy fallback, descriptor output."
+      "summary": "Consult-off sentinel, config load/merge/validate, TOML override path, legacy fallbacks, descriptor output."
     },
     {
       "file": "scripts/resolve-provider.py",
-      "line": 555,
+      "line": 867,
+      "symbol": "_resolve_role_runtime_override",
+      "kind": "fn",
+      "summary": "Reads [roles.<command/default>.<role>].runtime; preferred external-provider binding surface."
+    },
+    {
+      "file": "scripts/resolve-provider.py",
+      "line": 880,
       "symbol": "_resolve_models_override",
       "kind": "fn",
       "summary": "Reads models.<role>, validates provider and compose_argv precondition, enforces cross-path distinctness."
     },
     {
       "file": "scripts/resolve-provider.py",
-      "line": 359,
+      "line": 397,
       "symbol": "resolve",
       "kind": "fn",
       "summary": "Legacy roles map lookup with alias substitution, PATH check, and argv composition."
     },
     {
       "file": "scripts/resolve-provider.py",
-      "line": 227,
+      "line": 239,
       "symbol": "merge_with_shadow",
       "kind": "fn",
       "summary": "Per-key global/repo merge for providers, roles, aliases; emits provider_shadowed."
     },
     {
       "file": "scripts/resolve-provider.py",
-      "line": 443,
+      "line": 469,
       "symbol": "compose_argv",
       "kind": "fn",
       "summary": "Renders model_arg_template with effective model; legacy null template returns args_template."
+    },
+    {
+      "file": "scripts/resolve-provider.py",
+      "line": 604,
+      "symbol": "_preflight_provider",
+      "kind": "fn",
+      "summary": "Validates PATH, argv/model composition, and OMP auth readiness; emits provider_preflight_ok/failed."
+    },
+    {
+      "file": "scripts/resolve-provider.py",
+      "line": 801,
+      "symbol": "_peek_consultant_provider",
+      "kind": "fn",
+      "summary": "Resolves peer consultant's canonical provider across TOML/legacy paths without alias telemetry, for distinctness checks."
     },
     {
       "file": "scripts/discover-providers.py",
@@ -77,7 +99,7 @@
       "line": 1,
       "symbol": "ProviderRegistry",
       "kind": "schema",
-      "summary": "Draft 7 schema accepting registry version 1 and 2."
+      "summary": "Draft 7 schema accepting registry version 1 and 2; kind enum cli|sdk."
     },
     {
       "file": "scripts/log-providers.sh",
@@ -91,7 +113,7 @@
       "line": 1,
       "symbol": "omp-consult.sh",
       "kind": "module",
-      "summary": "Compatibility shim for provider-registry consults: reads stdin prompt, invokes omp -p --no-session --no-rules --model <provider/model> <prompt>, optional native CLI fallback."
+      "summary": "Compatibility shim: reads stdin prompt, invokes omp -p --no-session --no-rules --model <provider/model> <prompt>, classifies auth/session failures, optional explicit native CLI fallback."
     }
   ],
   "depends_on": [
@@ -107,20 +129,22 @@
     "reviewer-capture"
   ],
   "invariants": [
-    "Resolution priority: Z_HARNESS_CONSULT=off check first -> config.toml [models.<role>] TOML override second -> providers.json.roles legacy fallback third.",
-    "consultant_primary and consultant_secondary must resolve to distinct provider names regardless of which binding path (TOML or legacy) each uses. _peek_consultant_provider checks both paths when enforcing distinctness from _resolve_models_override.",
-    "When Z_HARNESS_CONSULT=off, resolve-provider.py prints the plaintext sentinel 'none' (exit 0) for roles consultant_primary, consultant_secondary, and reviewer — before any config file is loaded.",
+    "Resolution priority inside main(): Z_HARNESS_CONSULT=off sentinel check first -> config.toml [roles.<command/default>.<role>].runtime override second -> legacy config.toml [models.<role>] third -> legacy providers.json.roles map fourth.",
+    "consultant_primary and consultant_secondary must resolve to distinct provider names regardless of which binding path (TOML role-runtime, legacy [models], or legacy roles map) each uses. _peek_consultant_provider checks all paths when enforcing distinctness from _resolve_config_provider_selection / check_consultant_distinctness.",
+    "When Z_HARNESS_CONSULT=off, resolve-provider.py prints the plaintext sentinel 'none' (exit 0) for roles consultant_primary, consultant_secondary, and reviewer — before any config file is loaded (main(), lines 910-913).",
     "The sentinel 'none' is a plaintext string, not JSON. Any consumer that receives 'none' must skip JSON parsing and must not dispatch to an external model CLI.",
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process (PPID-keyed stamp file).",
-    "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
-    "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
-    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through /z-providers-discover with explicit user confirmation.",
+    "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically and memoized per (process, file path).",
+    "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved (kind, command, args_template, stdin, timeout_s, model_label, model_arg_template, model_env_var, default_model, auth_env types).",
+    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through /z-providers-discover with explicit user confirmation and atomic tmpfile+rename.",
     "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model. When model_arg_template is null (v1 legacy), returns args_template immediately without model resolution.",
-    "providers.json.roles is the legacy fallback for role binding; config.toml [models.<role>] takes precedence when set. Using providers.json.roles emits legacy_provider_roles_used.",
+    "providers.json.roles is the legacy fallback for role binding, below both TOML role-runtime override and legacy [models.<role>]. Using providers.json.roles emits legacy_provider_roles_used on every lookup through that path.",
     ".z-harness/providers.json v2 ships both old names (codex/gemini/claude/cursor/agy) and new -cli names (codex-cli/gemini-cli/claude-cli/cursor-cli/agy-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries.",
     "resolve() unconditionally passes is_legacy=True when resolving from the roles section of providers.json, so legacy_provider_roles_used fires for every role lookup through that path regardless of alias involvement.",
+    "_preflight_provider runs on every resolved descriptor (TOML override, [models] override, or legacy roles path) and validates: role bound -> provider defined -> command on PATH -> argv/model composes -> auth ready (env var present, or OMP omp token <provider> succeeds).",
     "OMP provider entries are consult-provider compatibility and do not imply OmpAdapter support or native command tiers.",
-    "scripts/omp-consult.sh is the only documented --no-rules --no-session OMP path; native OMP command dispatch must bypass it."
+    "scripts/omp-consult.sh is the only documented --no-rules --no-session OMP path; native OMP command dispatch must bypass it.",
+    "omp-consult.sh classifies stderr into auth/session failures (_is_omp_auth_or_session_failure) vs generic failures; auth/session failures always fail loud (exit 3, provider_preflight_failed) and never silently degrade to --fallback, even when a fallback command was configured."
   ],
   "gotchas": [
     "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely — setting it is sufficient; no providers.json change needed.",
@@ -132,25 +156,16 @@
     "Role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
     "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
     "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
-    "_resolve_models_override enforces consultant distinctness across ALL combinations of TOML and legacy paths. _peek_consultant_provider checks [models] config override first, then legacy roles map, when looking up the peer consultant's provider.",
-    "_check_compose_argv_precondition only fires when [models.<role>] override is set AND the resolved provider has a non-null model_arg_template. In that case default_model must be set or resolution fails with a fail-loud message.",
-    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. The shipped aliases map covers five entries: codex, gemini, claude, cursor, agy -> their -cli canonical names. Old alias names are transparently resolved; provider_alias_used is emitted once per (process, old-name).",
+    "_resolve_models_override enforces consultant distinctness across ALL combinations of TOML role-runtime and legacy paths via _peek_consultant_provider, which checks the TOML role-runtime binding first, then [models] override, then legacy roles map, when looking up the peer consultant's provider.",
+    "_check_compose_argv_precondition only fires when a config override (TOML role-runtime or [models.<role>]) is set AND the resolved provider has a non-null model_arg_template. In that case default_model must be set or resolution fails with a fail-loud message.",
+    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. The shipped aliases map covers six entries: codex, gemini, claude, cursor, agy -> their -cli canonical names, plus omp-gemini -> omp-antigravity-pro. Old alias names are transparently resolved; provider_alias_used is emitted once per (process, old-name).",
     "When the roles map in providers.json is the active binding path, both legacy_provider_roles_used AND (if an alias is matched) provider_alias_used are emitted — two distinct events for one resolution.",
     "_alias_used_emitted memoization set is module-level; alias dedup survives multiple resolve() calls within the same process but resets on new process invocations.",
     "cursor-cli and agy-cli are the only shipped providers with non-null model_arg_template (['--model', '{model}']) and a default_model set — all other shipped providers use null model_arg_template (v1 legacy mode).",
     "discover-providers.py KNOWN_CLIS still uses old v1-style names (codex, gemini, claude, ollama, agy, gpt) and outputs version:1. This is intentional — the v1 output is upgraded transparently on load.",
-    "Do not use omp-gemini/omp-codex provider success as evidence for OMP native host parity; provider dispatch tests only cover consultant compatibility."
+    "Do not use omp-gemini/omp-codex provider success as evidence for OMP native host parity; provider dispatch tests only cover consultant compatibility.",
+    ".z-harness/providers.json roles binds consultant_primary=omp-antigravity-pro (not the older omp-gemini name); omp-gemini now exists only as an alias entry, added in commit bbe0bb0 alongside broader model-routing/preflight-telemetry additions to resolve-provider.py (+482 lines).",
+    "omp-consult.sh writes stderr to a mktemp file and greps it for auth/session phrasing before deciding fail-loud vs fallback; it strips the temp file unconditionally, so no stderr content is ever logged verbatim except inside the classified provider_preflight_failed reason string."
   ],
-  "memories": [],
-  "omp_consult_boundary": {
-    "provider_entries": [
-      "omp-gemini",
-      "omp-codex"
-    ],
-    "scope": "consult-provider compatibility for advisory consultant roles",
-    "not_native_host_support": true,
-    "shim": "scripts/omp-consult.sh",
-    "argv": "omp -p --no-session --no-rules --model <provider/model> <prompt>",
-    "native_omp_rule": "OmpHostDriver must not call this shim; native dispatch keeps rules/session/profile/model semantics through .omp/z-harness discovery"
-  }
+  "memories": []
 }

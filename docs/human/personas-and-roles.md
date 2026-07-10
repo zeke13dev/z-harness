@@ -1,13 +1,13 @@
 # personas-and-roles
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 > Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/claude.py
 
 ## Overview
 
 The persona system gives z-harness the ability to shape an agent's behavior by prepending a saved prompt prefix before each role invocation. A persona is a Markdown file with a YAML frontmatter block (`name`, `description`, optional `compatible_roles`, optional `contract`). Personas are orthogonal to model and runtime: you bind all three axes independently per `(command, role)` in your TOML config. The registry loads from three layers in priority order — builtin (`personas/builtin/`), user-global (`~/.config/z-harness/personas/`), repo-local (`<repo>/.z-harness/personas/`) — with the last (highest-priority) layer winning per name.
 
-The feature also drives the persona-rotation experiment, which randomizes which persona is dispatched to implementer, reviewer, consultant, ideator, and audit_persona roles to measure behavioral diversity. Seven roles are registered in `_ROLE_REGISTRY` (the single source of truth). The builtin pool ships 30 personas; two special sentinels exist: `boring-anchor` (the stable control) and `no-persona` (a null/vanilla baseline that has no file on disk). The `/z-personas` slash command provides read-only inspection of the registry and current bindings.
+The feature also drives the persona-rotation experiment, which randomizes which persona is dispatched to implementer, reviewer, consultant, ideator, and audit_persona roles to measure behavioral diversity. Seven roles are registered in `_ROLE_REGISTRY` (the single source of truth). The builtin pool ships 30 personas; two special sentinels exist: `boring-anchor` (the stable control) and `no-persona` (a null/vanilla baseline that has no file on disk). The `/z-personas` slash command provides read-only inspection of the registry and current bindings. `experiment.persona_rotation` currently defaults to `true` in `scripts/config.py`, so the rotation system is active by default unless a repo or env layer overrides it.
 
 ## Key entry points
 
@@ -33,17 +33,17 @@ The feature also drives the persona-rotation experiment, which randomizes which 
 - `runtime/drivers/cursor/persona_export.py:48` — `export_persona` — exports to `.cursor/personas/<name>.mdc`; NOT NATIVE; body injected as system-prompt prefix via glob rule
 - `runtime/drivers/codex/persona_export.py:37` — `export_persona` — exports to `prompts/personas/<name>.md`; NOT NATIVE; orchestrator concatenates as system-prompt prefix
 - `runtime/drivers/claude/persona_export.py:38` — `export_persona` — exports to `personas/<name>.md`; NOT NATIVE; injected as system-prompt prefix by Claude subagent dispatcher
-- `z_harness_cli/adapters/antigravity.py:1` — `AntigravityAdapter.export_payload` — globs `personas/builtin/*.md` and calls `export_persona` per file; raises on persona-name collision with workflow ids
-- `z_harness_cli/adapters/cursor.py:1` — `CursorAdapter.export_payload` — globs `personas/builtin/*.md` and calls cursor `export_persona` per file; raises on collision with rule ids
-- `z_harness_cli/adapters/codex.py:1` — `CodexAdapter.export_payload` — globs `personas/builtin/*.md` and calls codex `export_persona` per file; raises on collision with prompts ids
-- `z_harness_cli/adapters/claude.py:1` — `ClaudeAdapter.export_payload` — globs `personas/builtin/*.md` and calls claude `export_persona`; returns ExportResult with fidelity=native
+- `z_harness_cli/adapters/antigravity.py:207` — `AntigravityAdapter.export_payload` — globs `personas/builtin/*.md` and calls `export_persona` per file; raises on persona-name collision with workflow ids
+- `z_harness_cli/adapters/cursor.py:214` — `CursorAdapter.export_payload` — globs `personas/builtin/*.md` and calls cursor `export_persona` per file; raises on collision with rule ids
+- `z_harness_cli/adapters/codex.py:259` — `CodexAdapter.export_payload` — globs `personas/builtin/*.md` and calls codex `export_persona` per file; raises on collision with prompt ids in the flat `prompts/` namespace; fidelity comes from `codex_parity_gate`
+- `z_harness_cli/adapters/claude.py:160` — `ClaudeAdapter.export_payload` — globs `personas/builtin/*.md` and calls claude `export_persona`; returns ExportResult with fidelity=native
 
 ## How it interacts with others
 
 - `providers-registry` — TOML `[roles.*.*]` bindings in config.toml co-locate persona/model/runtime; legacy `providers.json` is fallback for runtime-only binding
 - `config` — `experiment.persona_rotation` knob (default `true`) gates the entire rotation system; `experiment.control_every_n` (default 5) sets the forced-control cadence
-- `commands` — persona-rotation is invoked from `/z-execute` (step 5.0), `/z-plan` (5-panel consult), `/z-debug`, `/z-brainstorm` (ideator arms via `random-distinct-for-role`), and `/z-audit` (per-dimension audit_persona draws)
-- `multi-ide-exports` — all four CLI adapters glob `personas/builtin/*.md` and write per-target persona files via the per-target `persona_export.py` adapters during `/z-export`
+- `commands` — persona-rotation is invoked from `/z-execute`, `/z-plan` (5-panel consult), `/z-debug`, `/z-brainstorm` (ideator arms via `random-distinct-for-role`), and `/z-audit` (per-dimension audit_persona draws)
+- `multi-ide-exports` — all four CLI adapters glob `personas/builtin/*.md` and write per-target persona files via the per-target `persona_export.py` adapters during `/z-export`; the Codex adapter's export layout was refreshed 2026-07-05 (docstring-only — the glob pattern, persona output path, and collision-check semantics are unchanged)
 - `agents` — downstream subagents receive the persona body prepended to their system prompt; no resolution happens inside the dispatcher
 
 ## Edge cases / gotchas
@@ -64,6 +64,7 @@ The feature also drives the persona-rotation experiment, which randomizes which 
 - Cursor export produces `.mdc` with `alwaysApply:true` and glob `**/*`; Codex export produces a flat `.md` with a `# Persona: <name>` header (no frontmatter); Claude export preserves the full frontmatter block; Antigravity preserves full frontmatter and body.
 - All four CLI adapter `export_payload()` methods emit a warning and skip persona export if `personas/builtin/` is not found — they do not hard-fail.
 - Unknown frontmatter keys cause exit 2; `model`, `runtime` and similar binding axes belong in TOML config, not in the persona file. Allowed keys: `name`, `description`, `compatible_roles`, `contract`.
+- `experiment.persona_rotation` defaults to `true` (`scripts/config.py`); there is a pending overhaul plan (outside this doc's scope) that may remove the persona subsystem in a future revision, but as of this refresh the rotation system is live and on by default.
 
 ## Memories
 

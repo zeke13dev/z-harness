@@ -1,6 +1,6 @@
 # INSTALL — z-harness Installation Guide
 
-> Last updated: 2026-06-29
+> Last updated: 2026-07-09
 
 ## Overview
 
@@ -80,7 +80,7 @@ bash install.sh --target=all --tarball=<release-tarball-url>
 bash install.sh --target=claude --tarball=<release-tarball-url> --tarball-sha256=<sha256>
 ```
 
-Release tarballs are built by `Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh`, audited by `scripts/audit-tarball.sh`, and uploaded by release CI. Manifest-backed installs verify `plugin_tarball_sha256` before extracting or replacing an existing plugin install. They must include `skills/`, `agents/`, `runtime/`, `scripts/`, plugin manifests, and docs needed by the shipped commands, excluding dev-only experimental surfaces from the public prod tarball.
+Release tarballs are built by `Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh`, audited by `scripts/audit-tarball.sh`, and uploaded by release CI. Manifest-backed installs verify `plugin_tarball_sha256` before extracting or replacing an existing plugin install. They must include `skills/`, `agents/`, `runtime/`, `scripts/`, plugin manifests, and docs needed by the shipped commands, excluding dev-only experimental surfaces from the public prod tarball. Replacement is staged and atomic: `install.sh` moves the existing install aside, moves the new payload into place, and rolls back to the staged backup if either move fails (see `replace_with_staged_install` / `replace_two_staged_installs_atomically` in `install.sh`).
 
 ## OMP package export and advanced target exports
 
@@ -96,12 +96,17 @@ Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explicit dev/
 
 ## Updating
 
-z-harness has no silent background updater.
+z-harness has no silent background updater. `/z-update` (and the `z-harness update` CLI it wraps) is a thin host skill — `skills/z-update/SKILL.md` does no manifest parsing or install-mode logic itself; it just runs `z-harness update` (falling back to `python3 -m z_harness_cli update` when the executable is not on `PATH`) and surfaces the CLI's exact output. All release-manifest fetch/validation, version comparison, and install-mode dispatch live in `z_harness_cli/commands/update.py` and `z_harness_cli/release.py`.
 
-- **CLI wheel install:** run `z-harness update` explicitly; it fetches the release manifest, verifies the downloaded wheel, then upgrades via `uv`.
-- **Claude/Codex plugin source symlink:** run `/z-update` in the host or `z-harness update` from the checkout; dirty trees abort and only `git pull --ff-only` is attempted.
-- **Tarball plugin install:** host `/z-update` does not self-swap tarballs. Reinstall through the deterministic manifest-backed installer, for example `z-harness install --target=all --force` (use `python3 -m z_harness_cli install ...` from the plugin payload if the executable is not on `PATH`), which passes the audited tarball URL and SHA-256 to `install.sh`.
+`z-harness update` fetches `latest.json`, compares the installed version against it, and then behaves per install mode:
+
+- **CLI wheel install (`uv tool install`):** downloads the release wheel, verifies its SHA-256 against the manifest, then upgrades via `uv tool install --upgrade`. Aborts on a checksum mismatch.
+- **Claude/Codex plugin source symlink:** aborts on a dirty checkout (`git status --porcelain` non-empty); otherwise runs `git pull --ff-only` only — it never merges, resets, or force-updates the source tree.
+- **Tarball/runtime plugin install:** does **not** self-swap the tarball. It prints a manifest-backed reinstall command (`z-harness install --target=<host> --force`, or `python3 -m z_harness_cli install --target=<host> --force` when off `PATH`) and exits non-zero without changing anything; the actual audited, atomic tarball replacement happens inside `install.sh`, not inside `update`.
+- **Dev build / non-semver version string:** prints a notice only; never blocks or auto-updates. Update a clean checkout with `git pull --ff-only` or reinstall a tagged release with `z-harness install`.
 - **MCP `z_update` tool:** read-only version check; it does not mutate installs.
+
+**Caveat:** unlike the pre-2026-06-29 SKILL.md, the current symlink-update path does **not** refresh the Claude Code plugin cache or re-run `codex plugin add` after `git pull --ff-only` — it only tells you to restart the host. If your host loads from a versioned plugin cache rather than the live repo symlink, or if the Codex marketplace registration needs refreshing, you may need to restart the host and/or manually rerun `codex plugin add z-harness@personal` after `/z-update`.
 
 ## Data and config locations
 

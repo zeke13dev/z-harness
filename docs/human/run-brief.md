@@ -1,7 +1,7 @@
 # run-brief — Unified command completion receipt
 
-> Last updated: 2026-06-19
-> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/lint-run-brief.sh, _fragments/run-brief-finalize.md, _fragments/run-brief-halt-finalize-implement-all.md, _fragments/run-brief-halt-finalize-implement-next.md
+> Last updated: 2026-07-09
+> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/render-cost-summary.py, scripts/notify-discord.sh, scripts/lint-run-brief.sh, _fragments/run-brief-finalize.md, _fragments/run-brief-halt-finalize-execute.md, skills/z-plan/SKILL.md
 
 ## Overview
 
@@ -64,23 +64,23 @@ Used by workflow commands (plan, implement, audit, debug, fix, review, brainstor
 
 ### Lite (`profile: "lite"`)
 
-Used by `/z-do` only. Requires **Intent, Outcome, Next** only. The `approach` and `decisions` keys must be **omitted** (not empty arrays). On early halt with no artifact, the finalize fragment may emit this minimal shape even for full-profile commands. Chat renders What/Result/Next only.
+Registry-declared for `/z-do` only, but as of this refresh `/z-do` is a **deprecated pass-through alias** (`skills/z-do/SKILL.md`) that immediately routes to `/z-plan --quick $ARGUMENTS` and stops — it no longer runs its own finalize sequence. `/z-plan --quick` always sets `RUN_BRIEF_PROFILE=full` (see `skills/z-plan/SKILL.md`), so in current behavior **no command explicitly requests lite profile at init time**. The only live path into `lite` is the automatic downgrade inside `run-brief.sh finalize` (`apply_lite_downgrade`) when a full-profile command halts before any artifact exists. Requires **Intent, Outcome, Next** only; `approach` and `decisions` keys must be **omitted** (not empty arrays). Chat renders What/Result/Next only.
 
 ---
 
 ## v1 registry commands (9)
 
-| Command | Profile |
-|---------|---------|
-| `/z-plan` | full |
-| `/z-execute` | full |
-| `/z-audit` | full |
-| `/z-audit-plan` | full |
-| `/z-debug` | full |
-| `/z-fix` | full |
-| `/z-review-all` | full |
-| `/z-brainstorm` | full |
-| `/z-do` | lite |
+| Command | Profile | Notes |
+|---------|---------|-------|
+| `/z-plan` | full | Also handles `--quick` (former `/z-do` traffic) — still full profile. |
+| `/z-execute` | full | |
+| `/z-audit` | full | |
+| `/z-audit-plan` | full | |
+| `/z-debug` | full | |
+| `/z-fix` | full | |
+| `/z-review-all` | full | |
+| `/z-brainstorm` | full | |
+| `/z-do` | lite (registry-declared) | Deprecated alias; delegates to `/z-plan --quick` before any run-brief init of its own. Lite is now reachable only via automatic halt-time downgrade, not via this command. |
 
 **Skip brief (non-terminal):** `/z-execute` **compaction_pause** exit only — the run is paused, not finished.
 
@@ -103,16 +103,18 @@ Secondary commands may be added post-v1 by extending the registry JSON.
 | Path | Role |
 |------|------|
 | `docs/llm/run-brief-contract.json` | JSON Schema (draft 2020-12) for `run_brief` + embedded registry schema. Root `$ref` points at `#/$defs/run_brief` so validators load the contract file directly; validate registry JSON with `#/$defs/run_brief_registry`. |
-| `docs/llm/run-brief-registry.json` | Command → profile, hooks, artifact paths |
+| `docs/llm/run-brief-registry.json` | Command → profile, hooks, artifact paths (9 commands). |
 | `scripts/run-brief.sh` | init / set-section / append-decision / finalize |
 | `scripts/render-run-brief.py` | chat / push / json render; `--require` validation gate; `--self-test` golden fixture checks |
 | `scripts/render-cost-summary.py` | Reads `events.jsonl`, produces cost summary Markdown text passed via `--cost-summary-text` to `render-run-brief.py`. Non-fatal if absent. |
 | `scripts/notify-discord.sh` | Posts Discord webhook embed (title + push-format body). Reads webhook URL from `notify.discord_webhook_url` config. 3-second timeout; non-fatal on failure. |
 | `scripts/lint-run-brief.sh` | Schema + registry + renderer self-test + `_test_finalize_preserves_decisions` integration test (default mode). `--registry-only` greps command files for finalize fragment include. |
-| `_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `/z-export` |
-| `_fragments/run-brief-halt-finalize-execute.md` | Halt-path preamble for `/z-execute`; sets outcome + next then includes finalize fragment |
+| `_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `<!-- include: _fragments/run-brief-finalize.md -->` markers, expanded at export time by `runtime/drivers/_export_utils.py`. |
+| `_fragments/run-brief-halt-finalize-execute.md` | Halt-path preamble for `/z-execute`; sets outcome + next then includes finalize fragment. |
 
 Golden fixtures: `tests/run-brief-fixtures/full-shipped/run-brief.json`, `tests/run-brief-fixtures/lite-halted/run-brief.json`.
+
+**Fragment paths corrected in this refresh:** the previous doc/index listed `commands/_fragments/run-brief-finalize.md` and two files that never existed anywhere in git history — `commands/_fragments/run-brief-halt-finalize-implement-all.md` and `commands/_fragments/run-brief-halt-finalize-implement-next.md` (leftovers from before the `z-implement-all`/`z-implement-next` → `z-execute` rename in commit `2731f1d`, and from the `commands/` → `skills/` migration). Real path is `_fragments/run-brief-finalize.md`; the real halt fragment for the unified implement command is `_fragments/run-brief-halt-finalize-execute.md`.
 
 ---
 
@@ -145,6 +147,8 @@ Steps follow the canonical ordering in `_fragments/run-brief-finalize.md`.
 
 Skip authoring on halt/abort paths — the lite downgrade handles those cases.
 
+`/z-plan`'s halt paths (Phase 7 TASKS guards, cost-gate `zplan_cost_gate_halt_finalize` at `skills/z-plan/SKILL.md:982`, and the general "Run Brief — halt finalize" block) all reuse the same generic `_fragments/run-brief-finalize.md` include rather than a plan-specific halt fragment — see gotchas below.
+
 ---
 
 ## Debug flag
@@ -159,9 +163,11 @@ Set `Z_HARNESS_RUN_BRIEF_DEBUG=1` to additionally write a human-readable `run-br
 
 ```bash
 bash scripts/lint-run-brief.sh              # schema + registry + renderer self-test + finalize integration test
-bash scripts/lint-run-brief.sh --registry-only  # 11 commands include finalize fragment
+bash scripts/lint-run-brief.sh --registry-only  # 9 registry commands + z-execute halt-fragment check
 python3 scripts/render-run-brief.py --self-test
 ```
+
+**Current status (verified this refresh):** `scripts/lint-run-brief.sh --registry-only` currently **FAILS** — `/z-do` no longer contains a `run-brief-finalize` include reference in `skills/z-do/SKILL.md` because it was converted to a pure pass-through alias to `/z-plan --quick` and never reaches its own finalize block. The lint check has not been updated to reflect the alias conversion. Treat this as an open drift item, not a passing baseline.
 
 After changing command bodies, re-export via `/z-export` (or driver modules directly) and re-lint:
 
@@ -186,7 +192,7 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 | `/z-fix` | Reach Phase 10 finalize; expect full brief with FIX.md approach. |
 | `/z-brainstorm` | Finish Phase 4; expect full brief with BRAINSTORM.md approach. |
 | `/z-review-all` | Finish review finalize; expect full brief with outcome from `review_all_end` event payload. |
-| `/z-do` | Complete adhoc run; expect **lite** brief (What/Result/Next only — no How or Key decisions in chat; no approach or decisions keys in JSON). |
+| `/z-do` | Prints deprecation notice and routes to `/z-plan --quick`; the resulting brief is `/z-plan`'s **full** brief, not a lite brief. |
 
 ---
 
@@ -196,6 +202,28 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 2. `render-run-brief.py --require` runs on every terminal exit that includes the finalize fragment, before deregister.
 3. Empty `decisions: []` is valid for full profile.
 4. `/z-stats` is not auto-invoked at command end.
-5. Export inlines the shared finalize fragment so all IDE surfaces stay in sync.
+5. Export inlines the shared finalize fragment (`<!-- include: ... -->` markers, expanded by `runtime/drivers/_export_utils.py`) so all IDE surfaces stay in sync.
 6. Full-profile success paths require the orchestrator to author `approach` via `run-brief.sh set-section` before finalize; `extract_approach_bullets` is the empty-only fallback, not the primary path.
 7. Cost summary (step 3.5) and Discord render (step 5.5) are both non-fatal — failures do not abort the run or block the hard gate.
+8. `/z-do` is a deprecated pass-through alias; it does not independently participate in the run-brief lifecycle — any brief associated with a `/z-do` invocation is actually `/z-plan --quick`'s full-profile brief.
+
+## Gotchas
+
+- **Stale `# include:` comments in `skills/z-plan/SKILL.md`.** Ten Phase-7-guard halt paths carry a bash comment `# include: _fragments/run-brief-halt-finalize-plan.md` pointing at a fragment file that has never existed in this repo's git history (checked via `git log --all`). These comments sit *inside* fenced bash blocks, so the real `<!-- include: ... -->` expansion mechanism (`expand_includes` in `runtime/drivers/_export_utils.py`, which explicitly skips markers inside fenced code) never processes them anyway — they are inert documentation-only comments, not a broken include. The actual halt-finalize logic at those sites is inlined directly (`RB_HALT_REASON=...` + `FINALIZE_STATUS=aborted` + deregister), matching the pattern z-execute uses for its equivalently-inert `# include: _fragments/run-brief-halt-finalize-execute.md` comments — except z-execute's target file happens to actually exist and is also used via real (unfenced) include markers elsewhere in the same file. Treat the z-plan comments as an aspirational label for "this mirrors the halt-finalize pattern," not a real dependency.
+- Lite profile forbids `approach` and `decisions` properties — do not emit empty arrays.
+- Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses `ensure_approach_for_full`, not lite downgrade.
+- `/z-execute` `compaction_pause` exit skips the brief (non-terminal).
+- Export must inline `_fragments/run-brief-finalize.md` so Cursor/Codex/Antigravity copies stay in sync. Legacy `scripts/export-*.py` are deleted; use `runtime/drivers/<target>/export.py` or `/z-export`.
+- `Z_HARNESS_RUN_BRIEF_DEBUG=1` optionally writes a human-readable `run-brief.md` mirror for local debugging (not default).
+- `extract_approach_bullets` only runs when `approach` is empty at finalize; an authored approach always wins.
+- `render_push` format is unchanged — single line: `intent[:80] · outcome[:60] · Next: label`. Discord step 5.5 uses the same push-format body via `notify-discord.sh`.
+- Decision `source` enum is `event | artifact` — no other values are schema-valid.
+- `_test_finalize_preserves_decisions` in `lint-run-brief.sh` proves that finalize keeps `decisions[]` intact when the artifact has no bullet lines on a complete path.
+- `/z-plan` cost-gate cleanup happens after run-brief init/register; if register failed and no active-plan record exists, cleanup must not call deregister.
+- `docs/llm/INDEX.json`'s `run-brief` entry (as of this refresh, prior to `/z-maintain-docs` applying the correction below) still carries the stale `commands/_fragments/run-brief-halt-finalize-implement-{all,next}.md` paths — `/z-maintain-docs` owns updating that file from this refreshed concept JSON.
+
+## Examples
+
+- Successful `/z-plan` run: chat shows `### ✓ /z-plan — <slug>` with What/How/Key decisions/Result/Next.
+- Halted `/z-audit` run with no REPORT.md yet: chat downgrades to lite, showing only What/Result/Next.
+- `/z-do "fix the typo"`: prints the deprecation note, then behaves exactly like `/z-plan --quick "fix the typo"` — full-profile brief, not lite.

@@ -1,6 +1,7 @@
 {
   "concept": "review-agent",
-  "last_updated": "2026-06-19",
+  "summary": "Haiku subagent (agents/review-agent.md) + scripts/run-memory-review.sh helper that proposes 0-3 memory candidates after /z-execute, /z-review-all, or /z-debug; the post-agent review loop and write-through behavior differ by parent_command (z-execute has no interactive accept loop; z-review-all and z-debug do).",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-harness/plans/memory-self-improve-loop/SPEC.md",
   "source_file": [
     "agents/review-agent.md",
@@ -59,24 +60,24 @@
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 818,
+      "line": 3663,
       "symbol": "Phase 9",
       "kind": "module",
-      "summary": "Orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop"
+      "summary": "Helper call, agent dispatch, writes memory-candidates.jsonl + memory_review_complete event; NO interactive accept/skip loop, NO auto /z-suggest-memory dispatch"
     },
     {
-      "file": "commands/z-review-all.md",
-      "line": 447,
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 1268,
       "symbol": "Phase 7",
       "kind": "module",
-      "summary": "Orchestrator Phase 7: same as Phase 9 but without all_tasks_skipped skip condition"
+      "summary": "Helper call, agent dispatch (legacy + INTENT-mode variants), full sequential AskUserQuestion accept/edit/skip loop dispatching /z-suggest-memory on Accept"
     },
     {
-      "file": "commands/z-debug.md",
-      "line": 795,
-      "symbol": "Phase 10 memory review",
+      "file": "skills/z-debug/SKILL.md",
+      "line": 1105,
+      "symbol": "Memory review (within Phase 10 Finalize)",
       "kind": "module",
-      "summary": "Orchestrator Phase 10 (shipped branch only): debug_md_path primary; optional parallel axiom-extractor on AXIOM_READY"
+      "summary": "debug_md_path primary artifact; sequential AskUserQuestion loop; explicit memory_review_terminal emission for ran_empty/needs_user"
     }
   ],
   "depends_on": [
@@ -98,15 +99,17 @@
     "output is exactly one fenced json block; any other output is malformed",
     "agent receives index_path and must prefer extending an existing slug over coining a new one",
     "when parent_command=debug, debug_md_path is primary artifact; spec_path is supplementary only",
-    "memory_review_terminal event emitted at terminal state of every review pass regardless of path taken",
-    "review_agent_failed and review_agent_malformed do NOT emit memory_review_terminal; they are orthogonal failure classes",
-    "AXIOM_READY gated by config key axioms.auto_extract_post_run (read via config.py get); value 'false' suppresses; only z-debug Phase 10 handles it"
+    "z-review-all and z-debug run a sequential AskUserQuestion accept/edit/skip loop and dispatch /z-suggest-memory on Accept; z-execute does NOT -- it only writes memory-candidates.jsonl and surfaces N_CANDIDATES via push-notify for later manual review",
+    "memory_review_terminal is emitted only by run-memory-review.sh (skip-condition paths, all three parent commands) and explicitly by z-debug Phase 10 for ran_empty/needs_user paths; z-execute and z-review-all instead use phase_end (name: memory_review) as their terminal-state event",
+    "AXIOM_READY gated by config key axioms.auto_extract_post_run (read via config.py get); value 'false' suppresses; z-execute Phase 9 (4a), z-review-all Phase 7 (4a), and z-debug Phase 10 (d2) ALL parse and act on it -- not z-debug-only"
   ],
   "gotchas": [
     "run-memory-review.sh requires $Z_HARNESS_PLAN_DIR to be set; unset yields STATUS: skipped no_plan_dir",
     "run-memory-review.sh soft-skips (exit 0) on missing TAGS.txt rather than failing hard; emits skipped_broken_context state",
     "when parent_command=debug, line 5 of helper stdout is DEBUG.md path; LINES[4] in orchestrator",
-    "AXIOM_READY line appears after the standard artifact lines; only z-debug Phase 10 (d2 sub-step) acts on it",
+    "AXIOM_READY line appears after the standard artifact lines; z-execute Phase 9 (4a), z-review-all Phase 7 (4a), and z-debug Phase 10 (d2) all parse and act on it in parallel with review-agent dispatch",
+    "z-execute Phase 9 has NO interactive per-candidate review loop: candidates are written to $RUN_DIR/memory-candidates.jsonl and a memory_review_complete event is emitted, but nothing calls /z-suggest-memory automatically -- a human must review the JSONL and run /z-suggest-memory manually",
+    "z-execute logs review_agent_call/review_agent_failed/review_agent_malformed to event target 'orchestration', NOT $RUN -- differs from z-review-all which logs the same event kinds to $RRUN",
     "debug_md_missing skip fires when DEBUG.md absent -- distinct from empty_diff skip",
     "abandoned debug sessions never invoke run-memory-review.sh; no telemetry emitted",
     "empty diff causes skip with skip_reason: empty_diff before any Agent dispatch",
@@ -114,9 +117,9 @@
     "parse failure on agent return is a soft-skip (review_agent_malformed event) not a hard error",
     "subagent timeout has no per-call wall-clock guard in v1; user ctrl-c is the escape",
     "candidate tags must come from docs/llm/TAGS.txt unless free-form is explicitly justified",
-    "review_agent_suggest_failed is logged and skipped (iteration continues) -- not a phase abort",
-    "skills/z-execute/SKILL.md, commands/z-review-all.md, commands/z-debug.md are canonical",
-    "AXIOM_READY controlled by axioms.auto_extract_post_run config key (not Z_HARNESS_AXIOM_EXTRACT env var); 'false' suppresses, any other value enables"
+    "review_agent_suggest_failed is logged and iteration continues (not a phase abort); only applies to z-review-all/z-debug's accept loop since z-execute never dispatches /z-suggest-memory",
+    "skills/z-execute/SKILL.md, skills/z-review-all/SKILL.md, skills/z-debug/SKILL.md are canonical -- the commands/ directory no longer exists as of the 2026-06-22 rename commit (2731f1d); prior LLM-tier doc still pointed at commands/z-review-all.md and commands/z-debug.md",
+    "z-review-all Phase 7 has a separate INTENT-mode dispatch variant passing review_contract: intent and ledger_path: $LEDGER_FILE alongside the legacy-mode dispatch"
   ],
   "memories": []
 }

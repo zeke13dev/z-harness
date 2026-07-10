@@ -1,86 +1,94 @@
 {
   "concept": "z-review-all",
-  "last_updated": "2026-06-24",
-  "source_files": [
+  "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review.",
+  "last_updated": "2026-07-09",
+  "covers_spec": "none",
+  "source_file": [
     "skills/z-review-all/SKILL.md",
     "docs/human/z-review-all.md"
   ],
   "confidence": "high",
-  "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review.",
   "entry_points": [
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 269,
+      "line": 70,
+      "symbol": "Pre-Phase 0 resume check",
+      "kind": "module",
+      "summary": "Validates .review_state.json against HEAD; fast-forwards to Phase 4 or deletes stale state."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 379,
       "symbol": "Phase 3.6 pre-review cycle",
       "kind": "module",
       "summary": "Optional runtime.pre_review cycle before consultant dispatch; separate from final review authority."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 562,
+      "line": 651,
       "symbol": "Phase 4 consultants",
       "kind": "module",
       "summary": "Parallel consultant-primary and consultant-secondary final-review calls."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 674,
+      "line": 763,
       "symbol": "finding promotion contract",
       "kind": "module",
       "summary": "Canonical classes and dispositions for promoted findings."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 755,
+      "line": 844,
       "symbol": "Phase 6 promote findings",
       "kind": "module",
       "summary": "Writes REVIEW-TASKS.md or clean shipped.md."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 821,
+      "line": 910,
       "symbol": "Phase 6.5 auto-amend",
       "kind": "module",
       "summary": "Unconditionally auto-applies amendable spec_gap amendment_proposal tasks via /z-amend --skip-user-gate."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 892,
+      "line": 981,
       "symbol": "Phase 6.6 amendment brief",
       "kind": "module",
       "summary": "Builds corrections and approach_concerns JSON, renders archive amendment-brief.md."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 976,
+      "line": 1065,
       "symbol": "Phase 6.6 skip gate",
       "kind": "module",
       "summary": "Skips brief only when both corrections and approach_concerns are empty."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 1005,
+      "line": 1094,
       "symbol": "Phase 6.7 tier2 finalization",
       "kind": "module",
       "summary": "Finalizes tier2-context and significance gate for z-doc-rationale recommendations."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 1058,
+      "line": 1147,
       "symbol": "Run Brief finalize",
       "kind": "module",
       "summary": "Sets outcome/next/approach and renders final chat/push via run-brief."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 1112,
+      "line": 1201,
       "symbol": "APPROACH_FILE selection",
       "kind": "module",
       "summary": "Prefers archive amendment-brief.md over findings.md and REVIEW-TASKS for approach extraction."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 1179,
+      "line": 1268,
       "symbol": "Phase 7 memory review",
       "kind": "module",
       "summary": "Runs run-memory-review, review-agent, and optional axiom-extractor candidate flow."
@@ -90,13 +98,13 @@
     "amendment-brief",
     "run-brief-contract",
     "active-plan-registry",
-    "tier2-context",
-    "memory-review"
+    "tier2-doc-rationale",
+    "review-agent"
   ],
   "consumed_by": [
     "z-execute",
-    "z-report",
-    "z-improve"
+    "z-doc-rationale",
+    "z-maintain-docs"
   ],
   "invariants": [
     "Pre-review cycle never replaces final consultants.",
@@ -105,13 +113,15 @@
     "Code changes are never auto-implemented by Phase 6.5.",
     "Completed-task contradictions become superseding tasks.",
     "Phase 6.6 skip requires both lists empty.",
-    "Run Brief owns final user-facing prose."
+    "Run Brief owns final user-facing prose.",
+    "A resume with mismatched HEAD or missing artifact files is always treated as stale and re-run from Phase 0."
   ],
   "gotchas": [
     "Phase 6.5 header says severity-based but current rule applies blocker/major/minor amendment proposals alike.",
     "A clean review writes shipped.md and omits REVIEW-TASKS; Phase 6.5/6.6 then have nothing to do.",
     "amendment-brief.md lives under archive/$RRUN, not $BASE.",
-    "Phase 7 memory review can dispatch axiom-extractor alongside review-agent when AXIOM_READY is present."
+    "Phase 7 memory review can dispatch axiom-extractor alongside review-agent when AXIOM_READY is present; axiom-extractor proposes only, never auto-approves.",
+    "Line numbers for phase headings drift by tens of lines between edits (e.g. this refresh moved every entry point by ~89 lines) — re-verify via grep before citing, don't assume a fixed offset."
   ],
   "memories": []
 }
