@@ -42,7 +42,7 @@ _CONSULT_ON_CONFIG = None
 def setUpModule() -> None:
     global _STUB_BIN, _CONSULT_ON_CONFIG
     _STUB_BIN = tempfile.mkdtemp(prefix="zh-stub-bin-")
-    for name in ("gemini", "codex", "claude", "agy", "cursor"):
+    for name in ("gemini", "codex", "claude", "agy", "cursor", "omp-consult.sh", "omp"):
         p = os.path.join(_STUB_BIN, name)
         with open(p, "w") as fh:
             fh.write("#!/bin/sh\nexit 0\n")
@@ -67,6 +67,21 @@ def _make_provider(command: str, model_label: str) -> dict:
         "stdin": True,
         "timeout_s": 60,
         "model_label": model_label,
+    }
+
+
+def _make_omp_cursor_provider(model_id: str, model_label: str) -> dict:
+    """T007: an omp-consult.sh entry backed by the `cursor` omp provider."""
+    return {
+        "kind": "cli",
+        "command": "omp-consult.sh",
+        "args_template": [model_id, "--fallback", "cursor-agent", "-p", "--output-format", "text"],
+        "stdin": True,
+        "timeout_s": 300,
+        "model_label": model_label,
+        "model_arg_template": None,
+        "model_env_var": None,
+        "default_model": None,
     }
 
 
@@ -563,6 +578,104 @@ class TestModelsOverride(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         out = json.loads(result.stdout)
         self.assertEqual(out["provider"], "codex")
+
+
+class TestCursorRoleReconfiguration(unittest.TestCase):
+    """T007: reviewer/consultant_secondary reconfigured to cursor-backed gpt-5.6 providers."""
+
+    def test_reviewer_resolves_cursor_terra_provider(self):
+        providers = {
+            "omp-cursor-terra": _make_omp_cursor_provider(
+                "cursor/gpt-5.6-terra-medium", "GPT-5.6 Terra medium (omp/cursor OAuth)"
+            ),
+            "omp-cursor-sol": _make_omp_cursor_provider(
+                "cursor/gpt-5.6-sol-medium", "GPT-5.6 Sol medium (omp/cursor OAuth)"
+            ),
+            "omp-antigravity-pro": _make_omp_cursor_provider(
+                "google-antigravity/gemini-3.1-pro", "Antigravity Gemini 3.1 Pro"
+            ),
+        }
+        roles = {
+            "consultant_primary": "omp-antigravity-pro",
+            "consultant_secondary": "omp-cursor-sol",
+            "reviewer": "omp-cursor-terra",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config_v2(tf_path, providers, roles)
+            result = _run("reviewer", tf_path)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            out = json.loads(result.stdout)
+            self.assertEqual(out["provider"], "omp-cursor-terra")
+            self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-terra-medium")
+            self.assertEqual(out["auth_backend"], "OMP OAuth / Cursor")
+            self.assertEqual(out["auth_provider"], "cursor")
+        finally:
+            os.unlink(tf_path)
+
+    def test_consultant_secondary_resolves_cursor_sol_provider(self):
+        providers = {
+            "omp-cursor-terra": _make_omp_cursor_provider(
+                "cursor/gpt-5.6-terra-medium", "GPT-5.6 Terra medium (omp/cursor OAuth)"
+            ),
+            "omp-cursor-sol": _make_omp_cursor_provider(
+                "cursor/gpt-5.6-sol-medium", "GPT-5.6 Sol medium (omp/cursor OAuth)"
+            ),
+            "omp-antigravity-pro": _make_omp_cursor_provider(
+                "google-antigravity/gemini-3.1-pro", "Antigravity Gemini 3.1 Pro"
+            ),
+        }
+        roles = {
+            "consultant_primary": "omp-antigravity-pro",
+            "consultant_secondary": "omp-cursor-sol",
+            "reviewer": "omp-cursor-terra",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config_v2(tf_path, providers, roles)
+            result = _run("consultant_secondary", tf_path)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            out = json.loads(result.stdout)
+            self.assertEqual(out["provider"], "omp-cursor-sol")
+            self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-sol-medium")
+            self.assertEqual(out["auth_backend"], "OMP OAuth / Cursor")
+            self.assertEqual(out["auth_provider"], "cursor")
+
+            primary = _run("consultant_primary", tf_path)
+            self.assertEqual(primary.returncode, 0, msg=primary.stderr)
+            primary_out = json.loads(primary.stdout)
+            # consultant_primary stays gemini-3.1-pro and remains a distinct provider.
+            self.assertEqual(primary_out["provider"], "omp-antigravity-pro")
+            self.assertEqual(
+                primary_out["args_template"][0], "google-antigravity/gemini-3.1-pro"
+            )
+            self.assertNotEqual(primary_out["provider"], out["provider"])
+        finally:
+            os.unlink(tf_path)
+
+    def test_cursor_auth_backend_classification_unit(self):
+        """_auth_backend_for classifies the cursor omp provider analogous to
+        Antigravity/Codex, given only the argv (no live auth check)."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("resolve_provider_mod", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        entry = {"command": "omp-consult.sh"}
+        argv = [
+            "cursor/gpt-5.6-terra-medium",
+            "--fallback",
+            "cursor-agent",
+            "-p",
+            "--output-format",
+            "text",
+        ]
+        backend, provider = mod._auth_backend_for(entry, argv)
+        self.assertEqual(backend, "OMP OAuth / Cursor")
+        self.assertEqual(provider, "cursor")
 
 
 if __name__ == "__main__":

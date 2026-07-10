@@ -2,8 +2,15 @@
 Tests for the oh-my-pi (omp) consult-arm provider entries.
 
 Covers the pi-first-class plan: the `omp-codex` provider and `omp-gemini` alias dispatch
-through the `omp-consult.sh` stdin->arg adapter, the consultant roles resolve through them, and
-the reviewer role stays on native codex (D2 — reviewer gate is not routed through omp).
+through the `omp-consult.sh` stdin->arg adapter, and the consultant roles resolve through them.
+
+T007 (host-aware-model-tiers) supersedes the earlier D2 decision ("reviewer gate is not
+routed through omp"): the reviewer and consultant_secondary roles now resolve to the
+`cursor`-backed omp providers (`omp-cursor-terra` / `omp-cursor-sol`, gpt-5.6 terra/sol
+medium), because omp v16 only serves the gpt-5.6 family via the `cursor` provider. An OAuth
+hiccup on that provider fails loud through the shared preflight (`resolve-provider.py`
+`_preflight_provider` / `omp-consult.sh`'s own auth check) rather than silently degrading, so
+the original "never stall a review" intent is preserved via fail-loud, not via avoiding omp.
 
 These tests are fully isolated from the live repo config: both Z_HARNESS_REPO_PROVIDERS
 (providers.json) and Z_HARNESS_REPO_CONFIG (config.toml with consult=on) are pinned, so the
@@ -72,8 +79,8 @@ class TestOmpProvider(unittest.TestCase):
                     "version": 2,
                     "roles": {
                         "consultant_primary": "omp-gemini",
-                        "consultant_secondary": "omp-codex",
-                        "reviewer": "codex-cli",
+                        "consultant_secondary": "omp-cursor-sol",
+                        "reviewer": "omp-cursor-terra",
                     },
                     "providers": {
                         "omp-codex": _omp_provider(
@@ -82,6 +89,14 @@ class TestOmpProvider(unittest.TestCase):
                         "omp-antigravity-pro": _omp_provider(
                             "google-antigravity/gemini-3.1-pro",
                             "Antigravity Gemini 3.1 Pro (omp/google-antigravity OAuth)",
+                        ),
+                        "omp-cursor-terra": _omp_provider(
+                            "cursor/gpt-5.6-terra-medium",
+                            "GPT-5.6 Terra medium (omp/cursor OAuth)",
+                        ),
+                        "omp-cursor-sol": _omp_provider(
+                            "cursor/gpt-5.6-sol-medium",
+                            "GPT-5.6 Sol medium (omp/cursor OAuth)",
                         ),
                         "codex-cli": {
                             "kind": "cli",
@@ -131,32 +146,61 @@ class TestOmpProvider(unittest.TestCase):
         self.assertEqual(d["auth_provider"], "google-antigravity")
         self.assertTrue(d["stdin"])
 
-    def test_consultant_secondary_resolves_omp_codex(self):
+    def test_consultant_secondary_resolves_omp_cursor_sol(self):
         r = self._run("consultant_secondary")
         self.assertEqual(r.returncode, 0, r.stderr)
         d = json.loads(r.stdout)
-        self.assertEqual(d["provider"], "omp-codex")
+        self.assertEqual(d["provider"], "omp-cursor-sol")
         self.assertEqual(d["command"], "omp-consult.sh")
-        self.assertEqual(d["auth_backend"], "OMP OAuth / Codex")
-        self.assertEqual(d["auth_provider"], "openai-codex")
-        self.assertEqual(d["args_template"], ["openai-codex/gpt-5.5"])
+        self.assertEqual(d["auth_backend"], "OMP OAuth / Cursor")
+        self.assertEqual(d["auth_provider"], "cursor")
+        self.assertEqual(d["args_template"], ["cursor/gpt-5.6-sol-medium"])
 
     def test_omp_auth_failure_fails_preflight_actionably(self):
         r = self._run("consultant_secondary", {"OMP_TOKEN_RC": "1"})
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("provider_preflight_failed", r.stderr)
         self.assertIn("role=consultant_secondary", r.stderr)
-        self.assertIn("provider=omp-codex", r.stderr)
-        self.assertIn("auth_backend=OMP OAuth / Codex", r.stderr)
+        self.assertIn("provider=omp-cursor-sol", r.stderr)
+        self.assertIn("auth_backend=OMP OAuth / Cursor", r.stderr)
         self.assertIn("auth not ready", r.stderr)
 
-    def test_reviewer_stays_native_codex(self):
-        """D2: the blocking reviewer gate is NOT routed through omp."""
+    def test_reviewer_resolves_omp_cursor_terra(self):
+        """T007: the reviewer role now routes through the cursor-backed gpt-5.6 terra provider
+        (supersedes the earlier D2 "reviewer stays native codex" decision); an auth hiccup
+        still fails loud via preflight rather than silently degrading."""
         r = self._run("reviewer")
         self.assertEqual(r.returncode, 0, r.stderr)
         d = json.loads(r.stdout)
-        self.assertEqual(d["provider"], "codex-cli")
-        self.assertEqual(d["command"], "codex")
+        self.assertEqual(d["provider"], "omp-cursor-terra")
+        self.assertEqual(d["command"], "omp-consult.sh")
+        self.assertEqual(d["auth_backend"], "OMP OAuth / Cursor")
+        self.assertEqual(d["auth_provider"], "cursor")
+        self.assertEqual(d["args_template"], ["cursor/gpt-5.6-terra-medium"])
+
+    def test_reviewer_auth_failure_fails_preflight_actionably(self):
+        """The cursor-backed reviewer provider fails loud (never silently falls back)
+        when omp is not authed for cursor."""
+        r = self._run("reviewer", {"OMP_TOKEN_RC": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("provider_preflight_failed", r.stderr)
+        self.assertIn("role=reviewer", r.stderr)
+        self.assertIn("provider=omp-cursor-terra", r.stderr)
+        self.assertIn("auth_backend=OMP OAuth / Cursor", r.stderr)
+        self.assertIn("auth not ready", r.stderr)
+
+    def test_consultant_roles_remain_distinct_providers(self):
+        """consultant_primary (antigravity/gemini) and consultant_secondary (cursor/sol)
+        must resolve to distinct providers even after the T007 reconfiguration."""
+        primary = self._run("consultant_primary")
+        secondary = self._run("consultant_secondary")
+        self.assertEqual(primary.returncode, 0, primary.stderr)
+        self.assertEqual(secondary.returncode, 0, secondary.stderr)
+        primary_provider = json.loads(primary.stdout)["provider"]
+        secondary_provider = json.loads(secondary.stdout)["provider"]
+        self.assertNotEqual(primary_provider, secondary_provider)
+        self.assertEqual(primary_provider, "omp-antigravity-pro")
+        self.assertEqual(secondary_provider, "omp-cursor-sol")
 
     def test_compose_argv_renders_model_as_positional(self):
         """compose_argv on an omp entry yields `omp-consult.sh <provider/model>`."""
@@ -346,14 +390,50 @@ class TestOmpLiveEntries(unittest.TestCase):
         aliases = data.get("aliases", {})
 
         self.assertEqual(aliases.get("omp-gemini"), "omp-antigravity-pro")
-        for name, native in (("omp-codex", "codex"), (aliases["omp-gemini"], "gemini")):
+        for name, native in (
+            ("omp-codex", "codex"),
+            (aliases["omp-gemini"], "gemini"),
+            ("omp-cursor-terra", "cursor-agent"),
+            ("omp-cursor-sol", "cursor-agent"),
+        ):
             self.assertIn(name, providers, f"{name} missing from providers.json")
             argt = providers[name]["args_template"]
             self.assertEqual(providers[name]["command"], "omp-consult.sh")
             self.assertIn("--fallback", argt, f"{name} has no --fallback clause")
             self.assertIn(native, argt, f"{name} fallback does not invoke {native}")
             # model id is the first positional arg (before --fallback)
-            self.assertEqual(argt[0].split("/")[0] in ("openai-codex", "google-antigravity"), True)
+            self.assertEqual(
+                argt[0].split("/")[0] in ("openai-codex", "google-antigravity", "cursor"),
+                True,
+            )
+
+    def test_live_roles_route_reviewer_and_secondary_to_cursor_gpt56(self):
+        """T007: reviewer -> gpt-5.6-terra-medium, consultant_secondary -> gpt-5.6-sol-medium,
+        consultant_primary stays gemini-3.1-pro; the two consultants remain distinct providers."""
+        cfg = Path(__file__).parent.parent / ".z-harness" / "providers.json"
+        data = json.loads(cfg.read_text())
+        roles = data["roles"]
+        providers = data["providers"]
+
+        self.assertEqual(roles["reviewer"], "omp-cursor-terra")
+        self.assertEqual(roles["consultant_secondary"], "omp-cursor-sol")
+        self.assertEqual(roles["consultant_primary"], "omp-antigravity-pro")
+
+        self.assertEqual(
+            providers["omp-cursor-terra"]["args_template"][0],
+            "cursor/gpt-5.6-terra-medium",
+        )
+        self.assertEqual(
+            providers["omp-cursor-sol"]["args_template"][0],
+            "cursor/gpt-5.6-sol-medium",
+        )
+        self.assertEqual(
+            providers["omp-antigravity-pro"]["args_template"][0],
+            "google-antigravity/gemini-3.1-pro",
+        )
+
+        # Distinctness: consultant_primary and consultant_secondary are different providers.
+        self.assertNotEqual(roles["consultant_primary"], roles["consultant_secondary"])
 
     def test_project_omp_config_disables_agents_md_autoload(self):
         cfg = Path(__file__).parent.parent / ".omp" / "config.yml"

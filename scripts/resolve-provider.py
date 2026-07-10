@@ -555,6 +555,8 @@ def _auth_backend_for(provider_dict: dict, argv: list[str]) -> tuple[str, str]:
             return "OMP OAuth / Antigravity", omp_provider
         if omp_provider == "openai-codex":
             return "OMP OAuth / Codex", omp_provider
+        if omp_provider == "cursor":
+            return "OMP OAuth / Cursor", omp_provider
         if omp_provider:
             return f"OMP OAuth / {omp_provider}", omp_provider
         return "OMP OAuth", ""
