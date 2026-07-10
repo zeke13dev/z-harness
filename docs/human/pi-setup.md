@@ -110,8 +110,8 @@ All three consult/reviewer roles are wired through omp by default (`.z-harness/p
 > Cursor OAuth (`omp-cursor-terra`), same as `consultant_secondary`. Provider preflight fails loud
 > with an actionable re-auth path if `cursor` is not authed in omp; it does not silently fall back.
 > This means `cursor` OAuth is now a **required** login for both `reviewer` and
-> `consultant_secondary` — see the auth-check note below (`scripts/check-pi-auth.sh` has not yet
-> been updated to reflect this; it still lists `cursor` as optional).
+> `consultant_secondary` — `scripts/check-pi-auth.sh` marks `cursor` as required accordingly (see
+> below).
 
 ## `pi` vs `omp` — which binary
 
@@ -151,22 +151,19 @@ scripts/check-pi-auth.sh
 ```
 
 Read-only; probes `omp token <provider>` (never prints secrets) and reports which providers are
-authenticated. Exit 0 always (add `--strict` to fail when a required arm is missing). Current
-script output (not yet updated for the T007 role reconfig above):
+authenticated. Exit 0 always (add `--strict` to fail when a required arm is missing). Example
+output (reflects the T007 role reconfig — `cursor` is required, `openai-codex` is optional):
 
 ```
 PROVIDER               STATUS     POWERS
-openai-codex           authed     omp-codex consult arm (GPT-5.5, ChatGPT sub)
-google-antigravity     authed     omp-gemini consult arm (Gemini 3.1 Pro, Antigravity OAuth)
-cursor                 authed     optional future Cursor arm
+google-antigravity     authed     omp-antigravity-pro consultant_primary arm (Gemini 3.1 Pro, Antigravity OAuth)
+cursor                 authed     omp-cursor-sol/omp-cursor-terra consultant_secondary+reviewer arms (Cursor OAuth)
+openai-codex           authed     omp-codex arm (GPT-5.5, ChatGPT sub) — not bound to any default role
 ```
 
-> **Known drift:** `scripts/check-pi-auth.sh` still marks `openai-codex` as required and `cursor`
-> as optional. Since T007, `cursor` is actually the required backend for `reviewer` and
-> `consultant_secondary` (the two roles that now route through omp), while `openai-codex` is no
-> longer bound to any default role (the `omp-codex` provider entry still exists for manual
-> binding). Run `omp token cursor` yourself to confirm readiness until the script is updated to
-> match.
+`cursor` is the required backend for both `reviewer` and `consultant_secondary` (the two roles
+that route through omp's Cursor OAuth); `openai-codex` is no longer bound to any default role
+(the `omp-codex` provider entry still exists for manual binding).
 
 ## How the consult dispatch works
 

@@ -5,10 +5,12 @@
 # (which only holds API-key entries). So this checker probes `omp token <provider>` by
 # EXIT STATUS — a 0 means a credential resolves. It never prints token values.
 #
-# Required = the providers the z-harness omp consult arms depend on (see .z-harness/providers.json:
-#   omp-codex  -> openai-codex/gpt-5.5
-#   omp-gemini -> google-antigravity/gemini-3.1-pro
-# Optional = arms that are feasible but not wired by default.
+# Required = the providers the z-harness omp consult/reviewer arms are actually bound to by
+# default role (see .z-harness/providers.json "roles" + provider entries):
+#   consultant_primary   -> omp-antigravity-pro -> google-antigravity/gemini-3.1-pro
+#   consultant_secondary -> omp-cursor-sol      -> cursor/gpt-5.6-sol-medium
+#   reviewer             -> omp-cursor-terra    -> cursor/gpt-5.6-terra-medium
+# Optional = arms that are feasible but not bound to any default role.
 #
 # Always exits 0 (report, do not fail) unless a required provider is missing AND --strict is set.
 set -uo pipefail
@@ -23,9 +25,9 @@ fi
 
 # provider | required(1/0) | what it powers
 PROVIDERS=(
-  "openai-codex|1|omp-codex consult arm (GPT-5.5, ChatGPT sub)"
-  "google-antigravity|1|omp-gemini consult arm (Gemini 3.1 Pro, Antigravity OAuth)"
-  "cursor|0|optional future Cursor arm"
+  "google-antigravity|1|omp-antigravity-pro consultant_primary arm (Gemini 3.1 Pro, Antigravity OAuth)"
+  "cursor|1|omp-cursor-sol/omp-cursor-terra consultant_secondary+reviewer arms (Cursor OAuth)"
+  "openai-codex|0|omp-codex arm (GPT-5.5, ChatGPT sub) — not bound to any default role"
 )
 
 missing_required=0
