@@ -55,10 +55,12 @@ If `CONTEXT.md` does not exist at the repo root, recommend the user run `/z-init
 **Step 1: Re-extract candidate domain terms.**
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The Explore subagent re-extracts candidate domain terms for the glossary refresh; drivers that skip it should warn the user that glossary refresh is unavailable. -->
+<!-- No model= override: explore is a config-routed fleet agent
+     (model_routing.native_agents.explore → cheap class), so its
+     host-aware model+effort resolves via config/frontmatter, not a call-site literal. -->
 ```
 Agent(
   subagent_type="explore",
-  model="haiku",
   description="Re-extract domain terms for glossary refresh",
   prompt="Re-extract candidate domain terms from the codebase — recurring nouns in module, type, and function names that are not standard English dictionary words. For each term: provide a concise one-line definition and note any synonyms or aliases in use. Return a flat list of (term, definition, avoid-list) triples.\nrepo_root: <abs path>"
 )

@@ -437,10 +437,12 @@ The agent always receives one `diff_path` pointing to a single `.patch` file —
 **If `MODE=full`:** dispatch the agent once with the full diff.
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The mr-reviewer agent is the sole source of review findings; drivers that skip it must warn the user that code-quality review is unavailable. -->
+<!-- No model= override: mr-reviewer is a config-routed fleet agent
+     (model_routing.native_agents.mr_reviewer → standard class), so its
+     host-aware model+effort resolves via config/frontmatter, not a call-site literal. -->
 ```
 Agent(
   subagent_type="mr-reviewer",
-  model="sonnet",
   description="MR review for <SLUG>",
   prompt="slug: <SLUG>
 run_id: <RUN>
@@ -485,11 +487,13 @@ PYEOF
 For each chunk listed in the manifest, dispatch one `Agent()` call. Dispatch all chunk agents in parallel — a single message with one `Agent()` call per chunk:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip all per-chunk Agent() calls. The per-chunk mr-reviewer agents produce findings for large diffs; drivers that skip them must warn the user that chunked review is unavailable. -->
+<!-- No model= override: mr-reviewer is a config-routed fleet agent
+     (model_routing.native_agents.mr_reviewer → standard class), so its
+     host-aware model+effort resolves via config/frontmatter, not a call-site literal. -->
 ```
 # Repeat this Agent() call once per chunk, all in the same message (parallel dispatch):
 Agent(
   subagent_type="mr-reviewer",
-  model="sonnet",
   description="MR review for <SLUG> — chunk <INDEX> of <TOTAL>",
   prompt="slug: <SLUG>
 run_id: <RUN>
@@ -511,10 +515,12 @@ Collect all per-chunk agent returns as a list `CHUNK_AGENT_RETURNS` (one entry p
 After all per-chunk agents complete, dispatch one additional abstraction-only pass with the full diff. This pass runs AFTER the per-chunk batch (sequential, not parallel with the chunks):
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The abstraction-only pass catches cross-file findings not visible in individual chunks; drivers that skip it should warn the user that abstraction-level review is unavailable. -->
+<!-- No model= override: mr-reviewer is a config-routed fleet agent
+     (model_routing.native_agents.mr_reviewer → standard class), so its
+     host-aware model+effort resolves via config/frontmatter, not a call-site literal. -->
 ```
 Agent(
   subagent_type="mr-reviewer",
-  model="sonnet",
   description="MR abstraction-only pass for <SLUG>",
   prompt="slug: <SLUG>
 run_id: <RUN>
