@@ -7,7 +7,11 @@ Coverage:
 - ``touch_heartbeat`` advances the target file's mtime;
 - ``run_lifecycle`` raises ``DaemonAlreadyRunningError`` on a second
   concurrent acquire attempt and cleanly releases the lock on exit, including
-  when the wrapped body raises.
+  when the wrapped body raises;
+- ``run_startup_reconcile`` (T017, criteria #8/#9): a dead-target record is
+  orphaned exactly once (alerted once) and never re-alerted on a second call;
+  a stale lock naming a dead pid is acquired successfully; every
+  ``has_session`` call is passed an explicit timeout.
 
 Tests are hermetic (STYLE.md:T-004): all filesystem effects go under
 pytest's ``tmp_path`` fixture. An autouse fixture restores the process's real
@@ -20,6 +24,8 @@ from __future__ import annotations
 
 import json
 import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -157,3 +163,101 @@ def test_run_lifecycle_releases_lock_even_when_body_raises(tmp_path: Path) -> No
     # Lock was released on the exceptional exit path too.
     with daemon.run_lifecycle(lock_path):
         pass
+
+
+# ── run_startup_reconcile ─────────────────────────────────────────────────────
+
+def _dead_pid() -> int:
+    """Return a pid guaranteed dead (a reaped child), for stale-lock tests."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _fixture_registry(registry_path: Path) -> tuple[dict, dict]:
+    """Write a two-record registry: one live target, one dead target."""
+    live = registry.new_session_record(
+        slug="live", plan_dir="/p", host="claude",
+        tmux_target="zw-live-1", transcript_path="/t-live.jsonl",
+    )
+    dead = registry.new_session_record(
+        slug="dead", plan_dir="/p", host="claude",
+        tmux_target="zw-dead-1", transcript_path="/t-dead.jsonl",
+    )
+    sessions = {live["session_id"]: live, dead["session_id"]: dead}
+    registry.write_registry(registry_path, sessions)
+    return live, dead
+
+
+def test_run_startup_reconcile_orphans_dead_target_exactly_once(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    lock_path = tmp_path / "daemon.lock"
+    live, dead = _fixture_registry(registry_path)
+
+    calls: list[tuple[str, float]] = []
+
+    def fake_has_session(target: str, *, timeout: float) -> bool:
+        calls.append((target, timeout))
+        return target == live["tmux_target"]
+
+    alerts: list[tuple[str, str]] = []
+
+    def fake_alert_fn(title: str, body: str) -> bool:
+        alerts.append((title, body))
+        return True
+
+    updated = daemon.run_startup_reconcile(
+        registry_path,
+        lock_path,
+        has_session=fake_has_session,
+        alert_fn=fake_alert_fn,
+        timeout=7.0,
+    )
+
+    # The dead record is orphaned; the live one is untouched (never
+    # auto-adopted into a different lifecycle state).
+    assert updated[dead["session_id"]]["state"] == "orphaned"
+    assert updated[live["session_id"]]["state"] == registry.INITIAL_STATE
+    assert len(alerts) == 1
+
+    # Persisted to disk before returning.
+    on_disk = registry.read_registry(registry_path)
+    assert on_disk[dead["session_id"]]["state"] == "orphaned"
+
+    # Every has_session call carried an explicit timeout.
+    assert calls
+    assert all(timeout == 7.0 for _target, timeout in calls)
+
+    # Lock was released — a second acquire attempt succeeds.
+    with daemon.run_lifecycle(lock_path):
+        pass
+
+    # A second reconcile pass over the now-orphaned record fires zero
+    # additional alerts (terminal state skipped outright).
+    updated_again = daemon.run_startup_reconcile(
+        registry_path,
+        lock_path,
+        has_session=fake_has_session,
+        alert_fn=fake_alert_fn,
+        timeout=7.0,
+    )
+    assert updated_again[dead["session_id"]]["state"] == "orphaned"
+    assert len(alerts) == 1  # unchanged
+
+
+def test_run_startup_reconcile_acquires_stale_lock_from_dead_pid(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    lock_path = tmp_path / "daemon.lock"
+    registry.write_registry(registry_path, {})
+    # Simulate a crashed daemon: a pidfile naming a dead pid, no flock holder.
+    lock_path.write_text(f"{_dead_pid()}\n", encoding="utf-8")
+
+    updated = daemon.run_startup_reconcile(
+        registry_path,
+        lock_path,
+        has_session=lambda target, *, timeout: True,
+        alert_fn=lambda title, body: True,
+    )
+    assert updated == {}

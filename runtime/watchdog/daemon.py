@@ -14,10 +14,14 @@ watchdog level composes into the actual daemon process:
   single-instance lock, propagating ``DaemonAlreadyRunningError`` when a live
   daemon already holds it.
 
-Non-scope (level 2 owns these — deliberately absent here): the poll loop, the
-``status`` / ``run --once`` CLI verbs, and invoking the T014 startup-reconcile
-pass. This module ships primitives only; T014's ``reconcile.py`` review note
-explicitly deferred single-instance-lock USAGE to this task.
+Also (T017, criteria #8/#9): ``run_startup_reconcile`` composes the three
+primitives above with T014's ``reconcile.startup_reconcile`` into the daemon's
+actual startup sequence — acquire the single-instance lock, reconcile the
+registry against live tmux state, persist the result — so every later poll
+cycle starts from a registry that already reflects reality.
+
+Non-scope (level 2 owns these — deliberately absent here): the poll loop and
+the ``status`` / ``run --once`` CLI verbs.
 
 Design decisions:
 - DI seam (STYLE.md:P-004 spirit): ``install_sigterm_handler`` takes a
@@ -46,7 +50,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from runtime.watchdog import registry
+from runtime.watchdog import notify, reconcile, registry, tmux_actuator
 
 SigtermHandler = Callable[[int, object], None]
 
@@ -127,3 +131,52 @@ def run_lifecycle(lock_path: Path | str) -> Iterator[int]:
         yield fd
     finally:
         registry.release_single_instance_lock(fd, lock_path)
+
+
+def run_startup_reconcile(
+    registry_path: Path | str,
+    lock_path: Path | str,
+    *,
+    has_session: Callable[..., bool] = tmux_actuator.has_session,
+    alert_fn: Callable[..., bool] = notify.send_discord_alert,
+    timeout: float = tmux_actuator.DEFAULT_TIMEOUT_S,
+    now: str | None = None,
+) -> dict[str, dict]:
+    """Run the daemon's startup reconcile pass before any poll cycle begins.
+
+    Acquires the single-instance lock via ``run_lifecycle`` (reusing T003's
+    stale-dead-pid auto-cleanup — no new lock logic here), reads the current
+    registry, reconciles it against live tmux state
+    (``reconcile.startup_reconcile``, T014: marks a record whose tmux target
+    is gone ``orphaned`` exactly once, alerting via ``alert_fn``, never
+    auto-adopting it back into a lifecycle state), persists the result, and
+    returns the updated sessions mapping.
+
+    Args:
+        registry_path: Path to ``sessions.json``.
+        lock_path: Path to the daemon single-instance pidfile+lock.
+        has_session: Injected ``tmux_actuator.has_session``-shaped callable.
+        alert_fn: Injected ``notify.send_discord_alert``-shaped callable.
+        timeout: Explicit subprocess timeout passed to every ``has_session``
+            call.
+        now: ISO timestamp override (deterministic tests); defaults to now.
+
+    Returns:
+        The updated ``session_id`` -> record mapping, already persisted to
+        ``registry_path``.
+
+    Raises:
+        DaemonAlreadyRunningError: propagated verbatim (via ``run_lifecycle``)
+            when a live daemon already holds the lock.
+    """
+    with run_lifecycle(lock_path):
+        sessions = registry.read_registry(registry_path)
+        updated = reconcile.startup_reconcile(
+            sessions,
+            has_session=has_session,
+            timeout=timeout,
+            alert_fn=alert_fn,
+            now=now,
+        )
+        registry.write_registry(registry_path, updated)
+        return updated
