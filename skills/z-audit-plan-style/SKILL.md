@@ -264,9 +264,11 @@ Dispatch:
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
      requirement to the user and skip the Agent() call. The command cannot
      proceed without subagent support. -->
+<!-- No model= override: plan-style-reviewer is a config-routed fleet agent
+     (model_routing.native_agents.plan_style_reviewer → standard class), so its
+     host-aware model+effort resolves via config/frontmatter, not a call-site literal. -->
 Agent(
   subagent_type="plan-style-reviewer",
-  model="sonnet",
   description="Plan-style review for <Z_HARNESS_SLUG>",
   prompt="slug: <Z_HARNESS_SLUG>
 run_id: <RUN>

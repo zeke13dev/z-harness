@@ -33,6 +33,7 @@ from runtime.dispatch.dispatcher import (
     _compose_argv,
     _current_host_family,
     _host_family,
+    load_model_routing_config,
     resolve_implementer_model,
     resolve_model_route,
     resolve_native_agent_model,
@@ -1657,3 +1658,87 @@ def test_routed_model_source_does_not_emit_legacy_override_event(monkeypatch, tm
     assert "persona_override_used" not in [kind for kind, _payload in captured]
     model_payload = [p for kind, p in captured if kind == "model_resolved"][0]
     assert model_payload["source"] == "frontmatter"
+
+
+# ---------------------------------------------------------------------------
+# T004 fleet native-agent host-aware routing (against the real config DEFAULTS)
+# ---------------------------------------------------------------------------
+
+# Representative fleet agents per class, exercising the shipped
+# model_routing.native_agents DEFAULTS mapping in scripts/config.py.  Frontmatter
+# fallbacks are passed but MUST be ignored because each agent is class-mapped.
+_FLEET_REPRESENTATIVES = {
+    "cheap": ("doc_fetcher", "haiku"),      # haiku frontmatter → cheap class
+    "standard": ("auditor", "sonnet"),      # sonnet frontmatter → standard class
+    "deep": ("research_judge", "opus"),     # opus frontmatter → deep class
+}
+
+# (model, effort) each representative must resolve to per host family.
+_FLEET_CLAUDE_EXPECT = {
+    "cheap": ("haiku", ""),
+    "standard": ("sonnet", "high"),
+    "deep": ("opus", "high"),
+}
+_FLEET_PI_EXPECT = {
+    "cheap": ("gpt-5.6-luna-low", ""),
+    "standard": ("gpt-5.6-terra-medium", ""),
+    "deep": ("gpt-5.6-sol-medium", ""),
+}
+
+
+@pytest.mark.parametrize("class_name", ["cheap", "standard", "deep"])
+def test_fleet_native_agent_resolves_claude_host(class_name, monkeypatch):
+    """Representative fleet agents route through their config class on claude."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    values = load_model_routing_config(REPO_ROOT)
+    agent_id, frontmatter = _FLEET_REPRESENTATIVES[class_name]
+
+    resolved = resolve_native_agent_model(agent_id, frontmatter, values)
+
+    expected_model, expected_effort = _FLEET_CLAUDE_EXPECT[class_name]
+    assert resolved.route_kind == "class"
+    assert resolved.route == class_name
+    assert resolved.source == f"model_routing.native_agents.{agent_id}"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort
+
+
+@pytest.mark.parametrize("class_name", ["cheap", "standard", "deep"])
+def test_fleet_native_agent_resolves_pi_host(class_name, monkeypatch):
+    """The same fleet agents resolve to the gpt-5.6 family on a non-claude host."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    values = load_model_routing_config(REPO_ROOT)
+    agent_id, frontmatter = _FLEET_REPRESENTATIVES[class_name]
+
+    resolved = resolve_native_agent_model(agent_id, frontmatter, values)
+
+    expected_model, expected_effort = _FLEET_PI_EXPECT[class_name]
+    assert resolved.route_kind == "class"
+    assert resolved.source == f"model_routing.native_agents.{agent_id}"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort
+
+
+def test_fleet_native_agent_telemetry_carries_effort(monkeypatch):
+    """A class-routed fleet agent surfaces effort in its telemetry payload."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    values = load_model_routing_config(REPO_ROOT)
+
+    resolved = resolve_native_agent_model("auditor", "sonnet", values)
+    telemetry = resolved.telemetry()
+
+    assert telemetry["route"] == "standard"
+    assert telemetry["route_kind"] == "class"
+    assert telemetry["effort"] == "high"
+
+
+def test_unmapped_fleet_agent_falls_back_to_frontmatter(monkeypatch):
+    """An agent id absent from native_agents defaults resolves via frontmatter."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    values = load_model_routing_config(REPO_ROOT)
+
+    resolved = resolve_native_agent_model("not_a_real_agent", "haiku", values)
+
+    assert resolved.source == "frontmatter"
+    assert resolved.effective_model == "haiku"
+    assert resolved.route_kind == "exact"

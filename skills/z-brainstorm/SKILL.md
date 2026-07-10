@@ -425,6 +425,9 @@ If `WIDE_N ≤ 3` (standard run, no explicit wide request), continue with HEAVY 
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
         requirement and skip all HEAVY sub-flow Agent() calls. Without subagent
         support the HEAVY path cannot proceed; default to MEDIUM mode. -->
+   <!-- model="sonnet" mirrors the `standard` model class on the Claude host.
+        general-purpose is a built-in (no frontmatter), so it is NOT config-routed
+        via model_routing.native_agents — this call-site model pin is deliberate. -->
    Agent(
      subagent_type="general-purpose",
      model="sonnet",
@@ -696,6 +699,11 @@ Then dispatch:
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
      requirement to the user and skip all three ideator Agent() calls. Phase 2
      cannot complete without subagent support. -->
+<!-- model="sonnet" here mirrors the `standard` model class on the Claude host
+     (standard → sonnet). general-purpose is a built-in agent with no frontmatter,
+     so it is NOT part of the config-routed fleet (model_routing.native_agents)
+     and its model must stay an explicit call-site pin — this is a deliberate
+     Claude-arm ideator model, not a fleet-routing bypass. -->
 Agent(
   subagent_type="general-purpose",
   model="sonnet",
@@ -1497,6 +1505,9 @@ Dispatch the subset pair in **parallel** (same as Phase 2 parallel dispatch):
 **Wave 1 and Wave 2 (Claude + one consultant):**
 
 ```
+<!-- model="sonnet" mirrors the `standard` model class on the Claude host.
+     general-purpose is a built-in (no frontmatter), so it is NOT config-routed
+     via model_routing.native_agents — this call-site model pin is deliberate. -->
 Agent(
   subagent_type="general-purpose",
   model="sonnet",

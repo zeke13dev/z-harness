@@ -233,11 +233,55 @@ DEFAULTS: dict = {
         },
     },
     "model_routing": {
-        # Native agents default to their checked-in frontmatter model unless a
-        # specific agent key is configured under [model_routing.native_agents].
-        # This preserves cheap Haiku and standard Sonnet agent defaults exactly.
+        # Native agents route through a model *class* (host-keyed) rather than a
+        # bare frontmatter model.  Each fleet agent is mapped to the class that
+        # mirrors its checked-in frontmatter model — `haiku`→`cheap`,
+        # `sonnet`→`standard`, `opus`→`deep` — so `resolve_native_agent_model`
+        # expands it to the detected host's (model, effort) pair (T002).  Keys
+        # use the underscore agent id (filename without `.md`, dashes→underscores)
+        # matching `resolve_native_agent_model`'s `route_agent_id` convention.
+        # The frontmatter model stays a fallback only for agents not listed here.
+        # `default = ""` keeps the "inherit frontmatter" sentinel for unmapped ids.
         "native_agents": {
             "default": "",
+            # cheap (haiku frontmatter)
+            "artifact_scout": "cheap",
+            "bisect_isolator": "cheap",
+            "complexity_classifier": "cheap",
+            "consultant_primary": "cheap",
+            "consultant_secondary": "cheap",
+            "context_curator": "cheap",
+            "doc_fetcher": "cheap",
+            "explore": "cheap",
+            "external_lookup": "cheap",
+            "ideator_clusterer": "cheap",
+            "intent_classifier": "cheap",
+            "planning_router": "cheap",
+            "pre_reviewer": "cheap",
+            "remote_runner": "cheap",
+            "resolver": "cheap",
+            "resume_cluster": "cheap",
+            "review_agent": "cheap",
+            "reviewer": "cheap",
+            "scope_extractor": "cheap",
+            "scope_probe": "cheap",
+            "spec_precheck": "cheap",
+            "tier1_doc_updater": "cheap",
+            # standard (sonnet frontmatter)
+            "auditor": "standard",
+            "axiom_extractor": "standard",
+            "cluster_planner": "standard",
+            "doc_updater": "standard",
+            "implementer": "standard",
+            "mr_reviewer": "standard",
+            "plan_style_reviewer": "standard",
+            "report_synth": "standard",
+            "scope_reconciler_audit": "standard",
+            "scope_reconciler_brainstorm": "standard",
+            "task_tree_generator": "standard",
+            # deep (opus frontmatter)
+            "research_judge": "deep",
+            "self_reviewer": "deep",
         },
         # Implementer tiers route through the host-keyed model classes (T003):
         # each tier names a class, which resolve_model_route expands to the
