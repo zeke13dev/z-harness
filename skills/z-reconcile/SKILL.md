@@ -74,10 +74,11 @@ For each entry in `git worktree list --porcelain` (excluding the main worktree i
 - `is_detached` — true when the `branch` line is absent or reads `detached`
 - `has_uncommitted` — from `git -C <path> status --porcelain` (non-empty output = true)
 - `remote_reachable` — attempt `timeout 5 git -C <path> ls-remote --exit-code origin HEAD 2>/dev/null` (the `timeout 5` is mandatory: a hung or unreachable remote must not block this read-only audit, which iterates every worktree); if this times out (exit 124) or fails for any other reason, set `remote_reachable=false`
-- `has_unpushed` — if `remote_reachable` is true: count commits via `git -C <path> log @{u}..HEAD 2>/dev/null | wc -l`; > 0 means unpushed; set to `null` if remote unreachable or no upstream set
+- `has_unpushed` — if `remote_reachable` is true: count commits via `git -C <path> log @{u}..HEAD 2>/dev/null | wc -l`; > 0 means unpushed; set to `null` if remote unreachable or no upstream set. This is a corroborating signal only — see `patch_identical_to_default` below, which is authoritative for the merged verdict and does not require pushing.
 - `is_head_ancestor_of_default` — `git -C <path> merge-base --is-ancestor HEAD origin/$_ZR_DEFAULT_BRANCH 2>/dev/null`; true on exit 0, false on exit 1, `null` if the check cannot run
 - `default_branch` — `$_ZR_DEFAULT_BRANCH`
-- `merge_evidence` — `merged` if `git -C <path> branch -r --merged origin/$_ZR_DEFAULT_BRANCH 2>/dev/null` contains the current branch; `merged-uncertain` if the branch is absent from `--merged` but `git -C <path> log --oneline -1 2>/dev/null` finds a squash-pattern match (heuristic: commit subject contains "(#" suggesting a squash PR); otherwise `not-merged`; `unknown` if the check fails
+- `patch_identical_to_default` — offline, squash-aware merge check reusing T001's `scripts/worktree-cleanup.sh` as the single source of truth for this formula. Run `bash "$_ZR_PLUGIN/scripts/worktree-cleanup.sh" classify "$_ZR_REPO_ROOT"` **once** per `/z-reconcile` invocation (not once per worktree — `classify` already sweeps every non-main worktree of the repo in a single JSONL pass) and cache the output. For this worktree's `path`, find the matching JSONL record and set `patch_identical_to_default = (record.merge_state == "merged")`. If the helper is unavailable, or `path` has no matching record (the main worktree is skipped by `classify` — treat it as never eligible for pruning and set this fact to `false`), fall back to the same formula inline: resolve `<local-default>` via `git -C <path> symbolic-ref --quiet refs/remotes/origin/HEAD` stripped of `refs/remotes/origin/`, falling back to local `main`; then `patch_identical_to_default = [ "$(git -C <path> rev-list --cherry-pick --right-only --count <local-default>...HEAD 2>/dev/null)" = "0" ]`. This uses the LOCAL default branch (not `origin/<default>`), so squash merges and unpushed local branches are detected correctly with no remote required.
+- `merge_evidence` — authoritative verdict is `patch_identical_to_default`: if it is `true`, `merge_evidence=merged` regardless of `has_unpushed`, `remote_reachable`, or the remote `--merged` check below (a clean, patch-identical local branch is merged whether or not it was ever pushed). When `patch_identical_to_default` is `false`, fall back to the remote-corroborating heuristic: `merged` if `git -C <path> branch -r --merged origin/$_ZR_DEFAULT_BRANCH 2>/dev/null` contains the current branch; `merged-uncertain` if the branch is absent from `--merged` but `git -C <path> log --oneline -1 2>/dev/null` finds a squash-pattern match (heuristic: commit subject contains "(#" suggesting a squash PR); otherwise `not-merged`; `unknown` if the check fails
 
 Classify each worktree by passing the facts JSON to `scripts/reconcile.py`:
 
@@ -249,16 +250,24 @@ Prune worktree?
 
   Path:   <worktree path>
   Branch: <branch>
-  Class:  dead (clean, no unpushed, HEAD ancestor of <default_branch>)
+  Class:  dead (clean, patch-identical to <default_branch> — offline patch-identity, covers squash merges and unpushed local branches)
 
 Remove this worktree with `git worktree remove`? [yes/no]
 ```
 
-If the user answers `yes`:
+If the user answers `yes`, delegate to the shared worktree-cleanup helper — it performs `git worktree remove` + `git branch -d` (falling back to `-D` only when merge is patch-identity-proven, matching this phase's own `dead` classification) + `git worktree prune` in one shot:
 
 ```bash
-git worktree remove --force "<path>" 2>&1
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" remove "<path>" 2>&1
 ```
+
+Do not pass `--force`: this phase only ever offers `dead`-class worktrees (clean tree, patch-identical to the default branch), and the helper's default (non-force) `remove` already succeeds on exactly that class while refusing anything dirty or unmerged — the same safety gate this phase relies on. If the helper is unavailable for some reason, the documented inline fallback is:
+
+```bash
+git worktree remove "<path>" && (git branch -d "<branch>" || git branch -D "<branch>")
+```
+
+but the helper is the single source of truth for safe removal and should always be preferred. This step removes both the worktree directory and its now-merged branch — nothing is deferred to a separate step.
 
 Print:
 ```

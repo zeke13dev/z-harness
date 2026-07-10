@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run release-verify version-sync version-check
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run release-verify version-sync version-check worktree-sweep worktree-sweep-apply
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -13,9 +13,12 @@ test: version-check
 # Each script self-reports pass/fail counts. Gated in CI (tests.yml).
 # The *test*.sh scripts run with no args; overnight-preflight.sh and
 # normalize-task-state.sh expose their tests behind a --self-test subcommand.
+# Discovers both scripts/*test*.sh (the historical location) and
+# tests/*test*.sh (e.g. tests/worktree_cleanup_test.sh) so shell-test
+# harnesses aren't required to live under scripts/.
 test-sh:
 	@_fail=0; \
-	for t in $$(ls scripts/*test*.sh | grep -v research); do \
+	for t in $$(ls scripts/*test*.sh tests/*test*.sh 2>/dev/null | grep -v research); do \
 	  echo "==> $$t"; \
 	  bash "$$t" || { echo "FAILED: $$t" >&2; _fail=1; }; \
 	done; \
@@ -124,3 +127,37 @@ release-verify: test test-sh
 
 release-dry-run:
 	bash scripts/release-dry-run.sh
+
+# Read-only worktree-hygiene sweep for the CURRENT repo. Classifies every
+# non-main worktree via scripts/worktree-cleanup.sh classify (offline
+# patch-identity; catches squash merges + unpushed local branches) and
+# prints per-bucket counts so a human can eyeball what would be cleaned.
+# NEVER removes anything by itself. Run from the MAIN tree only — see
+# docs/human/worktree-hygiene.md for the parallel-session-safety caveats.
+# Actual removal is a deliberate follow-up: `make worktree-sweep-apply`
+# (prints commands only), `scripts/worktree-cleanup.sh remove <path>`, or
+# `/z-reconcile --prune-worktrees` (interactive, per-item confirmation).
+worktree-sweep:
+	@out="$$(bash scripts/worktree-cleanup.sh classify "$$(pwd)")"; \
+	total=$$(printf '%s\n' "$$out" | grep -c '"bucket"' || true); \
+	safe=$$(printf '%s\n' "$$out" | grep -c '"bucket": "safe-remove"' || true); \
+	dirty=$$(printf '%s\n' "$$out" | grep -c '"bucket": "merged-dirty"' || true); \
+	unmerged=$$(printf '%s\n' "$$out" | grep -c '"bucket": "unmerged-work"' || true); \
+	dead=$$(printf '%s\n' "$$out" | grep -c '"bucket": "dead-pointer"' || true); \
+	echo "worktree sweep (read-only) -- $$(pwd)"; \
+	echo "  safe-remove   : $$safe"; \
+	echo "  merged-dirty  : $$dirty"; \
+	echo "  unmerged-work : $$unmerged"; \
+	echo "  dead-pointer  : $$dead"; \
+	echo "  total         : $$total"; \
+	if [ "$$safe" -gt 0 ]; then \
+	  echo ""; \
+	  echo "$$safe safe-remove candidate(s) found. Review with: make worktree-sweep-apply"; \
+	  echo "Or clean up interactively with: /z-reconcile --prune-worktrees"; \
+	fi
+
+# Dry-run: prints the exact `worktree-cleanup.sh remove` command for every
+# safe-remove worktree, WITHOUT running them. Copy/paste the lines you want
+# to run, or run them yourself after reviewing. Never removes anything.
+worktree-sweep-apply:
+	@bash scripts/worktree-cleanup.sh classify "$$(pwd)" | python3 -c 'import sys, json, shlex; [print("scripts/worktree-cleanup.sh remove " + shlex.quote(r["path"])) for r in map(json.loads, filter(str.strip, sys.stdin)) if r.get("bucket") == "safe-remove"]'

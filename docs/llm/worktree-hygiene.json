@@ -1,0 +1,35 @@
+{
+  "concept": "worktree-hygiene",
+  "last_updated": "2026-07-10",
+  "covers_spec": "none",
+  "source_file": [
+    "scripts/worktree-cleanup.sh",
+    "Makefile",
+    "docs/human/worktree-hygiene.md"
+  ],
+  "confidence": "high",
+  "summary": "Read-only cadence entrypoint (`make worktree-sweep` / `worktree-sweep-apply`) plus runbook for keeping git worktrees from accumulating; classification and removal live in scripts/worktree-cleanup.sh, not in the Makefile itself.",
+  "entry_points": [
+    {"file": "Makefile", "line": 1, "symbol": "worktree-sweep", "kind": "target", "summary": "Read-only: runs worktree-cleanup.sh classify and prints per-bucket counts. Never removes anything."},
+    {"file": "Makefile", "line": 1, "symbol": "worktree-sweep-apply", "kind": "target", "summary": "Dry-run: prints the exact `worktree-cleanup.sh remove <path>` command per safe-remove worktree. Prints only, never executes."}
+  ],
+  "worktree_locations": [
+    "<repo>/.claude/worktrees/",
+    "../<repo>-worktrees/ (external, sibling to repo)",
+    "~/.hermes/worktrees/..."
+  ],
+  "depends_on": ["scripts", "z-reconcile"],
+  "consumed_by": ["operators"],
+  "related_commands": ["z-reconcile"],
+  "invariants": [
+    "make worktree-sweep never removes anything by itself.",
+    "make worktree-sweep-apply only prints remove commands; it never executes them.",
+    "Actual removal always goes through scripts/worktree-cleanup.sh remove (or after-merge), which refuses dirty/unmerged worktrees without --force.",
+    "Run the sweep from the MAIN tree, never from inside a linked worktree."
+  ],
+  "gotchas": [
+    "A single repo's worktrees can live under three different parent directories (in-repo .claude/worktrees/, external ../<repo>-worktrees/, and ~/.hermes/worktrees/...); `git worktree list` (which the classifier uses) already covers all three in one call, so no per-location sweep is needed.",
+    "worktree-cleanup.sh classify exits non-zero style failures are not distinguished per-bucket in the Makefile output beyond the four bucket names (safe-remove/merged-dirty/unmerged-work/dead-pointer); see scripts/worktree-cleanup.sh for the full JSON schema."
+  ],
+  "memories": []
+}

@@ -64,7 +64,7 @@ from typing import Any
 
 # Exactly the six worktree classes from the INTENT spec.
 WORKTREE_CLASSES: frozenset[str] = frozenset({
-    "dead",             # clean tree + no unpushed commits + HEAD ancestor of default branch
+    "dead",             # clean tree + (HEAD ancestor of default OR patch-identical to default)
     "dirty",            # uncommitted changes
     "detached",         # detached HEAD
     "merged-uncertain", # branch appears merged but evidence is ambiguous (squash, etc.)
@@ -108,6 +108,14 @@ class WorktreeFacts:
         remote_reachable:  False when the remote was unreachable during collection.
         merge_evidence:    'merged' | 'merged-uncertain' | 'not-merged' | 'unknown'.
                            'merged-uncertain' is used for squash-merge evidence.
+        patch_identical_to_default:
+                           True when HEAD's patch content is identical to the default
+                           branch's tip (offline `git rev-list --cherry-pick
+                           --right-only --count <default>...<HEAD> == 0` proof, computed
+                           by the collection layer). This is a stronger, offline proof
+                           of "already merged" than commit-ancestry: it also catches
+                           squash merges and branches that were never pushed. None when
+                           the check could not run.
     """
     path: str
     branch: str | None
@@ -119,6 +127,7 @@ class WorktreeFacts:
     default_branch: str
     remote_reachable: bool
     merge_evidence: str = "unknown"  # merged | merged-uncertain | not-merged | unknown
+    patch_identical_to_default: bool | None = None  # None = check could not run
 
     def __post_init__(self) -> None:
         """Fail fast if merge_evidence is not a recognised value.
@@ -259,8 +268,20 @@ def classify_worktree(facts: WorktreeFacts) -> tuple[str, str]:
     """Classify a worktree into one of the six canonical classes.
 
     Classification is pure and deterministic given the pre-collected facts.
-    Precedence: detached > dirty > unknown-remote > merged-uncertain > dead > active.
-    Only 'dead' is auto-prune-eligible; all others are surface-only.
+    Precedence: detached > dirty > unknown-remote (bypassed when
+    patch_identical_to_default is True) > merged-uncertain > dead (literal-ancestor
+    OR patch-identity) > active. Only 'dead' is auto-prune-eligible; all others are
+    surface-only.
+
+    patch_identical_to_default is True is an offline, stronger-than-remote-ancestry
+    proof of "already merged": it also catches squash merges and local branches that
+    were never pushed, both of which the remote-ancestry check structurally misses.
+    A clean worktree with patch_identical_to_default is True is therefore promoted to
+    'dead' even without commit-ancestry confirmation and even when the remote is
+    unreachable or the branch has unpushed commits — those two guards are bypassed
+    specifically for the patch-identical case (see the two bypass conditions below).
+    Detached and dirty are never bypassed: a mutation-risk or ambiguous-branch state
+    always wins regardless of patch identity.
 
     Args:
         facts: Pre-collected WorktreeFacts for this worktree.
@@ -296,7 +317,14 @@ def classify_worktree(facts: WorktreeFacts) -> tuple[str, str]:
     # are commits at risk" — routing to unknown-remote (surface-only, never auto-prune)
     # is the correct fail-safe. Narrowing to `not remote_reachable` only would allow a
     # None to fall through to a prunable class if remote_reachable happens to be True.
-    if not facts.remote_reachable or facts.has_unpushed is None:
+    #
+    # Bypass: patch_identical_to_default is True is an offline proof that does not
+    # depend on the remote at all, so a clean worktree with a proven patch-identical
+    # HEAD must not be shunted to unknown-remote just because the remote happens to be
+    # unreachable or unpushed-status could not be determined.
+    if (
+        not facts.remote_reachable or facts.has_unpushed is None
+    ) and facts.patch_identical_to_default is not True:
         return (
             "unknown-remote",
             "Remote was unreachable; unpushed-commit check skipped. "
@@ -304,7 +332,12 @@ def classify_worktree(facts: WorktreeFacts) -> tuple[str, str]:
         )
 
     # Unpushed commits present.
-    if facts.has_unpushed:
+    #
+    # Bypass: a patch-identical branch that was simply never pushed (or has local
+    # commits ahead of its remote-tracking ref because it was squash-merged upstream
+    # under a different SHA) is exactly the case this feature exists to catch — do
+    # not shunt it to 'active' just because has_unpushed is True.
+    if facts.has_unpushed and facts.patch_identical_to_default is not True:
         return (
             "active",
             "Unpushed commits present. Push or discard before pruning.",
@@ -329,7 +362,21 @@ def classify_worktree(facts: WorktreeFacts) -> tuple[str, str]:
         return (
             "dead",
             f"Safe to prune: branch is an ancestor of {facts.default_branch}, "
-            "no uncommitted or unpushed work.",
+            "no uncommitted or unpushed work. Removal will delete the worktree "
+            f"and its merged branch (git worktree remove + git branch -d).",
+        )
+
+    # Dead (patch-identity promotion): clean and proven patch-identical to the
+    # default branch, even without literal commit ancestry and even when the remote
+    # is unreachable or unpushed status is unknown/true (both already bypassed the
+    # earlier unknown-remote / unpushed-active guards above). This is the offline,
+    # squash-merge-aware and never-pushed-aware case this feature exists to catch.
+    if not facts.has_uncommitted and facts.patch_identical_to_default is True:
+        return (
+            "dead",
+            f"Safe to prune: HEAD's patch content is identical to {facts.default_branch} "
+            "(offline patch-identity match), no uncommitted work. Removal will delete "
+            "the worktree and its merged branch (git worktree remove + git branch -d).",
         )
 
     # Active: none of the unambiguous prune conditions met.
@@ -546,6 +593,7 @@ def _cli_classify_worktree(facts_json: str) -> None:
             default_branch=raw.get("default_branch", "main"),
             remote_reachable=bool(raw.get("remote_reachable", True)),
             merge_evidence=raw.get("merge_evidence", "unknown"),
+            patch_identical_to_default=raw.get("patch_identical_to_default"),
         )
         cls, action = classify_worktree(facts)
     except ValueError as exc:

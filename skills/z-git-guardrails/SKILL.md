@@ -14,6 +14,8 @@ You are running **z-harness `/z-git-guardrails`** — the installer for the z-ha
 1. **git-safety** (`scripts/block-dangerous-git.sh`, matcher `Bash`) — blocks dangerous git operations (force-pushes onto upstream-reachable commits, working-tree-destructive commands).
 2. **worktree-isolation** (`scripts/block-shared-tree-edit.sh`, matcher `Edit|Write|MultiEdit|NotebookEdit`) — blocks a second concurrent agent session from editing a working tree another session already owns, so two sessions can't collide on one tree (the failure that diverged `main` on 2026-06-12). Solo editing is never blocked. When blocked, the preferred fix is an in-place move of the **current** session into a linked worktree: Claude Code can use `EnterWorktree`; OMP/pi or any cwd-aware entrypoint can create/select a linked worktree and move the current session cwd there. If the host cannot switch cwd/worktree in place, start a fresh session rooted in a linked worktree. A linked worktree has its own per-tree marker dir, so the guard won't fire there.
 
+   **After merging** that worktree's branch back (native `EnterWorktree` merge flow), immediately run `scripts/worktree-cleanup.sh after-merge <worktree-path> <branch>` to remove the worktree and its branch — see `docs/human/worktree-hygiene.md`. Leftover merged worktrees are otherwise easy to forget once the guard block that prompted the move is resolved, and they're exactly what causes future worktree-isolation contention.
+
 Both are installed/removed/reported together as one bundle. `install` adds whichever are missing; `remove` strips both; `status` reports each.
 
 Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.

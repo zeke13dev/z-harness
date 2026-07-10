@@ -33,7 +33,6 @@ from hermes.state import (
 from hermes.config import load_config
 from hermes.worktree import (
     create_worktree,
-    delete_worktree,
     cleanup_orphaned,
 )
 from hermes.session import (
@@ -366,11 +365,12 @@ async def run_workstream(ws, state, config, args, repo_root, plan_dir, completed
 
         if merge_ok:
             completed.append(ws_id)
-            try:
-                delete_worktree(args.slug, ws_id, repo_root, config.paths.worktree_base)
-                print(f"  Cleaned up")
-            except Exception as e:
-                print(f"  Cleanup WARNING: {e}")
+            # Worktree + branch cleanup already happened inside
+            # merge_workstream() (scripts/hermes/merge.py), via the shared
+            # worktree-cleanup.sh `after-merge` helper — single cleanup site,
+            # and unlike the old unconditional delete_worktree() force-remove
+            # that used to live here, it refuses to touch anything not
+            # proven merged. Nothing left to do.
         else:
             # Merge had conflicts — handle resolution
             completed.append(ws_id)
