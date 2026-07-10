@@ -39,6 +39,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 - _(auto)_ Correct check-pi-auth.sh provider requirements (T-REV-003) _(routing)_
 - _(auto)_ Route mr-reviewer + explore fleet dispatches via config (T-REV-001) _(routing)_
 - _(auto)_ Backward-compat gotcha + MCP effort plumbing + host cache (T-REV-002+004) _(routing)_
+- _(auto)_ Wire run-end Tier-1 doc sync into Finalize _(z-execute)_
 
 ## 2026-07-06
 

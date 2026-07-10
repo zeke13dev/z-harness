@@ -827,9 +827,9 @@
         "scripts/reconcile-tier1-staged.py",
         "scripts/add-doc-markers.py"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-07-09",
       "confidence": "high",
-      "summary": "Mechanical per-task docs sync agent that stages AUTO-section and LLM machine-field updates from task diffs for later reconciliation.",
+      "summary": "Mechanical docs sync agent dispatched once at /z-execute run-end over the combined task-diff set; stages AUTO-section and LLM machine-field updates per concept for reconcile-tier1-staged.py to merge.",
       "depends_on": [
         "doc-updater",
         "doc-fetcher",

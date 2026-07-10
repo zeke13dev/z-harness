@@ -3578,6 +3578,68 @@ EOF
 
 <!-- include: _fragments/run-brief-finalize.md -->
 
+3.5. **Tier-1 mechanical doc sync (best-effort — never blocks Finalize).** When the repo has a
+   two-tier docs system (`docs/llm/INDEX.json` exists) and this run did not abort
+   (`FINALIZE_STATUS` unset/`complete`), sync the machine-truth doc fields (entry points, exports,
+   config rows, `source_files`) from the run's code changes before deregistering. This is the
+   **single serialized write path** for per-run doc updates: exactly ONE `tier1-doc-updater` runs
+   over the whole run's diff set, so there is no cross-task staging race (each concept has exactly
+   one staged doc). Skip silently when there are no two-tier docs — most repos have none, and the
+   step is a no-op there.
+
+   ```bash
+   DOCSYNC_REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
+   DOCSYNC_INDEX="$DOCSYNC_REPO_ROOT/docs/llm/INDEX.json"
+   DOCSYNC_DIFFS=""
+   DOCSYNC_ELIGIBLE=0
+   if [ "${FINALIZE_STATUS:-complete}" != "aborted" ] && [ -n "$DOCSYNC_REPO_ROOT" ] && [ -f "$DOCSYNC_INDEX" ]; then
+     # This run's per-task diffs are already on disk (captured in Main-loop step 6).
+     DOCSYNC_DIFFS="$(ls "$BASE"/archive/tasks/*/diff.patch 2>/dev/null | tr '\n' ' ')"
+     if [ -n "${DOCSYNC_DIFFS// /}" ]; then
+       DOCSYNC_ELIGIBLE=1
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" tier1_doc_sync_start \
+         "$(printf '{"base":"%s","index":"%s","diff_count":%d}' "$BASE" "$DOCSYNC_INDEX" "$(printf '%s' "$DOCSYNC_DIFFS" | wc -w | tr -d ' ')")" 2>/dev/null || true
+     fi
+   fi
+   ```
+
+   **When `DOCSYNC_ELIGIBLE=1`, spawn exactly ONE `tier1-doc-updater` (model: haiku) over the whole
+   run's diff set**, then reconcile its staged output. When `DOCSYNC_ELIGIBLE=0`, skip both the
+   spawn and the reconcile entirely.
+
+   ```
+   Agent(
+     subagent_type="tier1-doc-updater",
+     description="Run-end mechanical doc sync",
+     prompt="diff_paths: <the space-separated paths in $DOCSYNC_DIFFS>
+index_path: $DOCSYNC_INDEX
+staging_dir: $BASE/tier1-staged
+repo_root: $DOCSYNC_REPO_ROOT"
+   )
+   ```
+
+   The updater reverse-looks-up every file changed across the combined diff set to its concept(s)
+   via INDEX.json, applies diff-only surgical updates to the `AUTO-START`/`AUTO-END` machine-truth
+   sections, and writes ONE staged doc per concept to `$BASE/tier1-staged/<concept>/{human.md,llm.json}`
+   (never to live `docs/`). For each `DRIFT_WARNINGS:` line it returns, emit a `doc_drift` event.
+   Then run the reconciliation — the single writer that merges staged sections into live docs, bumps
+   INDEX.json `last_updated`, and regenerates `MEMORIES-FLAT.md`:
+
+   ```bash
+   if [ "$DOCSYNC_ELIGIBLE" -eq 1 ]; then
+     RECON_OUT="$(Z_HARNESS_REPO_ROOT="$DOCSYNC_REPO_ROOT" python3 \
+       "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/reconcile-tier1-staged.py" \
+       --plan-dir "$BASE" 2>&1 || true)"
+     DOCSYNC_MERGED="$(printf '%s\n' "$RECON_OUT" | grep -cE '^  Merged ' 2>/dev/null || echo 0)"
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" tier1_doc_sync_end \
+       "$(printf '{"base":"%s","merged":%s}' "$BASE" "${DOCSYNC_MERGED:-0}")" 2>/dev/null || true
+   fi
+   ```
+
+   Every command in this step is best-effort (`|| true`) — a doc-sync or reconcile failure must
+   never abort Finalize or block deregister. The updated docs land in the working tree and are
+   committed by the user alongside the run's code (z-execute never commits).
+
 4. **Deregister this run** only when `--require` passed (`RB_REQUIRE_RC == 0`). Per the single
    FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` on normal exit; `aborted`
    when a hard-halt path set `FINALIZE_STATUS=aborted`. On `--require` failure the fragment sets

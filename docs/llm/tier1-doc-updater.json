@@ -1,6 +1,6 @@
 {
   "concept": "tier1-doc-updater",
-  "last_updated": "2026-06-24",
+  "last_updated": "2026-07-09",
   "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
   "source_files": [
     "agents/tier1-doc-updater.md",
@@ -14,7 +14,7 @@
       "line": 1,
       "symbol": "tier1-doc-updater",
       "kind": "agent",
-      "summary": "Haiku subagent for per-task mechanical doc sync; tools: Read,Grep,Glob,Write,Bash; model: haiku"
+      "summary": "Haiku subagent for run-end mechanical doc sync (one invocation per /z-execute run over the combined task-diff set); tools: Read,Grep,Glob,Write,Bash; model: haiku"
     },
     {
       "file": "scripts/reconcile-tier1-staged.py",
@@ -72,7 +72,8 @@
     "NEVER writes to docs/ directly — staging only ($Z_HARNESS_PLAN_DIR/tier1-staged/)",
     "Never touches memories[]",
     "Writes only between AUTO-START/AUTO-END markers in human docs",
-    "Idempotent on same diff",
+    "Dispatched ONCE per /z-execute run at Finalize over the combined task-diff set (never per-task) — guarantees one staged doc per concept, no cross-task race",
+    "Idempotent on same diff set",
     "Tools constrained to Read, Grep, Glob, Write, Bash — no Agent() access",
     "merge_llm_json preserves: depends_on, consumed_by, summary, confidence, memories, invariants, gotchas"
   ],
@@ -81,7 +82,7 @@
     "Explicit tools: line required — previously inherited ALL tools including Agent()",
     "Skips concepts without AUTO-START/AUTO-END markers (logs in NOTES; use add-doc-markers.py first)",
     "merge_human_doc silently drops staged updates if live doc has no AUTO-START sections",
-    "Latest-wins merge for overlapping staged updates to same concept",
+    "Run-end single-updater design: one staged doc per concept, so reconcile has nothing to race. Reverting to per-task dispatch reintroduces a clobber race because each staged file is a full-doc snapshot and merge_human_doc replaces whole AUTO sections",
     "Visibility-only changes (pub→pub(crate)) out of scope"
   ],
   "memories": []
