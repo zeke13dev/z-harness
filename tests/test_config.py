@@ -51,6 +51,24 @@ _GPT56_MATRIX = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_local_config_overrides(monkeypatch, tmp_path):
+    """Assert the shipped DEFAULT matrix regardless of any local override.
+
+    These tests load the real ``scripts/config.py`` DEFAULTS but must not be
+    perturbed by a developer's gitignored ``.z-harness/config.toml`` (e.g. an
+    ``[model_routing.implementer]`` pin to ``gpt-5.5`` for the omp host) or a
+    global ``~/.config/z-harness/config.toml``. Redirect both config layers to
+    empty/absent locations so only DEFAULTS resolve. Tests that intentionally
+    exercise the real repo config (e.g. the provider-role checks) set their own
+    ``Z_HARNESS_REPO_CONFIG`` / ``XDG_CONFIG_HOME`` in-body, which wins over this.
+    """
+    empty_repo_config = tmp_path / "empty-repo-config.toml"
+    empty_repo_config.write_text("", encoding="utf-8")
+    monkeypatch.setenv("Z_HARNESS_REPO_CONFIG", str(empty_repo_config))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-global-config"))
+
+
 # ---------------------------------------------------------------------------
 # 1. Full-matrix integration: all four classes, real DEFAULTS, both families.
 # ---------------------------------------------------------------------------
