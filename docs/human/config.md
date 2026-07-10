@@ -215,8 +215,9 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 > its own unrelated `hermes-config.yaml` `[concurrency]` keys.
 
 For followup and experiment keys, the rule applies identically (no alias exceptions).
-Three-level model-class and model-routing keys, such as `model_classes.local_fast.model` and
-`model_routing.native_agents.explore`, are config-file-only and are not exported as env vars.
+Three- and four-level model-class and model-routing keys, such as `model_classes.local_fast.model`,
+`model_classes.deep.claude.effort`, and `model_routing.native_agents.explore`, are config-file-only
+and are not exported as env vars.
 
 Keys must match 2-4 lowercase underscore/digit segments (for example `notify.level`,
 `model_classes.local_fast.model`, or `roles.z_plan.consultant_primary.model`). Hyphens exit 2.
@@ -592,16 +593,33 @@ The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md
 | `models.implementer` | string | `""` | Model override for an external implementer provider role. Empty = use provider default. |
 | `models.pre_reviewer` | string | `""` | Model override for the pre-reviewer role. Empty = use provider default. |
 
-`[model_classes.<name>]` defines local native-model classes. Built-in classes reproduce current labels: `cheap → haiku`, `standard → sonnet`, and `deep → opus`. Custom class names must use lowercase/underscore TOML keys. `model` is required and non-empty; `thinking` and `reasoning` are optional string metadata that later dispatch layers may render only for hosts that support them.
+`[model_classes.<name>]` defines local native-model classes for native-agent routing. There are four built-in classes — `cheap`, `low`, `standard`, `deep` — and each carries **two coexisting axes**:
+
+1. **Legacy host-blind scalars** (retained for backward-compat, criterion #8): `model` (required, non-empty), plus optional `thinking` / `reasoning` string metadata. Old pre-host-axis configs keep working unchanged, and host-blind lookups (`model_classes.deep.model`) still resolve.
+2. **Host axis** — a per-host-family `(model, effort)` pair the resolver (T002+) selects from the detected host. Host families are exactly two:
+   - `claude` — native Claude Code hosts. `effort` is applied via the subagent `effort:` frontmatter field.
+   - `omp` — **every non-claude host** (pi / codex / cursor / antigravity / unknown). Effort is baked into the omp catalog model name (`gpt-5.6-terra-medium`), so the `omp.effort` field is always the empty-string sentinel.
+
+`effort` allowed values: `""` (no applied effort — the sentinel for Haiku and for every omp entry), `none`, `low`, `medium`, `high`, `xhigh`, `max`. Custom class names must use lowercase/underscore TOML keys; a custom class must define a model via either the legacy scalar or at least one host sub-table.
+
+The four-tier host-keyed default matrix:
+
+| Class | `claude` (model · effort) | `omp` (model · effort) |
+|-------|---------------------------|-------------------------|
+| `cheap` | `haiku` · `""` | `gpt-5.6-luna-low` · `""` |
+| `low` | `sonnet` · `medium` | `gpt-5.6-terra-low` · `""` |
+| `standard` | `sonnet` · `high` | `gpt-5.6-terra-medium` · `""` |
+| `deep` | `opus` · `high` | `gpt-5.6-sol-medium` · `""` |
 
 | Key pattern | Type | Default | Description |
 |-------------|------|---------|-------------|
-| `model_classes.cheap.model` | string | `"haiku"` | Built-in cheap native class. |
-| `model_classes.standard.model` | string | `"sonnet"` | Built-in standard native class. |
-| `model_classes.deep.model` | string | `"opus"` | Built-in deep native class. |
-| `model_classes.<name>.model` | string | _(custom)_ | Exact native model label for a local class. |
-| `model_classes.<name>.thinking` | string | `""` | Optional host-specific thinking metadata. |
-| `model_classes.<name>.reasoning` | string | `""` | Optional host-specific reasoning metadata. |
+| `model_classes.<class>.model` | string | claude-family model | Legacy host-blind scalar (back-compat); mirrors the claude model. |
+| `model_classes.<class>.thinking` | string | `""` | Optional legacy host-blind thinking metadata. |
+| `model_classes.<class>.reasoning` | string | `""` | Optional legacy host-blind reasoning metadata. |
+| `model_classes.<class>.claude.model` | string | see matrix | Concrete model for the Claude host family. |
+| `model_classes.<class>.claude.effort` | string | see matrix | Applied effort (`""`\|`none`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`) for Claude. |
+| `model_classes.<class>.omp.model` | string | see matrix | Effort-suffixed catalog model for the omp (non-claude) host family. |
+| `model_classes.<class>.omp.effort` | string | `""` | Always `""` — omp effort is baked into the model name. |
 
 `[model_routing]` maps native agents and implementer tiers to either a named class or an exact model label. `model_routing.native_agents.default = ""` intentionally inherits each agent's checked-in frontmatter model, preserving cheap Haiku agents and standard Sonnet agents when no override is configured. Implementer tier defaults reproduce the current `/z-execute` labels.
 
@@ -614,17 +632,25 @@ The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md
 | `model_routing.implementer.high` | string | `"opus"` | High-complexity implementer route. |
 | `model_routing.implementer.retry` | string | `"opus"` | Retry implementer route. |
 
-Example:
+Example — (a) overriding the host-keyed table, and (b) pinning prior host-blind behavior:
 
 ```toml
+# (a) Host-keyed override: change what `deep` resolves to per host family.
+[model_classes.deep.claude]
+model = "claude-opus-4-1"        # exact Claude model
+effort = "xhigh"                 # applied via subagent `effort:` frontmatter
+
+[model_classes.deep.omp]
+model = "gpt-5.6-sol-medium"     # effort baked into the catalog model name
+effort = ""                      # omp effort is always the empty sentinel
+
+# (b) Pin PRIOR (host-blind) behavior for a custom class: set only the legacy
+#     scalar `model` and omit the host axis. Old configs written this way keep
+#     working unchanged — the host-keyed keys are additive, not required.
 [model_classes.local_fast]
-model = "ollama/qwen3:8b"
+model = "ollama/qwen3:8b"        # host-blind scalar; resolves for any host lookup
 thinking = "low"
 reasoning = "effort=low"
-
-[model_classes.claude_deep]
-model = "claude-opus-4-1"
-thinking = "high"
 
 [model_routing.native_agents]
 explore = "local_fast"           # named class
@@ -633,7 +659,7 @@ auditor = "claude-sonnet-4-5"    # exact native model override
 [model_routing.implementer]
 low = "sonnet"                    # exact current label
 medium = "standard"               # named class also allowed
-high = "claude_deep"
+high = "deep"
 retry = "claude-opus-4-1"        # exact override also allowed
 
 [models]

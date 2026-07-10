@@ -191,23 +191,45 @@ DEFAULTS: dict = {
         "pre_reviewer":         "",   # model for the pre-reviewer role
     },
     "model_classes": {
-        # Local model classes for native-agent routing.  The route resolver (added
-        # in later tasks) may interpret thinking/reasoning metadata per host; the
-        # config loader only stores validated strings.
+        # Local model classes for native-agent routing.  Each class carries BOTH a
+        # legacy host-blind scalar (`model`/`thinking`/`reasoning`, retained for
+        # backward-compat with pre-host-axis user configs) AND a host axis: a
+        # per-host-family `(model, effort)` pair the route resolver (T002) selects
+        # from the detected host.  Host families are exactly two:
+        #   `claude` — native Claude Code hosts (effort applied via subagent frontmatter)
+        #   `omp`    — every non-claude host (pi/codex/cursor/antigravity/unknown);
+        #              effort is baked into the omp catalog model name, so its
+        #              `effort` field is the empty-string sentinel.
+        # The legacy scalar `model` mirrors the claude-family model so old configs
+        # and host-blind lookups keep their prior values; new dispatch reads the
+        # host-keyed keys.  The config loader only stores validated strings.
         "cheap": {
             "model": "haiku",
             "thinking": "",
             "reasoning": "",
+            "claude": {"model": "haiku", "effort": ""},
+            "omp": {"model": "gpt-5.6-luna-low", "effort": ""},
+        },
+        "low": {
+            "model": "sonnet",
+            "thinking": "",
+            "reasoning": "",
+            "claude": {"model": "sonnet", "effort": "medium"},
+            "omp": {"model": "gpt-5.6-terra-low", "effort": ""},
         },
         "standard": {
             "model": "sonnet",
             "thinking": "",
             "reasoning": "",
+            "claude": {"model": "sonnet", "effort": "high"},
+            "omp": {"model": "gpt-5.6-terra-medium", "effort": ""},
         },
         "deep": {
             "model": "opus",
             "thinking": "",
             "reasoning": "",
+            "claude": {"model": "opus", "effort": "high"},
+            "omp": {"model": "gpt-5.6-sol-medium", "effort": ""},
         },
     },
     "model_routing": {
@@ -340,6 +362,19 @@ def _validate_model_metadata(value: object) -> bool:
     return isinstance(value, str)
 
 
+# Allowed values for a host-keyed model-class effort field.  The empty string is
+# the "no applied effort" sentinel (Haiku has no effort control; omp bakes effort
+# into the catalog model name so its effort field is always "").
+_MODEL_EFFORT_VALUES: frozenset[str] = frozenset(
+    {"", "none", "low", "medium", "high", "xhigh", "max"}
+)
+
+
+def _validate_model_effort(value: object) -> bool:
+    """Accept an effort level: "" | none | low | medium | high | xhigh | max."""
+    return isinstance(value, str) and value in _MODEL_EFFORT_VALUES
+
+
 def _validate_model_route(value: object) -> bool:
     """Accept a non-empty model class name or exact model label."""
     return isinstance(value, str) and len(value) > 0
@@ -351,6 +386,10 @@ def _validate_model_route_or_empty(value: object) -> bool:
 
 
 _MODEL_CLASS_FIELDS: frozenset[str] = frozenset({"model", "thinking", "reasoning"})
+# Host axis under a model class: [model_classes.<class>.<hostfamily>] sub-tables.
+# Exactly two families; `omp` covers every non-claude host.
+_MODEL_CLASS_HOST_FAMILIES: frozenset[str] = frozenset({"claude", "omp"})
+_MODEL_CLASS_HOST_FIELDS: frozenset[str] = frozenset({"model", "effort"})
 _MODEL_IMPLEMENTER_TIERS: frozenset[str] = frozenset({"low", "medium", "high", "retry"})
 _DYNAMIC_MODEL_CONFIG_SECTIONS: frozenset[str] = frozenset({"model_classes", "model_routing"})
 
@@ -407,11 +446,31 @@ def _reject_unsupported_dynamic_model_config_key(
 
 
 
-def _dynamic_model_config_validator(section: str, group: str, leaf: str):
-    """Return a validator for dynamic model routing keys, or None if unsupported."""
-    if section == "model_classes" and leaf in _MODEL_CLASS_FIELDS:
-        return _validate_model_class_model if leaf == "model" else _validate_model_metadata
+def _dynamic_model_config_validator(parts: list[str]):
+    """Return a validator for a dynamic model routing key, or None if unsupported.
+
+    Accepts the dotted key already split into segments so both the 3-level legacy
+    model-class shape (``model_classes.<class>.<field>``) and the 4-level
+    host-keyed shape (``model_classes.<class>.<hostfamily>.<model|effort>``) can be
+    distinguished by length.
+    """
+    section = parts[0]
+    if section == "model_classes":
+        # 3-level legacy host-blind leaf: model / thinking / reasoning
+        if len(parts) == 3 and parts[2] in _MODEL_CLASS_FIELDS:
+            return _validate_model_class_model if parts[2] == "model" else _validate_model_metadata
+        # 4-level host-keyed leaf: <hostfamily>.<model|effort>
+        if (
+            len(parts) == 4
+            and parts[2] in _MODEL_CLASS_HOST_FAMILIES
+            and parts[3] in _MODEL_CLASS_HOST_FIELDS
+        ):
+            return _validate_model_class_model if parts[3] == "model" else _validate_model_effort
+        return None
     if section == "model_routing":
+        if len(parts) != 3:
+            return None
+        group, leaf = parts[1], parts[2]
         if group == "native_agents":
             return _validate_model_route_or_empty if leaf == "default" else _validate_model_route
         if group == "implementer" and leaf in _MODEL_IMPLEMENTER_TIERS:
@@ -468,6 +527,69 @@ def _fill_model_class_optional_metadata(
         if dotted not in values:
             values[dotted] = ""
             sources[dotted] = source_label
+
+
+def _load_model_class_table(
+    class_name: str,
+    table: dict,
+    values: dict[str, object],
+    sources: dict[str, str],
+    flat_defaults: dict[str, object],
+    source_label: str,
+    is_global: bool,
+) -> None:
+    """Load one ``[model_classes.<class>]`` table from a config layer.
+
+    A class table may mix two coexisting shapes:
+      * legacy host-blind scalars — ``model`` / ``thinking`` / ``reasoning``
+      * host-keyed sub-tables — ``[model_classes.<class>.<claude|omp>]`` with
+        ``model`` / ``effort`` leaves
+
+    Nested sub-tables named anything other than a valid host family (``claude`` /
+    ``omp``) are rejected with the same "unsupported nested table" error the flat
+    schema used, so an accidental ``[model_classes.<class>.model]`` still fails.
+    """
+    scalar_leaves = {k: v for k, v in table.items() if not isinstance(v, dict)}
+    host_tables = {k: v for k, v in table.items() if isinstance(v, dict)}
+
+    # Reject nested sub-tables that are not a recognized host family.
+    for host_family in host_tables:
+        if host_family not in _MODEL_CLASS_HOST_FAMILIES:
+            _reject_dynamic_model_config_nested_table(
+                "model_classes", class_name, source_label
+            )
+
+    # Gate: a custom class must define a model — via the legacy scalar or a host
+    # sub-table. Built-in classes always pass via _model_class_table_has_model.
+    has_host_model = any(
+        _validate_model_class_model(ht.get("model")) for ht in host_tables.values()
+    )
+    if not has_host_model and not _model_class_table_has_model(
+        class_name, scalar_leaves, values, source_label, is_global
+    ):
+        return
+
+    def _store(dotted: str, raw: object) -> None:
+        if dotted in flat_defaults:
+            resolved = _validate_enum(dotted, raw, source_label, is_global)
+        else:
+            resolved = _validate_dynamic_model_config_value(
+                dotted, raw, source_label, is_global
+            )
+            if resolved is None:
+                return
+        if dotted in _COERCERS:
+            resolved = _COERCERS[dotted](resolved)
+        values[dotted] = resolved
+        sources[dotted] = source_label
+
+    for subk, subv in scalar_leaves.items():
+        _store(f"model_classes.{class_name}.{subk}", subv)
+    for host_family, host_table in host_tables.items():
+        for leaf_k, leaf_v in host_table.items():
+            _store(f"model_classes.{class_name}.{host_family}.{leaf_k}", leaf_v)
+
+    _fill_model_class_optional_metadata(class_name, values, sources, source_label)
 
 
 def _default_for_dotted_key(dotted_key: str) -> object:
@@ -577,15 +699,37 @@ VALIDATORS: dict = {
     "models.implementer":          _validate_any_string,
     "models.pre_reviewer":         _validate_any_string,
     # model_classes.* — named classes for native-agent routing; dynamic class names allowed.
+    # Each built-in class carries legacy host-blind scalars (model/thinking/reasoning,
+    # retained for backward-compat) plus a host axis: per-host-family (model, effort)
+    # pairs for `claude` and `omp`. Effort allowed set: "" | none | low | medium | high | xhigh | max.
     "model_classes.cheap.model":      _validate_model_class_model,
     "model_classes.cheap.thinking":   _validate_model_metadata,
     "model_classes.cheap.reasoning":  _validate_model_metadata,
+    "model_classes.cheap.claude.model":  _validate_model_class_model,
+    "model_classes.cheap.claude.effort": _validate_model_effort,
+    "model_classes.cheap.omp.model":     _validate_model_class_model,
+    "model_classes.cheap.omp.effort":    _validate_model_effort,
+    "model_classes.low.model":        _validate_model_class_model,
+    "model_classes.low.thinking":     _validate_model_metadata,
+    "model_classes.low.reasoning":    _validate_model_metadata,
+    "model_classes.low.claude.model":    _validate_model_class_model,
+    "model_classes.low.claude.effort":   _validate_model_effort,
+    "model_classes.low.omp.model":       _validate_model_class_model,
+    "model_classes.low.omp.effort":      _validate_model_effort,
     "model_classes.standard.model":   _validate_model_class_model,
     "model_classes.standard.thinking": _validate_model_metadata,
     "model_classes.standard.reasoning": _validate_model_metadata,
+    "model_classes.standard.claude.model":  _validate_model_class_model,
+    "model_classes.standard.claude.effort": _validate_model_effort,
+    "model_classes.standard.omp.model":     _validate_model_class_model,
+    "model_classes.standard.omp.effort":    _validate_model_effort,
     "model_classes.deep.model":       _validate_model_class_model,
     "model_classes.deep.thinking":    _validate_model_metadata,
     "model_classes.deep.reasoning":   _validate_model_metadata,
+    "model_classes.deep.claude.model":   _validate_model_class_model,
+    "model_classes.deep.claude.effort":  _validate_model_effort,
+    "model_classes.deep.omp.model":      _validate_model_class_model,
+    "model_classes.deep.omp.effort":     _validate_model_effort,
     # model_routing.* — config-file-only routing values; dynamic native agent keys allowed.
     "model_routing.native_agents.default": _validate_model_route_or_empty,
     "model_routing.implementer.low":       _validate_model_route,
@@ -1319,10 +1463,15 @@ def _validate_dynamic_model_config_value(
     source_label: str,
     is_global: bool,
 ) -> Optional[object]:
-    """Validate supported dynamic model_classes/model_routing 3-level keys."""
+    """Validate supported dynamic model_classes/model_routing keys.
+
+    Handles both the 3-level legacy shape and the 4-level host-keyed
+    model-class shape (``model_classes.<class>.<hostfamily>.<model|effort>``).
+    """
     _validate_dynamic_model_config_key_shape(dotted_key, source_label)
-    section, group, leaf = dotted_key.split(".", 2)
-    validator = _dynamic_model_config_validator(section, group, leaf)
+    parts = dotted_key.split(".")
+    section = parts[0]
+    validator = _dynamic_model_config_validator(parts)
     if validator is None:
         if section in _DYNAMIC_MODEL_CONFIG_SECTIONS:
             print(
@@ -1354,24 +1503,28 @@ def _validate_dynamic_model_config_value(
 def _flatten_defaults() -> dict[str, object]:
     """Return flat {dotted_key: value} from DEFAULTS (excluding meta keys).
 
-    Handles up to 3-level nesting: section.key.subkey (e.g. watchdog.timeout_secs.bash).
-    3-level nested keys whose section+key combination maps to a dict value are expanded
-    into individual dotted entries and included so that cmd_get can resolve them.
-    They are NOT env-exported (cmd_export_env skips them via the depth-3 guard).
+    Recursively expands nested dict tables into dotted leaves:
+      * 3-level, e.g. watchdog.timeout_secs.bash
+      * 4-level, e.g. model_classes.deep.claude.model (host-keyed model classes)
+    Only scalar leaves are stored; intermediate dict tables are skipped.  Nested
+    (3+ level) keys are NOT env-exported (cmd_export_env skips them via the
+    depth guard).
     """
-    result = {}
+    result: dict[str, object] = {}
+
+    def walk(prefix: str, node: dict) -> None:
+        for k, v in node.items():
+            dotted = f"{prefix}.{k}"
+            if isinstance(v, dict):
+                walk(dotted, v)
+            else:
+                result[dotted] = v
+
     for section, value in DEFAULTS.items():
         if section in META_KEYS:
             continue
         if isinstance(value, dict):
-            for k, v in value.items():
-                if isinstance(v, dict):
-                    # 3-level nesting (e.g. watchdog.timeout_secs.{bash,...})
-                    # Expand into dotted leaves; skip the intermediate dict itself.
-                    for subk, subv in v.items():
-                        result[f"{section}.{k}.{subk}"] = subv
-                else:
-                    result[f"{section}.{k}"] = v
+            walk(section, value)
         # top-level scalars (none in current schema beyond meta keys)
     return result
 
@@ -1410,7 +1563,15 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
-                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS and any(
+                    if section == "model_classes":
+                        # Host-keyed model classes may mix scalar legacy leaves with
+                        # per-host-family sub-tables; delegate to the dedicated loader.
+                        _load_model_class_table(
+                            k, v, values, sources, flat_defaults,
+                            str(global_path), is_global=True,
+                        )
+                        continue
+                    if section == "model_routing" and any(
                         isinstance(subv, dict) for subv in v.values()
                     ):
                         _reject_dynamic_model_config_nested_table(
@@ -1421,13 +1582,6 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
                     is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
                     if is_scalar_dict:
-                        if (
-                            section == "model_classes"
-                            and not _model_class_table_has_model(
-                                k, v, values, str(global_path), is_global=True
-                            )
-                        ):
-                            continue
                         # Case (a): expand each leaf as a 3-level dotted key.
                         for subk, subv in v.items():
                             dotted = f"{section}.{k}.{subk}"
@@ -1443,10 +1597,6 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                                 subv = _COERCERS[dotted](subv)
                             values[dotted] = subv
                             sources[dotted] = str(global_path)
-                        if section == "model_classes":
-                            _fill_model_class_optional_metadata(
-                                k, values, sources, str(global_path)
-                            )
                     else:
                         # Case (b): roles-style 4-level nesting
                         # sv[k] == {"consultant_primary": {"persona": "X", ...}}
@@ -1493,7 +1643,15 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
-                    if section in _DYNAMIC_MODEL_CONFIG_SECTIONS and any(
+                    if section == "model_classes":
+                        # Host-keyed model classes may mix scalar legacy leaves with
+                        # per-host-family sub-tables; delegate to the dedicated loader.
+                        _load_model_class_table(
+                            k, v, values, sources, flat_defaults,
+                            str(repo_path), is_global=False,
+                        )
+                        continue
+                    if section == "model_routing" and any(
                         isinstance(subv, dict) for subv in v.values()
                     ):
                         _reject_dynamic_model_config_nested_table(
@@ -1504,13 +1662,6 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
                     is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
                     if is_scalar_dict:
-                        if (
-                            section == "model_classes"
-                            and not _model_class_table_has_model(
-                                k, v, values, str(repo_path), is_global=False
-                            )
-                        ):
-                            continue
                         # Case (a): expand each leaf as a 3-level dotted key.
                         for subk, subv in v.items():
                             dotted = f"{section}.{k}.{subk}"
@@ -1526,10 +1677,6 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                                 subv = _COERCERS[dotted](subv)
                             values[dotted] = subv
                             sources[dotted] = str(repo_path)
-                        if section == "model_classes":
-                            _fill_model_class_optional_metadata(
-                                k, values, sources, str(repo_path)
-                            )
                     else:
                         # Case (b): roles-style 4-level nesting
                         # sv[k] == {"consultant_primary": {"persona": "X", ...}}

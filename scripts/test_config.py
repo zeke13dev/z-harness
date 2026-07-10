@@ -2446,19 +2446,23 @@ class TestInspectAll(unittest.TestCase):
         data = json.loads(r.stdout)
         toml_keys = data["toml_keys"]
         # Build expected key set from DEFAULTS (mirroring _flatten_defaults).
-        # Handles up to 3-level nesting (e.g. watchdog.timeout_secs.bash).
+        # Recurses through arbitrary nesting: 3-level (watchdog.timeout_secs.bash)
+        # and 4-level (model_classes.deep.claude.model host-keyed classes).
         expected_keys = set()
+
+        def _walk(prefix, node):
+            for k, v in node.items():
+                dotted = f"{prefix}.{k}"
+                if isinstance(v, dict):
+                    _walk(dotted, v)
+                else:
+                    expected_keys.add(dotted)
+
         for section, sv in DEFAULTS.items():
             if section in META_KEYS:
                 continue
             if isinstance(sv, dict):
-                for k, v in sv.items():
-                    if isinstance(v, dict):
-                        # 3-level nesting: section.k.subk
-                        for subk in v:
-                            expected_keys.add(f"{section}.{k}.{subk}")
-                    else:
-                        expected_keys.add(f"{section}.{k}")
+                _walk(section, sv)
         for key in expected_keys:
             self.assertIn(key, toml_keys, f"DEFAULTS key {key!r} missing from inspect-all toml_keys")
 
@@ -3219,6 +3223,153 @@ class TestModelsSection(unittest.TestCase):
             r = run(["get", key], env=self.env, cwd=self.cwd)
             self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
             self.assertEqual(r.stdout.strip(), expected, f"unexpected default for {key}")
+
+    # ── Host-keyed four-tier model class matrix (host-aware-model-tiers T001) ──
+
+    # The frozen matrix each (class, host_family) → (model, effort) pair resolves to.
+    _HOST_KEYED_MATRIX = {
+        ("cheap", "claude"): ("haiku", ""),
+        ("cheap", "omp"): ("gpt-5.6-luna-low", ""),
+        ("low", "claude"): ("sonnet", "medium"),
+        ("low", "omp"): ("gpt-5.6-terra-low", ""),
+        ("standard", "claude"): ("sonnet", "high"),
+        ("standard", "omp"): ("gpt-5.6-terra-medium", ""),
+        ("deep", "claude"): ("opus", "high"),
+        ("deep", "omp"): ("gpt-5.6-sol-medium", ""),
+    }
+
+    def test_host_keyed_matrix_defaults_are_readable(self):
+        """Every (class, host_family) default resolves to the frozen matrix pair."""
+        for (class_name, host), (model, effort) in self._HOST_KEYED_MATRIX.items():
+            for leaf, expected in (("model", model), ("effort", effort)):
+                key = f"model_classes.{class_name}.{host}.{leaf}"
+                r = run(["get", key], env=self.env, cwd=self.cwd)
+                self.assertEqual(r.returncode, 0, f"get {key} exited {r.returncode}: {r.stderr}")
+                self.assertEqual(r.stdout.strip(), expected, f"unexpected default for {key}")
+
+    def test_low_class_added_to_matrix(self):
+        """The new `low` class is present with its host-blind legacy scalar."""
+        r = run(["get", "model_classes.low.model"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "sonnet")
+
+    def test_host_keyed_keys_present_in_defaults_and_validators(self):
+        """Host-keyed keys must be flat-default leaves and have a VALIDATORS entry."""
+        from config import VALIDATORS, _flatten_defaults
+        flat = _flatten_defaults()
+        for (class_name, host) in self._HOST_KEYED_MATRIX:
+            for leaf in ("model", "effort"):
+                dotted = f"model_classes.{class_name}.{host}.{leaf}"
+                self.assertIn(dotted, flat, f"{dotted} missing from flat defaults")
+                self.assertIn(dotted, VALIDATORS, f"{dotted} missing from VALIDATORS")
+
+    def test_effort_validator_accepts_allowed_set(self):
+        """The effort validator accepts the full allowed set including the empty sentinel."""
+        from config import _validate_model_effort
+        for good in ("", "none", "low", "medium", "high", "xhigh", "max"):
+            self.assertTrue(_validate_model_effort(good), f"{good!r} should be valid effort")
+
+    def test_effort_validator_rejects_bad_values(self):
+        """The effort validator rejects unknown strings and non-strings."""
+        from config import _validate_model_effort
+        for bad in ("HIGH", "extreme", "medium ", 5, None, True):
+            self.assertFalse(_validate_model_effort(bad), f"{bad!r} must be rejected")
+
+    def test_repo_config_rejects_malformed_effort(self):
+        """A malformed host-keyed effort value hard-fails at TOML load."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-effort-bad-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.deep.claude]\n"
+                'model = "opus"\n'
+                'effort = "extreme"\n',
+            )
+            r = run(
+                ["get", "model_classes.deep.claude.effort"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_can_override_host_keyed_pair(self):
+        """A repo config can override a class's host-keyed model + effort."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-host-keyed-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.deep.claude]\n"
+                'model = "claude-opus-4-1"\n'
+                'effort = "xhigh"\n',
+            )
+            env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg}
+            for key, expected in (
+                ("model_classes.deep.claude.model", "claude-opus-4-1"),
+                ("model_classes.deep.claude.effort", "xhigh"),
+                # untouched host-keyed sibling still resolves from defaults
+                ("model_classes.deep.omp.model", "gpt-5.6-sol-medium"),
+            ):
+                r = run(["get", key], env=env)
+                self.assertEqual(r.returncode, 0, f"get {key} stderr={r.stderr!r}")
+                self.assertEqual(r.stdout.strip(), expected)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_legacy_host_blind_scalar_still_validates(self):
+        """Backward-compat: a pre-host-axis host-blind scalar class still loads (criterion #8)."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-legacy-scalar-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.standard]\n"
+                'model = "sonnet"\n'
+                'thinking = "high"\n',
+            )
+            env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg}
+            r = run(["get", "model_classes.standard.model"], env=env)
+            self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+            self.assertEqual(r.stdout.strip(), "sonnet")
+            r2 = run(["get", "model_classes.standard.thinking"], env=env)
+            self.assertEqual(r2.returncode, 0, f"stderr={r2.stderr!r}")
+            self.assertEqual(r2.stdout.strip(), "high")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_custom_class_can_be_host_only(self):
+        """A dynamic class defined purely via host sub-tables loads (dynamic names allowed)."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-host-only-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.turbo.claude]\n"
+                'model = "opus"\n'
+                'effort = "max"\n',
+            )
+            env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg}
+            r = run(["get", "model_classes.turbo.claude.effort"], env=env)
+            self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+            self.assertEqual(r.stdout.strip(), "max")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_repo_config_rejects_unknown_host_family(self):
+        """A nested sub-table with an unrecognized host family is rejected."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-bad-host-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[model_classes.deep.windows]\n"
+                'model = "opus"\n',
+            )
+            r = run(
+                ["get", "model_classes.deep.claude.model"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
+            self.assertIn("unsupported nested table", r.stderr)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
 
     def test_native_agent_default_route_inherits_frontmatter(self):
         """The native default route stays empty so checked-in agent model pins survive."""
