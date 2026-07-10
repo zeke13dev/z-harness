@@ -8,7 +8,13 @@ strategies (manual, spawn pi session, skip, abort).
 
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
+
+from hermes.worktree import get_worktree_info
+
+# scripts/hermes/merge.py -> scripts/worktree-cleanup.sh
+_WORKTREE_CLEANUP_SH = Path(__file__).resolve().parents[1] / "worktree-cleanup.sh"
 
 
 @dataclass
@@ -72,6 +78,7 @@ def merge_workstream(ws_id: str, slug: str, repo_root: str = ".") -> MergeResult
         
         if result.returncode == 0:
             print(f"  Merged {branch} successfully")
+            _cleanup_merged_worktree(ws_id, slug, branch, repo_root)
             return MergeResult(
                 success=True,
                 workstream_id=ws_id,
@@ -88,6 +95,35 @@ def merge_workstream(ws_id: str, slug: str, repo_root: str = ".") -> MergeResult
             branch=branch,
             diff=str(e),
         )
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_merged_worktree (T004)
+# ---------------------------------------------------------------------------
+
+def _cleanup_merged_worktree(ws_id: str, slug: str, branch: str, repo_root: str) -> None:
+    """Best-effort post-merge cleanup: remove the just-merged workstream's
+    worktree + branch via the shared `worktree-cleanup.sh after-merge` helper.
+
+    Never raises and never changes the caller's MergeResult — the merge
+    already succeeded by the time this runs; cleanup is opportunistic. The
+    worktree path is looked up from git's own registry (get_worktree_info)
+    rather than reconstructed from a base-dir convention, so it matches
+    wherever the worktree actually lives regardless of `worktree_base` config.
+    """
+    try:
+        info = get_worktree_info(slug, ws_id, repo_root)
+        if not info or not info.get("path"):
+            return  # No registered worktree for this workstream — nothing to clean up.
+        result = subprocess.run(
+            ["bash", str(_WORKTREE_CLEANUP_SH), "after-merge", info["path"], branch],
+            capture_output=True, text=True,
+            cwd=repo_root,
+        )
+        if result.returncode != 0:
+            print(f"  WARNING: post-merge worktree cleanup for {branch} failed: {result.stderr.strip()}")
+    except Exception as e:
+        print(f"  WARNING: post-merge worktree cleanup for {branch} failed: {e}")
 
 
 def _handle_merge_failure(

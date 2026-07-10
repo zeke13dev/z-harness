@@ -12,6 +12,7 @@ Invariant under test (criterion #3, #4, #5, #12 from the reconcile-workspace INT
 
 Test classes:
   TestWorktreeClassDead               — 'dead' (only auto-prune-eligible class)
+  TestWorktreeClassDeadPatchIdentity  — 'dead' via offline patch-identity promotion
   TestWorktreeClassDirty              — 'dirty' (uncommitted changes)
   TestWorktreeClassDetached           — 'detached' (detached HEAD)
   TestWorktreeClassMergedUncertain    — 'merged-uncertain' (squash/ambiguous)
@@ -182,6 +183,118 @@ class TestWorktreeClassDead:
         facts = _dead_facts(is_head_ancestor_of_default=None)
         cls, _ = classify_worktree(facts)
         assert cls != "dead", f"Expected non-dead when ancestry unknown; got {cls!r}"
+
+
+# ---------------------------------------------------------------------------
+# Worktree: 'dead' class via patch-identity promotion (new)
+# ---------------------------------------------------------------------------
+
+class TestWorktreeClassDeadPatchIdentity:
+    """'dead' via offline patch-identity, even without literal commit ancestry.
+
+    Invariant: a clean worktree whose HEAD is proven patch-identical to the
+    default branch must classify 'dead' even when: (1) HEAD is NOT a commit-
+    ancestry ancestor of the default branch (e.g. squash merge), and (2) the
+    remote is unreachable or the branch has unpushed commits / was never
+    pushed. This is the offline, squash-aware detection this feature exists
+    to add. Detached and dirty must still take precedence over patch-identity.
+    """
+
+    def test_clean_patch_identical_non_ancestor_unknown_remote_is_dead(self) -> None:
+        """Clean + patch-identical + non-ancestor + remote unreachable → 'dead'."""
+        facts = _active_facts(
+            is_head_ancestor_of_default=False,
+            remote_reachable=False,
+            has_unpushed=None,
+            patch_identical_to_default=True,
+        )
+        cls, action = classify_worktree(facts)
+        assert cls == "dead", f"Expected 'dead' but got {cls!r}"
+        assert "patch" in action.lower()
+
+    def test_clean_patch_identical_non_ancestor_unpushed_is_dead(self) -> None:
+        """Clean + patch-identical + non-ancestor + never-pushed (has_unpushed=True)
+        with remote reachable → 'dead'. This is the never-pushed-local-branch case."""
+        facts = _active_facts(
+            is_head_ancestor_of_default=False,
+            remote_reachable=True,
+            has_unpushed=True,
+            patch_identical_to_default=True,
+        )
+        cls, _ = classify_worktree(facts)
+        assert cls == "dead", f"Expected 'dead' but got {cls!r}"
+
+    def test_dead_action_mentions_patch_identity_and_branch_deletion(self) -> None:
+        """Recommended action for the patch-identity path must mention patch-identity
+        and that the branch will be deleted (git branch -d), not just the worktree."""
+        facts = _active_facts(
+            is_head_ancestor_of_default=False,
+            remote_reachable=False,
+            has_unpushed=None,
+            patch_identical_to_default=True,
+        )
+        _, action = classify_worktree(facts)
+        assert "patch" in action.lower()
+        assert "branch" in action.lower()
+
+    def test_dirty_beats_patch_identity(self) -> None:
+        """Uncommitted changes must prevent 'dead' promotion even when patch-identical."""
+        facts = _active_facts(
+            has_uncommitted=True,
+            is_head_ancestor_of_default=False,
+            remote_reachable=False,
+            has_unpushed=None,
+            patch_identical_to_default=True,
+        )
+        cls, _ = classify_worktree(facts)
+        assert cls == "dirty", (
+            "A dirty worktree must never be promoted to 'dead' by patch-identity."
+        )
+
+    def test_detached_beats_patch_identity(self) -> None:
+        """Detached HEAD must prevent 'dead' promotion even when patch-identical."""
+        facts = _active_facts(
+            is_detached=True,
+            branch=None,
+            is_head_ancestor_of_default=False,
+            remote_reachable=False,
+            has_unpushed=None,
+            patch_identical_to_default=True,
+        )
+        cls, _ = classify_worktree(facts)
+        assert cls == "detached", (
+            "A detached worktree must never be promoted to 'dead' by patch-identity."
+        )
+
+    def test_merged_uncertain_beats_patch_identity(self) -> None:
+        """merged-uncertain evidence still takes precedence over patch-identity
+        promotion, per the documented precedence order."""
+        facts = _active_facts(
+            is_head_ancestor_of_default=False,
+            remote_reachable=True,
+            has_unpushed=False,
+            merge_evidence="merged-uncertain",
+            patch_identical_to_default=True,
+        )
+        cls, _ = classify_worktree(facts)
+        assert cls == "merged-uncertain"
+
+    def test_patch_identical_false_does_not_promote(self) -> None:
+        """patch_identical_to_default=False must not trigger promotion; falls
+        through to the existing (non-)dead logic."""
+        facts = _active_facts(
+            is_head_ancestor_of_default=False,
+            patch_identical_to_default=False,
+        )
+        cls, _ = classify_worktree(facts)
+        assert cls != "dead"
+
+    def test_literal_ancestor_dead_path_still_works(self) -> None:
+        """Regression: the pre-existing literal-ancestor 'dead' path (with a
+        reachable remote and no patch-identity fact at all) still classifies 'dead'."""
+        cls, action = classify_worktree(_dead_facts())
+        assert cls == "dead", f"Expected 'dead' but got {cls!r}"
+        assert "ancestor" in action.lower()
 
 
 # ---------------------------------------------------------------------------

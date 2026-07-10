@@ -1148,6 +1148,24 @@
         "remote-runner"
       ],
       "summary": "Two-layer liveness protection: supervised-run enforces hard deadlines for killable subprocesses, while z-execute/z-overnight schedule one-shot hang-checks based on metrics-derived thresholds to detect and notify on native-agent stalls."
+    },
+    {
+      "slug": "worktree-hygiene",
+      "source_files": [
+        "scripts/worktree-cleanup.sh",
+        "Makefile",
+        "docs/human/worktree-hygiene.md"
+      ],
+      "last_updated": "2026-07-10",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "z-reconcile"
+      ],
+      "consumed_by": [
+        "operators"
+      ],
+      "summary": "Read-only cadence entrypoint (make worktree-sweep / worktree-sweep-apply) plus runbook for keeping git worktrees from accumulating; classification and removal live in scripts/worktree-cleanup.sh."
     }
   ]
 }

@@ -489,7 +489,9 @@ def test_monitor_done_path_via_to_thread(monkeypatch):
     monkeypatch.setattr(_HX, "merge_workstream", lambda *a, **k: _types.SimpleNamespace(
         success=True, conflicted_files=[], diff="",
     ))
-    monkeypatch.setattr(_HX, "delete_worktree", lambda *a, **k: None)
+    # Worktree cleanup on the merge success path now happens inside
+    # merge_workstream() itself (mocked above), not via a separate
+    # hermes-execute.py delete_worktree() call — nothing to stub here.
     monkeypatch.setattr(_HX, "save_state", lambda *a, **k: None)
 
     # Patch asyncio.sleep to a no-op so the test runs fast.
