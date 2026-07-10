@@ -1,6 +1,6 @@
 # oh-my-pi (omp) setup for z-harness
 
-> Last updated: 2026-06-24 (T009 complete — OMP is now a first-class native host)
+> Last updated: 2026-07-09 (host-aware-model-tiers T007 — reviewer/consultant_secondary reconfigured to omp Cursor OAuth; superseded prior D2 decision)
 
 `omp` / [oh-my-pi](https://github.com/can1357/oh-my-pi) (`@earendil-works/pi-coding-agent`) has
 two distinct roles in z-harness. Understanding the difference is important:
@@ -8,7 +8,7 @@ two distinct roles in z-harness. Understanding the difference is important:
 | Role | What it does | When to use |
 |------|-------------|-------------|
 | **OMP native host** | `z-harness launch --host omp` runs z-harness commands directly in OMP; OMP is the execution environment | When you want to run `/z-execute`, `/z-consult`, `/z-gate`, or `/z-panel` natively in OMP (four families proven at Claude-parity, T009) |
-| **OMP consult-provider** | `scripts/omp-consult.sh` adapts stdin prompts for the provider registry; omp-gemini/omp-codex arms route advisory consults through OMP's OAuth | When Claude Code is the primary host and you want advisory consultant roles to use Gemini/GPT-5.5 via OMP's OAuth subscriptions |
+| **OMP consult-provider** | `scripts/omp-consult.sh` adapts stdin prompts for the provider registry; `omp-antigravity-pro`/`omp-cursor-sol`/`omp-cursor-terra` route advisory consultant/reviewer roles through OMP's OAuth | When Claude Code is the primary host and you want advisory consultant/reviewer roles to use Gemini 3.1 Pro / gpt-5.6 Sol / gpt-5.6 Terra via OMP's OAuth subscriptions |
 
 These two paths are explicitly separate. The consult-provider path (`omp-consult.sh`) uses
 `--no-rules --no-session` and is only for advisory uses. The native host path keeps
@@ -96,16 +96,22 @@ z-harness can route its **advisory consult arms** through omp's OAuth-backed mul
 dispatch so a single binary serves multiple model providers from your subscriptions instead of
 separate vendor CLIs and API keys.
 
-Two arms are wired by default (`.z-harness/providers.json`):
+All three consult/reviewer roles are wired through omp by default (`.z-harness/providers.json`):
 
 | Role | Provider entry | Model | Auth |
 |------|----------------|-------|------|
-| `consultant_primary` | `omp-gemini` | `google-antigravity/gemini-3.1-pro` | Antigravity OAuth |
-| `consultant_secondary` | `omp-codex` | `openai-codex/gpt-5.5` | ChatGPT Plus/Pro OAuth |
-| `reviewer` | `codex-cli` (**unchanged**) | gpt-5-codex | native codex CLI |
+| `consultant_primary` | `omp-antigravity-pro` (alias `omp-gemini`) | `google-antigravity/gemini-3.1-pro` | Antigravity OAuth |
+| `consultant_secondary` | `omp-cursor-sol` | `cursor/gpt-5.6-sol-medium` | Cursor OAuth |
+| `reviewer` | `omp-cursor-terra` | `cursor/gpt-5.6-terra-medium` | Cursor OAuth |
 
-> The blocking **reviewer** gate deliberately stays on the native codex CLI — it is not routed
-> through omp, so an OAuth token-refresh hiccup can never stall a review (plan decision D2).
+> **Superseded (host-aware-model-tiers plan, T007):** the blocking **reviewer** gate previously
+> stayed on the native codex CLI so an OAuth token-refresh hiccup could never stall a review
+> (former plan decision D2). That decision no longer holds — `reviewer` now routes through omp's
+> Cursor OAuth (`omp-cursor-terra`), same as `consultant_secondary`. Provider preflight fails loud
+> with an actionable re-auth path if `cursor` is not authed in omp; it does not silently fall back.
+> This means `cursor` OAuth is now a **required** login for both `reviewer` and
+> `consultant_secondary` — see the auth-check note below (`scripts/check-pi-auth.sh` has not yet
+> been updated to reflect this; it still lists `cursor` as optional).
 
 ## `pi` vs `omp` — which binary
 
@@ -145,7 +151,8 @@ scripts/check-pi-auth.sh
 ```
 
 Read-only; probes `omp token <provider>` (never prints secrets) and reports which providers are
-authenticated. Exit 0 always (add `--strict` to fail when a required arm is missing). Expected:
+authenticated. Exit 0 always (add `--strict` to fail when a required arm is missing). Current
+script output (not yet updated for the T007 role reconfig above):
 
 ```
 PROVIDER               STATUS     POWERS
@@ -153,6 +160,13 @@ openai-codex           authed     omp-codex consult arm (GPT-5.5, ChatGPT sub)
 google-antigravity     authed     omp-gemini consult arm (Gemini 3.1 Pro, Antigravity OAuth)
 cursor                 authed     optional future Cursor arm
 ```
+
+> **Known drift:** `scripts/check-pi-auth.sh` still marks `openai-codex` as required and `cursor`
+> as optional. Since T007, `cursor` is actually the required backend for `reviewer` and
+> `consultant_secondary` (the two roles that now route through omp), while `openai-codex` is no
+> longer bound to any default role (the `omp-codex` provider entry still exists for manual
+> binding). Run `omp token cursor` yourself to confirm readiness until the script is updated to
+> match.
 
 ## How the consult dispatch works
 

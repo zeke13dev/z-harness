@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-06-24",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -109,43 +109,47 @@
   "invariants": [
     "Resolution priority: Z_HARNESS_CONSULT=off check first -> config.toml [models.<role>] TOML override second -> providers.json.roles legacy fallback third.",
     "consultant_primary and consultant_secondary must resolve to distinct provider names regardless of which binding path (TOML or legacy) each uses. _peek_consultant_provider checks both paths when enforcing distinctness from _resolve_models_override.",
-    "When Z_HARNESS_CONSULT=off, resolve-provider.py prints the plaintext sentinel 'none' (exit 0) for roles consultant_primary, consultant_secondary, and reviewer — before any config file is loaded.",
+    "When Z_HARNESS_CONSULT=off, resolve-provider.py prints the plaintext sentinel 'none' (exit 0) for roles consultant_primary, consultant_secondary, and reviewer \u2014 before any config file is loaded.",
     "The sentinel 'none' is a plaintext string, not JSON. Any consumer that receives 'none' must skip JSON parsing and must not dispatch to an external model CLI.",
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process (PPID-keyed stamp file).",
     "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
-    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through /z-providers-discover with explicit user confirmation.",
+    "discover-providers.py never writes files and outputs v1 format JSON \u2014 all writes go through /z-providers-discover with explicit user confirmation.",
     "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model. When model_arg_template is null (v1 legacy), returns args_template immediately without model resolution.",
     "providers.json.roles is the legacy fallback for role binding; config.toml [models.<role>] takes precedence when set. Using providers.json.roles emits legacy_provider_roles_used.",
     ".z-harness/providers.json v2 ships both old names (codex/gemini/claude/cursor/agy) and new -cli names (codex-cli/gemini-cli/claude-cli/cursor-cli/agy-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries.",
     "resolve() unconditionally passes is_legacy=True when resolving from the roles section of providers.json, so legacy_provider_roles_used fires for every role lookup through that path regardless of alias involvement.",
     "OMP provider entries are consult-provider compatibility and do not imply OmpAdapter support or native command tiers.",
-    "scripts/omp-consult.sh is the only documented --no-rules --no-session OMP path; native OMP command dispatch must bypass it."
+    "scripts/omp-consult.sh is the only documented --no-rules --no-session OMP path; native OMP command dispatch must bypass it.",
+    "As of the host-aware-model-tiers plan (T007), .z-harness/providers.json roles bind consultant_primary=omp-antigravity-pro (unchanged), consultant_secondary=omp-cursor-sol (cursor/gpt-5.6-sol-medium), and reviewer=omp-cursor-terra (cursor/gpt-5.6-terra-medium). Both gpt-5.6-* models resolve only via the cursor omp provider, so cursor auth readiness (classified 'OMP OAuth / Cursor' by _auth_backend_for) gates those two roles; preflight fails loud rather than silently degrading when cursor is not authed in omp."
   ],
   "gotchas": [
-    "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely — setting it is sufficient; no providers.json change needed.",
+    "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely \u2014 setting it is sufficient; no providers.json change needed.",
     "log-providers.sh checks for 'none' at line 34 BEFORE calling any python JSON parse. Previously, receiving 'none' caused json.load to crash. The guard ensures a clean provider_resolution_skipped event is emitted instead.",
     "Consumer contract for 'none': /z-plan skips Phase 3 and Phase 7 external consults; /z-execute routes its reviewer gate to a self-reviewer subagent (agents/self-reviewer.md) that never calls resolve-provider or any external CLI.",
-    "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
+    "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' \u2014 SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
-    "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
+    "Shadow de-dup stamp file is keyed on PPID, not PID \u2014 warning fires once per parent process tree, not once per subshell.",
     "Role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
     "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
-    "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
+    "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set \u2014 double-emission is prevented when both global and repo configs are v1.",
     "_resolve_models_override enforces consultant distinctness across ALL combinations of TOML and legacy paths. _peek_consultant_provider checks [models] config override first, then legacy roles map, when looking up the peer consultant's provider.",
     "_check_compose_argv_precondition only fires when [models.<role>] override is set AND the resolved provider has a non-null model_arg_template. In that case default_model must be set or resolution fails with a fail-loud message.",
-    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. The shipped aliases map covers five entries: codex, gemini, claude, cursor, agy -> their -cli canonical names. Old alias names are transparently resolved; provider_alias_used is emitted once per (process, old-name).",
-    "When the roles map in providers.json is the active binding path, both legacy_provider_roles_used AND (if an alias is matched) provider_alias_used are emitted — two distinct events for one resolution.",
+    "aliases section IS used by resolve() via _apply_aliases \u2014 it is not merely informational. The shipped aliases map covers five entries: codex, gemini, claude, cursor, agy -> their -cli canonical names. Old alias names are transparently resolved; provider_alias_used is emitted once per (process, old-name).",
+    "When the roles map in providers.json is the active binding path, both legacy_provider_roles_used AND (if an alias is matched) provider_alias_used are emitted \u2014 two distinct events for one resolution.",
     "_alias_used_emitted memoization set is module-level; alias dedup survives multiple resolve() calls within the same process but resets on new process invocations.",
-    "cursor-cli and agy-cli are the only shipped providers with non-null model_arg_template (['--model', '{model}']) and a default_model set — all other shipped providers use null model_arg_template (v1 legacy mode).",
-    "discover-providers.py KNOWN_CLIS still uses old v1-style names (codex, gemini, claude, ollama, agy, gpt) and outputs version:1. This is intentional — the v1 output is upgraded transparently on load.",
-    "Do not use omp-gemini/omp-codex provider success as evidence for OMP native host parity; provider dispatch tests only cover consultant compatibility."
+    "cursor-cli and agy-cli are the only shipped providers with non-null model_arg_template (['--model', '{model}']) and a default_model set \u2014 all other shipped providers use null model_arg_template (v1 legacy mode).",
+    "discover-providers.py KNOWN_CLIS still uses old v1-style names (codex, gemini, claude, ollama, agy, gpt) and outputs version:1. This is intentional \u2014 the v1 output is upgraded transparently on load.",
+    "Do not use omp-gemini/omp-codex provider success as evidence for OMP native host parity; provider dispatch tests only cover consultant compatibility.",
+    "The omp-codex provider entry (openai-codex/gpt-5.5) still exists in .z-harness/providers.json but is no longer bound to any default role since T007 \u2014 it is retained for manual/custom role binding only. Do not assume omp-codex auth readiness is required for the shipped default roles."
   ],
   "memories": [],
   "omp_consult_boundary": {
     "provider_entries": [
-      "omp-gemini",
-      "omp-codex"
+      "omp-antigravity-pro",
+      "omp-codex",
+      "omp-cursor-terra",
+      "omp-cursor-sol"
     ],
     "scope": "consult-provider compatibility for advisory consultant roles",
     "not_native_host_support": true,

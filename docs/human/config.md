@@ -1,7 +1,7 @@
 # config
 
-> Last updated: 2026-07-03
-> Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
+> Last updated: 2026-07-09
+> Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, runtime/dispatch/dispatcher.py, docs/human/config.md
 
 ## Overview
 
@@ -600,7 +600,13 @@ The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md
    - `claude` — native Claude Code hosts. `effort` is applied via the subagent `effort:` frontmatter field.
    - `omp` — **every non-claude host** (pi / codex / cursor / antigravity / unknown). Effort is baked into the omp catalog model name (`gpt-5.6-terra-medium`), so the `omp.effort` field is always the empty-string sentinel.
 
+**Host detection.** The family in point 2 is not read from adapter/export host selection — it comes from `scripts/detect-host.sh` (honoring a `Z_HARNESS_HOST` override), which prints exactly one of `claude | pi | codex | cursor | antigravity` (default `claude` when no positive env marker is present). The dispatcher (`runtime/dispatch/dispatcher.py::_host_family`) then applies the fixed rule: `claude` → the `claude` family, **every other value → the `omp` family**. This is a different detection mechanism from the adapter/export "host" concept in [capabilities-matrix.md](capabilities-matrix.md) (which uses `z_harness_cli/adapters/registry.py::detect_all()` / an explicit `--host` flag for launch/export) — the two happen to share the same host-id vocabulary but are looked up independently.
+
 `effort` allowed values: `""` (no applied effort — the sentinel for Haiku and for every omp entry), `none`, `low`, `medium`, `high`, `xhigh`, `max`. Custom class names must use lowercase/underscore TOML keys; a custom class must define a model via either the legacy scalar or at least one host sub-table.
+
+**Two label-format facts to know:**
+- The omp middle-tier model family is spelled **`terra`**, not "tera" (`gpt-5.6-terra-low`, `gpt-5.6-terra-medium`).
+- On omp, effort is **baked into the model name itself** (`gpt-5.6-sol-medium` is a single catalog identifier — there is no separate `effort` value to apply). On Claude, effort is a **distinct applied axis**: the subagent's `effort:` frontmatter field (`low|medium|high|xhigh|max`). The two axes are applied differently at dispatch time: the resolved *model* is always applied per-call via `Agent(model=...)`; the resolved *effort* has no per-call `Agent()` parameter on Claude, so for the `/z-execute` implementer (whose effort varies per task by complexity tier, not just per subagent) the routed Claude effort is carried as advisory telemetry/prompt context only, while on omp the effort requires no separate application step because selecting the model already applies it. See [skills/z-execute/SKILL.md](../../skills/z-execute/SKILL.md) for the `override_applied`/`override_support` telemetry that records this honestly.
 
 The four-tier host-keyed default matrix:
 
@@ -621,16 +627,18 @@ The four-tier host-keyed default matrix:
 | `model_classes.<class>.omp.model` | string | see matrix | Effort-suffixed catalog model for the omp (non-claude) host family. |
 | `model_classes.<class>.omp.effort` | string | `""` | Always `""` — omp effort is baked into the model name. |
 
-`[model_routing]` maps native agents and implementer tiers to either a named class or an exact model label. `model_routing.native_agents.default = ""` intentionally inherits each agent's checked-in frontmatter model, preserving cheap Haiku agents and standard Sonnet agents when no override is configured. Implementer tier defaults reproduce the current `/z-execute` labels.
+`[model_routing]` maps native agents and implementer tiers to either a named class or an exact model label. `model_routing.native_agents.default = ""` intentionally inherits each agent's checked-in frontmatter model, preserving cheap Haiku agents and standard Sonnet agents when no override is configured. Implementer tier defaults route through the host-keyed classes above (T003) — `low`→`low`, `medium`→`standard`, `high`→`deep`, `retry`→`deep` — so a tier expands to the detected host's `(model, effort)` pair rather than a fixed `sonnet`/`opus` scalar: on a `claude` host the four tiers resolve to `sonnet·medium / sonnet·high / opus·high / opus·high`, and on an `omp`-family host to `gpt-5.6-terra-low / gpt-5.6-terra-medium / gpt-5.6-sol-medium / gpt-5.6-sol-medium`.
+
+The fixed subagent fleet (T004) is mapped the same way: every native agent id is assigned a class that mirrors its checked-in frontmatter model — Haiku agents → `cheap`, Sonnet agents → `standard`, Opus agents → `deep` — via `model_routing.native_agents.<agent_id>` entries in `DEFAULTS`. Frontmatter model/effort remains the fallback for any agent id not listed.
 
 | Key pattern | Type | Default | Description |
 |-------------|------|---------|-------------|
 | `model_routing.native_agents.default` | string | `""` | Empty sentinel = inherit each native agent's frontmatter model. |
-| `model_routing.native_agents.<agent_id>` | string | _(unset)_ | Route a native agent id (underscore key form) to a class name such as `cheap` or an exact model label. |
-| `model_routing.implementer.low` | string | `"sonnet"` | Low-complexity implementer route. |
-| `model_routing.implementer.medium` | string | `"sonnet"` | Medium-complexity implementer route. |
-| `model_routing.implementer.high` | string | `"opus"` | High-complexity implementer route. |
-| `model_routing.implementer.retry` | string | `"opus"` | Retry implementer route. |
+| `model_routing.native_agents.<agent_id>` | string | see `DEFAULTS` | Route a native agent id (underscore key form) to a class name such as `cheap`/`standard`/`deep`, or an exact model label. Pre-assigned for all ~35 fleet agents. |
+| `model_routing.implementer.low` | string | `"low"` | Low-complexity implementer route (class name). |
+| `model_routing.implementer.medium` | string | `"standard"` | Medium-complexity implementer route (class name). |
+| `model_routing.implementer.high` | string | `"deep"` | High-complexity implementer route (class name). |
+| `model_routing.implementer.retry` | string | `"deep"` | Retry implementer route (class name). |
 
 Example — (a) overriding the host-keyed table, and (b) pinning prior host-blind behavior:
 
@@ -656,10 +664,14 @@ reasoning = "effort=low"
 explore = "local_fast"           # named class
 auditor = "claude-sonnet-4-5"    # exact native model override
 
+# These implementer overrides are illustrative only — they replace the SHIPPED
+# defaults (low="low", medium="standard", high="deep", retry="deep", all class
+# names). An exact label like "sonnet" pins that tier to a fixed Claude model
+# on every host, opting it OUT of host-aware routing.
 [model_routing.implementer]
-low = "sonnet"                    # exact current label
-medium = "standard"               # named class also allowed
-high = "deep"
+low = "sonnet"                    # exact override: opts this tier out of host-aware routing
+medium = "standard"               # named class (same as the shipped default)
+high = "deep"                     # named class (same as the shipped default)
 retry = "claude-opus-4-1"        # exact override also allowed
 
 [models]

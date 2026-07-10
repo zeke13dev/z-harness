@@ -1,12 +1,14 @@
 {
   "concept": "config",
-  "last_updated": "2026-07-03",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
     "scripts/config.py",
     "scripts/config.sh",
     "scripts/propose-prefs.py",
-    "docs/human/config.md"
+    "docs/human/config.md",
+    "runtime/dispatch/dispatcher.py",
+    "scripts/detect-host.sh"
   ],
   "confidence": "high",
   "entry_points": [
@@ -225,7 +227,35 @@
       "line": 1,
       "symbol": "propose-prefs",
       "kind": "module",
-      "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write via /z-suggest-memory or config.py set"
+      "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes \u2014 caller owns write via /z-suggest-memory or config.py set"
+    },
+    {
+      "file": "runtime/dispatch/dispatcher.py",
+      "line": 179,
+      "symbol": "_host_family",
+      "kind": "fn",
+      "summary": "[model_routing] Maps a detected host id to a model host family: claude->claude, every other host (pi/codex/cursor/antigravity/unknown)->omp. Host id itself comes from scripts/detect-host.sh / Z_HARNESS_HOST."
+    },
+    {
+      "file": "runtime/dispatch/dispatcher.py",
+      "line": 221,
+      "symbol": "resolve_model_route",
+      "kind": "fn",
+      "summary": "[model_classes] Expand a class name (or pass through an exact model label) against the current host family's model_classes.<class>.<family>.{model,effort}, falling back to the legacy host-blind scalar when the host-keyed value is absent."
+    },
+    {
+      "file": "runtime/dispatch/dispatcher.py",
+      "line": 269,
+      "symbol": "resolve_implementer_model",
+      "kind": "fn",
+      "summary": "[model_routing.implementer] Resolve /z-execute implementer tier low|medium|high|retry through model_routing.implementer.<tier> then resolve_model_route."
+    },
+    {
+      "file": "runtime/dispatch/dispatcher.py",
+      "line": 290,
+      "symbol": "resolve_native_agent_model",
+      "kind": "fn",
+      "summary": "[model_routing.native_agents] Resolve a native agent by exact agent id, then model_routing.native_agents.default, then frontmatter fallback."
     }
   ],
   "depends_on": [
@@ -242,9 +272,9 @@
   ],
   "invariants": [
     "[Loader API] schema_version current value is 2; loading a config with schema_version < 2 emits a non-fatal stderr warning pointing at `config.py ensure-defaults`; schema_version > 2 exits 2 (hard fail)",
-    "[Deprecation] load_config() emits a DEPRECATED stderr warning for every preference-class Z_HARNESS_* env var found in the raw environment (uses _collect_deprecated_env_vars — same set as export-env unset lines)",
+    "[Deprecation] load_config() emits a DEPRECATED stderr warning for every preference-class Z_HARNESS_* env var found in the raw environment (uses _collect_deprecated_env_vars \u2014 same set as export-env unset lines)",
     "[Deprecation] runtime.env_strict = true (config.toml key, NOT a raw env var) upgrades the deprecation warning to a hard ERROR (exit 2); default false (grace period, warning only)",
-    "[Deprecation] Legal plumbing/unattended env vars (LEGAL_ENV_KEYS/LEGAL_ENV_PREFIXES) never trigger the deprecation warning — only preference-class vars do",
+    "[Deprecation] Legal plumbing/unattended env vars (LEGAL_ENV_KEYS/LEGAL_ENV_PREFIXES) never trigger the deprecation warning \u2014 only preference-class vars do",
     "[Deprecation] runtime.env_strict is itself a TOML config key (bool, default false); it cannot be set via a raw env var (bootstrap paradox: the env var would be deprecated by the policy it enables)",
     "[Loader API] ensure-defaults never writes repo-local; only writes the global user path",
     "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
@@ -265,8 +295,8 @@
     "[personas] personas.review_eval valid values: true | false; default true; env Z_HARNESS_PERSONAS_REVIEW_EVAL",
     "[personas] personas.consult_eval valid values: true | false; default FALSE (off); env Z_HARNESS_PERSONAS_CONSULT_EVAL",
     "[personas] personas.implementer_retry valid values: same | new; default same; env Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
-    "[personas] there is NO personas.debug knob — it was removed as dead code; do not document or configure it",
-    "[personas] personas.consult_eval=false (default) means the neutral consult arm runs alone at convergent sites — no advisory overhead",
+    "[personas] there is NO personas.debug knob \u2014 it was removed as dead code; do not document or configure it",
+    "[personas] personas.consult_eval=false (default) means the neutral consult arm runs alone at convergent sites \u2014 no advisory overhead",
     "[personas] personas.implementer_retry has no effect when experiment.persona_rotation=false",
     "[personas] neutral-authority invariant: at all CONVERGENT sites the neutral arm is always the decision of record regardless of knob state",
     "[axioms] axioms.enabled valid values: true | false; default true; env Z_HARNESS_AXIOMS_ENABLED",
@@ -296,7 +326,7 @@
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
     "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id; exit 4 = I/O error; exit 5 = config conflict (ASK_ALL=1 + NO_ASK=halt)",
     "QUESTION_IDS registry is the single source of truth; _run_startup_guards() asserts set(QUESTION_IDS) <= set(VALIDATORS) at module load",
-    "Resolver is read-only — never writes to config or memory; all writes go through config.py set or /z-suggest-memory",
+    "Resolver is read-only \u2014 never writes to config or memory; all writes go through config.py set or /z-suggest-memory",
     "config.py set writes atomically via tmp+rename; validates against VALIDATORS before writing; exits 0 silently on success; exit 2 on invalid value",
     "[Overnight gate] Z_HARNESS_NO_ASK=halt activates overnight mode; _apply_overnight_overrides post-processes every resolve-question envelope",
     "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt are mutually exclusive; resolve-question exits 5 on conflict",
@@ -317,40 +347,42 @@
     "[Overnight gate] Hard cost gates under Z_HARNESS_NO_ASK=halt auto_proceed only when range_high <= cost.token_budget; over-budget halts or returns unhandled_gate in policy mode."
   ],
   "gotchas": [
-    "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] — do NOT move it; existing configs already have it there",
+    "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] \u2014 do NOT move it; existing configs already have it there",
     "[brainstorm] brainstorm.wide_overflow_model='cheap-mixed' is accepted by the validator but acts as a no-op until the per-vendor cheap-model mechanism is verified",
-    "[personas] personas.consult_eval defaults OFF (false) — most expensive advisory arm; enabling it adds one extra subagent call at every convergent eval site",
-    "[personas] there is NO personas.debug knob — it was removed as dead; do not configure or document it",
+    "[personas] personas.consult_eval defaults OFF (false) \u2014 most expensive advisory arm; enabling it adds one extra subagent call at every convergent eval site",
+    "[personas] there is NO personas.debug knob \u2014 it was removed as dead; do not configure or document it",
     "[personas] personas.implementer_retry is a no-op when experiment.persona_rotation=false regardless of its value",
     "[personas] Global layer violations are soft (warn + default); repo/env layer violations exit 2 (hard fail)",
     "[axioms] axioms.kernel_budget_chars and axioms.extract_min_recurrence must be positive integers; string '0' fails validation (positive means >=1)",
     "[axioms] axiom-store.py is loaded via importlib (not normal import) because the filename has a hyphen; module load failures are silently tolerated",
     "[experiment] Global layer experiment.* violations are soft; repo/env layer violations exit 2 (hard fail)",
     "[cost] cost.token_budget=null (default) causes check-no-ask to halt with cost_budget_missing under NO_ASK=halt policy; must be explicitly set for overnight cost-gate to auto-proceed",
-    "[models] models.* cross-checked against providers.json at RESOLVE time not at config-load time — invalid model strings are caught only when the role is dispatched, not during config load",
+    "[models] models.* cross-checked against providers.json at RESOLVE time not at config-load time \u2014 invalid model strings are caught only when the role is dispatched, not during config load",
     "[export] export.hosts must be non-empty; empty list is rejected; env transport is JSON-encoded array (e.g. '[\"cursor\",\"codex\"]')",
     "[export] export.strategy='' (empty string, default) is the sentinel 'defer to driver default'; do not confuse with unset or missing",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2)",
-    "[Deprecation] runtime.env_strict cannot be set via env — the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
+    "[Deprecation] runtime.env_strict cannot be set via env \u2014 the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
     "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
-    "[Loader API] cmd_set exits 0 silently on success — no stdout output; do not parse stdout from cmd_set",
+    "[Loader API] cmd_set exits 0 silently on success \u2014 no stdout output; do not parse stdout from cmd_set",
     "[Loader API] Valid event kinds for should-notify: approval, phase_end, error only. Passing run_complete exits 2; guard with || true if needed",
-    "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys — callers must check for null values in JSON output",
+    "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys \u2014 callers must check for null values in JSON output",
     "[Workflow Resolver] workflow.slug_confirm value domain (ask/auto_accept/recommend_derived) is NOT the same as the resolver result domain; RESULT_MAP translates between them",
     "[Workflow Resolver] workflow.audit_to_amend behavior is SOURCE-KEYED: source==none (no stored preference) -> auto_split even when the stored value would say 'ask'; setting 'ask' in config.toml opts back into the 3-way popup",
     "[Workflow Resolver] workflow.pre_run_cost_gate is a registered question_id; overnight allowlist can auto-decide it via Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
     "[Workflow Resolver] workflow.intent_parallel_levels=true is not arbitrary fan-out: missing/unparseable Files scope, scope_unknown=true, file overlap, unsafe review capture, or unbounded fan-out serializes the affected INTENT BFS level/task",
     "[Parallelism] Do not use runtime.max_parallel* or HERMES_MAX_PARALLEL to tune plain /z-execute INTENT BFS concurrency; those aliases are vestigial and Hermes has separate hermes-config.yaml concurrency keys.",
-    "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt both set causes exit 5 from resolve-question — not a soft error",
-    "[defer-to-sink] result==defer-to-sink must NOT be treated as skip — orchestrator must explicitly call scripts/sink-add.sh",
+    "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt both set causes exit 5 from resolve-question \u2014 not a soft error",
+    "[defer-to-sink] result==defer-to-sink must NOT be treated as skip \u2014 orchestrator must explicitly call scripts/sink-add.sh",
     "[followup] Array-typed followup keys (path_allowlist, path_denylist, audit_evidence_required_artifacts) are not in VALIDATORS; no enum validation",
-    "[followup] auto_close_low_risk_enabled defaults to TRUE (on) — do not assume it is off by default",
+    "[followup] auto_close_low_risk_enabled defaults to TRUE (on) \u2014 do not assume it is off by default",
     "[followup] Z_HARNESS_NOTION_TOKEN is env-only; callers must NOT run notion-push.py under set -x (token leaks into logs)",
     "[active-plan] Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP, Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR are surfaced by inspect-all under env-only but are NOT TOML keys; NOT emitted by export-env",
     "[claim-lock] Z_HARNESS_CLAIM_TTL_SECS, Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE are NOT TOML keys and NOT emitted by export-env; set only via environment",
     "[claim-lock] release is always safe to call even when Z_HARNESS_CLAIM_DISABLE=1; it is a true no-op (not gated on event presence)",
     "[claim-lock] do NOT conflate heartbeat exit-9 (confirmed ownership change) with heartbeat_error (transient read, exit-0); they have opposite severities",
-    "[cost] /z-plan is a hard workflow.pre_run_cost_gate callsite; unattended runs need a positive cost.token_budget or an explicit allowlist/config decision to avoid cost_budget_missing halts."
+    "[cost] /z-plan is a hard workflow.pre_run_cost_gate callsite; unattended runs need a positive cost.token_budget or an explicit allowlist/config decision to avoid cost_budget_missing halts.",
+    "[model_classes] The omp middle-tier model family is spelled 'terra' (gpt-5.6-terra-low/medium), not 'tera'. omp effort is baked into the model name (gpt-5.6-sol-medium) so model_classes.<class>.omp.effort is always the empty-string sentinel; Claude effort is a distinct applied value via the subagent effort: frontmatter field.",
+    "[model_routing.implementer] The T003 defaults are the CLASS NAMES 'low'/'standard'/'deep'/'deep' for low/medium/high/retry, not the pre-T003 bare 'sonnet'/'opus' labels \u2014 /z-execute applies the resolved model per-call via Agent(model=...); the resolved Claude effort has no Agent() per-call parameter so it is recorded as override_support='advisory' telemetry, never silently dropped, while omp effort is override_support='applied' because it rides the model name."
   ],
   "workflow_section": {
     "keys": {
@@ -456,7 +488,7 @@
   },
   "brainstorm_section": {
     "section": "[brainstorm]",
-    "description": "Controls persona injection in /z-brainstorm and wide-mode overflow model. Back-compat location — do not move to [personas].",
+    "description": "Controls persona injection in /z-brainstorm and wide-mode overflow model. Back-compat location \u2014 do not move to [personas].",
     "keys": {
       "brainstorm.personas": {
         "type": "bool",
@@ -474,7 +506,7 @@
   },
   "personas_section": {
     "section": "[personas]",
-    "description": "Controls per-surface persona dispatch across all z-harness commands. Each boolean enables/disables persona injection at one dispatch site class. There is NO personas.debug knob — it was removed as dead code.",
+    "description": "Controls per-surface persona dispatch across all z-harness commands. Each boolean enables/disables persona injection at one dispatch site class. There is NO personas.debug knob \u2014 it was removed as dead code.",
     "keys": {
       "personas.critique_panel": {
         "type": "bool",
@@ -492,13 +524,13 @@
         "type": "bool",
         "default": true,
         "env": "Z_HARNESS_PERSONAS_REVIEW_EVAL",
-        "description": "Enable the advisory persona reviewer at code-review gates — z-execute, z-fix, z-do (CONVERGENT). Advisory only — never changes pass/fail outcome."
+        "description": "Enable the advisory persona reviewer at code-review gates \u2014 z-execute, z-fix, z-do (CONVERGENT). Advisory only \u2014 never changes pass/fail outcome."
       },
       "personas.consult_eval": {
         "type": "bool",
         "default": false,
         "env": "Z_HARNESS_PERSONAS_CONSULT_EVAL",
-        "description": "Enable the advisory persona consult arm at convergent evaluation sites — z-audit bundled consult (CONVERGENT). DEFAULT OFF — most expensive and lowest-signal advisory arm."
+        "description": "Enable the advisory persona consult arm at convergent evaluation sites \u2014 z-audit bundled consult (CONVERGENT). DEFAULT OFF \u2014 most expensive and lowest-signal advisory arm."
       },
       "personas.implementer_retry": {
         "type": "string",
@@ -632,6 +664,123 @@
         "default": "",
         "description": "Model override for pre-reviewer. Empty=provider default."
       }
+    }
+  },
+  "model_classes_section": {
+    "section": "[model_classes]",
+    "description": "Host-keyed native model classes (host-aware-model-tiers plan, T001+). Four built-in classes (cheap/low/standard/deep), each with a legacy host-blind scalar (model/thinking/reasoning, back-compat fallback) plus a host axis: model_classes.<class>.claude.{model,effort} and model_classes.<class>.omp.{model,effort}. Host family is resolved by runtime/dispatch/dispatcher.py::_host_family from scripts/detect-host.sh/Z_HARNESS_HOST: claude->claude family, every other host (pi/codex/cursor/antigravity/unknown)->omp family. omp.effort is always '' (baked into the model name); claude.effort is applied via subagent effort: frontmatter.",
+    "default_matrix": {
+      "cheap": {
+        "claude": [
+          "haiku",
+          ""
+        ],
+        "omp": [
+          "gpt-5.6-luna-low",
+          ""
+        ]
+      },
+      "low": {
+        "claude": [
+          "sonnet",
+          "medium"
+        ],
+        "omp": [
+          "gpt-5.6-terra-low",
+          ""
+        ]
+      },
+      "standard": {
+        "claude": [
+          "sonnet",
+          "high"
+        ],
+        "omp": [
+          "gpt-5.6-terra-medium",
+          ""
+        ]
+      },
+      "deep": {
+        "claude": [
+          "opus",
+          "high"
+        ],
+        "omp": [
+          "gpt-5.6-sol-medium",
+          ""
+        ]
+      }
+    },
+    "keys": {
+      "model_classes.<class>.model": {
+        "type": "string",
+        "description": "Legacy host-blind scalar (back-compat); mirrors the claude model."
+      },
+      "model_classes.<class>.thinking": {
+        "type": "string",
+        "default": "",
+        "description": "Optional legacy host-blind thinking metadata."
+      },
+      "model_classes.<class>.reasoning": {
+        "type": "string",
+        "default": "",
+        "description": "Optional legacy host-blind reasoning metadata."
+      },
+      "model_classes.<class>.claude.model": {
+        "type": "string",
+        "description": "Concrete model for the claude host family."
+      },
+      "model_classes.<class>.claude.effort": {
+        "type": "string",
+        "description": "Applied effort: ''|none|low|medium|high|xhigh|max."
+      },
+      "model_classes.<class>.omp.model": {
+        "type": "string",
+        "description": "Effort-suffixed catalog model for the omp (non-claude) host family, e.g. gpt-5.6-terra-medium (note: 'terra', not 'tera')."
+      },
+      "model_classes.<class>.omp.effort": {
+        "type": "string",
+        "default": "",
+        "description": "Always '' \u2014 omp effort is baked into the model name, not a separate applied value."
+      }
+    }
+  },
+  "model_routing_section": {
+    "section": "[model_routing]",
+    "description": "Maps native agents and implementer tiers to a model_classes name or an exact model label (host-aware-model-tiers plan, T002-T004). Resolution: exact model_routing.native_agents.<agent_id> (or model_routing.implementer.<tier>), then model_routing.native_agents.default when non-empty, else source agent frontmatter.",
+    "keys": {
+      "model_routing.native_agents.default": {
+        "type": "string",
+        "default": "",
+        "description": "Empty sentinel = inherit each native agent's frontmatter model."
+      },
+      "model_routing.native_agents.<agent_id>": {
+        "type": "string",
+        "description": "Pre-assigned per T004 for all ~35 fleet agents: haiku-frontmatter agents->cheap, sonnet-frontmatter agents->standard, opus-frontmatter agents->deep."
+      },
+      "model_routing.implementer.low": {
+        "type": "string",
+        "default": "low",
+        "description": "T003: default is the class name 'low', not a bare model label."
+      },
+      "model_routing.implementer.medium": {
+        "type": "string",
+        "default": "standard"
+      },
+      "model_routing.implementer.high": {
+        "type": "string",
+        "default": "deep"
+      },
+      "model_routing.implementer.retry": {
+        "type": "string",
+        "default": "deep"
+      }
+    },
+    "implementer_tier_to_class": {
+      "low": "low",
+      "medium": "standard",
+      "high": "deep",
+      "retry": "deep"
     }
   },
   "export_section": {

@@ -1,6 +1,6 @@
 # PROVIDERS — Runtime Registry Guide
 
-> Last updated: 2026-07-03
+> Last updated: 2026-07-09
 > Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, skills/z-providers-discover/SKILL.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, scripts/omp-consult.sh, .z-harness/providers.json
 
 ## Overview
@@ -149,7 +149,7 @@ summary line and emits a `provider_resolution_skipped` event with payload
 
 Normal summary (consult on):
 ```
-[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-codex(gpt-5.5)  reviewer=codex-cli(gpt-5-codex)
+[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-cursor-sol(GPT-5.6 Sol medium)  reviewer=omp-cursor-terra(GPT-5.6 Terra medium)
 ```
 
 Single-model summary (consult off):
@@ -169,7 +169,9 @@ Leave `Z_HARNESS_CONSULT` unset (or set to `on`) for normal multi-model operatio
 
 ### OMP consult-provider compatibility
 
-OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The current default external consult arms are `omp-antigravity-pro` for Antigravity-backed Gemini 3.1 Pro and `omp-codex` for OMP Codex GPT-5.5. The legacy name `omp-gemini` remains an alias for `omp-antigravity-pro`.
+OMP provider entries that call `scripts/omp-consult.sh` are compatibility wrappers for consultant/reviewer roles only. The current default external role bindings (`.z-harness/providers.json` `roles`) are `consultant_primary = omp-antigravity-pro` (Antigravity-backed Gemini 3.1 Pro, unchanged), `consultant_secondary = omp-cursor-sol` (`cursor/gpt-5.6-sol-medium`), and `reviewer = omp-cursor-terra` (`cursor/gpt-5.6-terra-medium`). The legacy name `omp-gemini` remains an alias for `omp-antigravity-pro`. The `omp-codex` provider entry (`openai-codex/gpt-5.5`) still exists in the registry but is no longer bound to a role by default — it is retained for manual/custom role binding.
+
+Both `gpt-5.6-*` models resolve **only** via the `cursor` provider in the omp catalog, which is a different OAuth backend than the `google-antigravity`/`openai-codex` providers the prior defaults used. `cursor` must be authed in omp (`pi`/`omp` → `/login` → select Cursor) for the `reviewer` and `consultant_secondary` roles to resolve; provider preflight fails loud with an actionable re-auth path if it is not, rather than silently degrading (see the auth classification table below). The `consultant_primary`/`consultant_secondary` distinctness invariant still holds — `omp-cursor-sol` and `omp-antigravity-pro` are distinct providers.
 
 Do not treat `omp-antigravity-pro`/`omp-codex`-style provider bindings as evidence for OMP native command dispatch or OMP export parity. Current OMP adapter/export support uses `z_harness_cli/adapters/omp.py` plus `runtime/drivers/omp/export.py`, reports native adapter/export fidelity, and bounds command-family native claims to the capabilities parity matrix: `/z-execute`, `/z-consult`, `/z-gate`, and `/z-panel` are native with T008 evidence; other families remain degraded until promoted by parity evidence. Direct `gemini-cli` remains available as an explicitly named direct provider or as an explicit fallback command inside an OMP provider entry; it is not the Gemini-labeled OMP consult provider.
 
@@ -210,6 +212,10 @@ OMP consult providers are classified by the model prefix in `args_template`:
 |----------|--------------|--------------|
 | `omp-antigravity-pro` | `google-antigravity/...` | OMP OAuth / Antigravity |
 | `omp-codex` | `openai-codex/...` | OMP OAuth / Codex |
+| `omp-cursor-terra` (default `reviewer`) | `cursor/gpt-5.6-terra-medium` | OMP OAuth / Cursor |
+| `omp-cursor-sol` (default `consultant_secondary`) | `cursor/gpt-5.6-sol-medium` | OMP OAuth / Cursor |
+
+Any `cursor/...`-prefixed omp model (not just the two above) classifies to the `OMP OAuth / Cursor` auth backend — the classification is by provider prefix, not a fixed allowlist of two entries.
 
 OMP auth readiness is checked with `omp token <provider>` and never logs token
 values. If auth is missing, resolution/dispatch fails loudly with the role,
@@ -369,7 +375,7 @@ Every command that dispatches a consultant or reviewer calls
 `scripts/log-providers.sh` at start-up.  It prints a one-line summary:
 
 ```
-[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-codex(gpt-5.5)  reviewer=codex-cli(gpt-5-codex)
+[providers] consultant_primary=omp-antigravity-pro(Antigravity Gemini 3.1 Pro)  consultant_secondary=omp-cursor-sol(GPT-5.6 Sol medium)  reviewer=omp-cursor-terra(GPT-5.6 Terra medium)
 ```
 
 …and emits a `provider_resolved` event per role to `metrics.jsonl`. Provider

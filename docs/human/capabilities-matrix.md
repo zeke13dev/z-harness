@@ -7,6 +7,16 @@
 
 The capabilities matrix describes how completely z-harness features work on each supported host. There are three categories of hosts:
 
+> **Not to be confused with model-routing host families.** This document's "host" is the
+> adapter/export host selected by `z_harness_cli/adapters/registry.py::detect_all()` / an
+> explicit `--host` flag (for `launch`/`export`/`doctor`). A separate, unrelated mechanism —
+> `scripts/detect-host.sh` / `Z_HARNESS_HOST`, which powers `model_classes`' host-keyed
+> `(model, effort)` resolution in `[model_routing]` — happens to use the same host-id vocabulary
+> (`claude`/`pi`/`codex`/`cursor`/`antigravity`) but is looked up independently and collapses to
+> just two model *families*: `claude` and `omp` (every other id). See
+> [config.md — host-aware model classes](config.md#the-knobs-models-model_classes-and-model_routing-sections)
+> for that mechanism.
+
 **Native adapter hosts** (Claude Code) — these have a `HostAdapter`, native launch/inject support, export support, and per-command capability evidence. **Claude Code is the ground-truth parity target**: an OMP command may become `native` only when its observable adapter, export, dispatch, event, gate, and cleanup behavior matches the Claude Code reference for that command family.
 
 **Adapter/export hosts** (OMP native for 4 families, Antigravity/agy, Cursor, Codex CLI) — these have a `HostAdapter` class in `z_harness_cli/adapters/`, can be launched/injected, and are registered in the adapter registry. Each is assigned a **fidelity tier** and per-command tiers that tell callers whether a given `/z-*` command runs natively, in degraded mode, or is blocked entirely. OMP's parity gate (T009) has resolved: `OmpAdapter.fidelity_tier` and OMP `ExportResult.fidelity` are now `native`, and four command families — `/z-execute`, `/z-consult`, `/z-gate`, `/z-panel` — are promoted to `native`. All remaining OMP command families stay `degraded` (not blocked) until further parity evidence is added. Claude Code remains the ground-truth parity target.

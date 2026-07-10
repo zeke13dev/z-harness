@@ -252,9 +252,11 @@
         "scripts/config.py",
         "scripts/config.sh",
         "scripts/propose-prefs.py",
-        "docs/human/config.md"
+        "docs/human/config.md",
+        "runtime/dispatch/dispatcher.py",
+        "scripts/detect-host.sh"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-07-09",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -263,7 +265,7 @@
         "commands",
         "cost-estimation"
       ],
-      "summary": "Unified config concept covering Loader API and Workflow Resolver, including workflow.pre_run_cost_gate as the single disposition authority for profiled hard gates such as /z-plan and cost.token_budget for Z_HARNESS_NO_ASK=halt budget decisions.",
+      "summary": "Unified config concept covering Loader API and Workflow Resolver, including workflow.pre_run_cost_gate as the single disposition authority for profiled hard gates such as /z-plan and cost.token_budget for Z_HARNESS_NO_ASK=halt budget decisions. Also covers the host-aware four-tier model_classes/model_routing system (T001-T004): host-keyed (model, effort) per class resolved via runtime/dispatch/dispatcher.py against scripts/detect-host.sh's claude|omp host family split.",
       "source_files": []
     },
     {
@@ -556,7 +558,7 @@
         ".z-harness/providers.json",
         "scripts/omp-consult.sh"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-07-09",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -570,7 +572,7 @@
         "personas-and-roles",
         "reviewer-capture"
       ],
-      "summary": "Provider CLI resolution and role binding. OMP provider entries (omp-gemini/omp-codex) are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract."
+      "summary": "Provider CLI resolution and role binding. OMP provider entries (omp-gemini/omp-codex/omp-cursor-terra/omp-cursor-sol) are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract. As of the host-aware-model-tiers plan (T007), default role bindings are consultant_primary=omp-antigravity-pro, consultant_secondary=omp-cursor-sol, reviewer=omp-cursor-terra — both gpt-5.6-* models resolve only via the cursor omp provider, so cursor OAuth readiness now gates the reviewer and consultant_secondary roles."
     },
     {
       "slug": "review-agent",
