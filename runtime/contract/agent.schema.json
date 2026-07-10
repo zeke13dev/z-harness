@@ -50,6 +50,11 @@
       "type": "string",
       "description": "Optional host-specific reasoning metadata for this agent's frontmatter fallback."
     },
+    "effort": {
+      "type": "string",
+      "enum": ["", "none", "low", "medium", "high", "xhigh", "max"],
+      "description": "Optional host-aware applied effort level for this agent, resolved from model_classes.<class>.<hostfamily>.effort. Consumed by native dispatch (Claude effort: frontmatter field) when the host supports per-call effort."
+    },
     "tools": {
       "type": "array",
       "items": {

@@ -123,6 +123,7 @@ class ModelRouteResolution:
     route_kind: str
     thinking: str = ""
     reasoning: str = ""
+    effort: str = ""
     override_applied: bool = False
     override_support: str = "advisory"
 
@@ -140,12 +141,81 @@ class ModelRouteResolution:
             payload["thinking"] = self.thinking
         if self.reasoning:
             payload["reasoning"] = self.reasoning
+        if self.effort:
+            payload["effort"] = self.effort
         return payload
 
 
-def _class_model(config_values: dict[str, object], class_name: str) -> str:
-    value = config_values.get(f"model_classes.{class_name}.model")
-    return value if isinstance(value, str) else ""
+# Absolute path to the host-detection script (runtime/dispatch/dispatcher.py →
+# repo root is parents[2]).  Used only when Z_HARNESS_HOST is not set.
+_HOST_DETECT_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "detect-host.sh"
+
+
+def _detect_host() -> str:
+    """Return the current host id, honoring the ``Z_HARNESS_HOST`` override.
+
+    When ``Z_HARNESS_HOST`` is set it wins outright (no subprocess — this is the
+    path tests use to force a host).  Otherwise ``scripts/detect-host.sh`` is run
+    once via subprocess and its single-token stdout is returned.  Any failure to
+    invoke the script degrades to ``"claude"`` (the script's own default).
+    """
+    override = os.environ.get("Z_HARNESS_HOST")
+    if override and override.strip():
+        return override.strip()
+    try:
+        proc = subprocess.run(
+            ["bash", str(_HOST_DETECT_SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "claude"
+    host = proc.stdout.strip()
+    return host or "claude"
+
+
+def _host_family(host: str) -> str:
+    """Map a detected host id to a model host family.
+
+    ``claude`` maps to family ``claude``; every other host id (``pi``, ``codex``,
+    ``cursor``, ``antigravity``, or anything unknown) maps to family ``omp``.
+    """
+    return "claude" if host == "claude" else "omp"
+
+
+def _current_host_family() -> str:
+    """Detect the current host and return its model host family."""
+    return _host_family(_detect_host())
+
+
+def _class_resolution(
+    config_values: dict[str, object],
+    class_name: str,
+    family: str,
+) -> tuple[str, str, str, str]:
+    """Resolve a class name to ``(model, effort, thinking, reasoning)``.
+
+    Host-keyed ``model_classes.<class>.<family>.model`` (+ ``.effort``) wins when
+    present.  When the host-keyed model is absent (old or partial config), fall
+    back to the legacy host-blind scalar ``model_classes.<class>.model`` (+ the
+    existing ``.thinking``/``.reasoning`` metadata).  Returns empty strings for
+    ``model`` when neither shape yields a class model (i.e. the route is an exact
+    model label, not a class).
+    """
+    host_model = config_values.get(f"model_classes.{class_name}.{family}.model")
+    if isinstance(host_model, str) and host_model:
+        effort = config_values.get(f"model_classes.{class_name}.{family}.effort")
+        return host_model, (effort if isinstance(effort, str) else ""), "", ""
+
+    legacy_model = config_values.get(f"model_classes.{class_name}.model")
+    if isinstance(legacy_model, str) and legacy_model:
+        thinking = str(config_values.get(f"model_classes.{class_name}.thinking") or "")
+        reasoning = str(config_values.get(f"model_classes.{class_name}.reasoning") or "")
+        return legacy_model, "", thinking, reasoning
+
+    return "", "", "", ""
 
 
 def resolve_model_route(
@@ -155,20 +225,33 @@ def resolve_model_route(
     source: str,
     override_applied: bool = False,
     override_support: str = "advisory",
+    host_family: str | None = None,
 ) -> ModelRouteResolution:
-    """Resolve a class name or exact model label to an effective model."""
+    """Resolve a class name or exact model label to an effective model.
+
+    When *route* names a model class, the resolution is host-aware: the class is
+    expanded against the current host family's ``model``/``effort`` pair (host
+    detected via :func:`_current_host_family` unless *host_family* is supplied by
+    the caller, e.g. to avoid repeated subprocess calls in a loop).  When the
+    host-keyed value is absent, the legacy host-blind scalar model plus its
+    thinking/reasoning metadata is used instead (backward-compat).
+    """
     if not isinstance(route, str) or not route:
         raise ValueError("model route must be a non-empty string")
 
-    class_model = _class_model(config_values, route)
+    family = host_family if host_family is not None else _current_host_family()
+    class_model, effort, thinking, reasoning = _class_resolution(
+        config_values, route, family
+    )
     if class_model:
         return ModelRouteResolution(
             effective_model=class_model,
             source=source,
             route=route,
             route_kind="class",
-            thinking=str(config_values.get(f"model_classes.{route}.thinking") or ""),
-            reasoning=str(config_values.get(f"model_classes.{route}.reasoning") or ""),
+            thinking=thinking,
+            reasoning=reasoning,
+            effort=effort,
             override_applied=override_applied,
             override_support=override_support,
         )

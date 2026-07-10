@@ -31,6 +31,8 @@ from runtime.dispatch.driver import DispatchHandle, HostDriver
 from runtime.dispatch.dispatcher import (
     Dispatcher,
     _compose_argv,
+    _current_host_family,
+    _host_family,
     resolve_implementer_model,
     resolve_model_route,
     resolve_native_agent_model,
@@ -1338,6 +1340,148 @@ def test_native_agent_exact_default_and_frontmatter_precedence():
     assert hyphen_id.effective_model == "opus"
     assert hyphen_id.source == "model_routing.native_agents.doc_fetcher"
 
+
+
+# ---------------------------------------------------------------------------
+# T002 host-aware class resolution
+# ---------------------------------------------------------------------------
+
+
+def _host_keyed_defaults() -> dict[str, object]:
+    """Four-tier host-keyed matrix values (mirrors T001 config defaults)."""
+    return {
+        # cheap
+        "model_classes.cheap.model": "haiku",  # legacy scalar fallback
+        "model_classes.cheap.claude.model": "haiku",
+        "model_classes.cheap.claude.effort": "",
+        "model_classes.cheap.omp.model": "gpt-5.6-luna-low",
+        "model_classes.cheap.omp.effort": "",
+        # low
+        "model_classes.low.model": "sonnet",
+        "model_classes.low.claude.model": "sonnet",
+        "model_classes.low.claude.effort": "medium",
+        "model_classes.low.omp.model": "gpt-5.6-terra-low",
+        "model_classes.low.omp.effort": "",
+        # standard
+        "model_classes.standard.model": "sonnet",
+        "model_classes.standard.claude.model": "sonnet",
+        "model_classes.standard.claude.effort": "high",
+        "model_classes.standard.omp.model": "gpt-5.6-terra-medium",
+        "model_classes.standard.omp.effort": "",
+        # deep
+        "model_classes.deep.model": "opus",
+        "model_classes.deep.claude.model": "opus",
+        "model_classes.deep.claude.effort": "high",
+        "model_classes.deep.omp.model": "gpt-5.6-sol-medium",
+        "model_classes.deep.omp.effort": "",
+    }
+
+
+_CLAUDE_MATRIX = {
+    "cheap": ("haiku", ""),
+    "low": ("sonnet", "medium"),
+    "standard": ("sonnet", "high"),
+    "deep": ("opus", "high"),
+}
+
+_OMP_MATRIX = {
+    "cheap": ("gpt-5.6-luna-low", ""),
+    "low": ("gpt-5.6-terra-low", ""),
+    "standard": ("gpt-5.6-terra-medium", ""),
+    "deep": ("gpt-5.6-sol-medium", ""),
+}
+
+
+def test_host_family_maps_claude_to_claude_and_others_to_omp():
+    """Only the literal 'claude' host is the claude family; all else is omp."""
+    assert _host_family("claude") == "claude"
+    for other in ("pi", "codex", "cursor", "antigravity", "totally-unknown"):
+        assert _host_family(other) == "omp", other
+
+
+def test_current_host_family_honors_env_override(monkeypatch):
+    """Z_HARNESS_HOST forces the family without invoking detect-host.sh."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    assert _current_host_family() == "claude"
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    assert _current_host_family() == "omp"
+
+
+@pytest.mark.parametrize("class_name", ["cheap", "low", "standard", "deep"])
+def test_class_resolution_claude_column(class_name, monkeypatch):
+    """On a claude host each class resolves to the Claude (model, effort) pair."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    resolved = resolve_model_route(class_name, _host_keyed_defaults(), source="test")
+
+    expected_model, expected_effort = _CLAUDE_MATRIX[class_name]
+    assert resolved.route_kind == "class"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort
+
+
+@pytest.mark.parametrize("class_name", ["cheap", "low", "standard", "deep"])
+def test_class_resolution_omp_column(class_name, monkeypatch):
+    """On a pi (omp-family) host each class resolves to the gpt-5.6 (model, effort) pair."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")
+    resolved = resolve_model_route(class_name, _host_keyed_defaults(), source="test")
+
+    expected_model, expected_effort = _OMP_MATRIX[class_name]
+    assert resolved.route_kind == "class"
+    assert resolved.effective_model == expected_model
+    assert resolved.effort == expected_effort
+
+
+def test_class_effort_flows_into_telemetry(monkeypatch):
+    """The resolved effort appears in ModelRouteResolution.telemetry() when non-empty."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    resolved = resolve_model_route("deep", _host_keyed_defaults(), source="test")
+    assert resolved.telemetry()["effort"] == "high"
+
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    cheap = resolve_model_route("cheap", _host_keyed_defaults(), source="test")
+    # Empty effort must be omitted from telemetry (additive-only).
+    assert "effort" not in cheap.telemetry()
+
+
+def test_legacy_scalar_fallback_resolves_without_error(monkeypatch):
+    """A class with only the legacy scalar model (no host-keyed keys) still resolves.
+
+    Failure class: If the resolver required host-keyed keys, an old/partial config
+    that predates the host axis would raise or return the route as an exact model
+    label instead of expanding the class — breaking backward-compat.
+    """
+    monkeypatch.setenv("Z_HARNESS_HOST", "pi")  # omp family, but no host-keyed keys exist
+    values = {
+        "model_classes.legacy_only.model": "claude-opus-4.5",
+        "model_classes.legacy_only.thinking": "budget:high",
+        "model_classes.legacy_only.reasoning": "effort:high",
+    }
+    resolved = resolve_model_route("legacy_only", values, source="test")
+
+    assert resolved.route_kind == "class"
+    assert resolved.effective_model == "claude-opus-4.5"
+    assert resolved.thinking == "budget:high"
+    assert resolved.reasoning == "effort:high"
+    assert resolved.effort == ""  # legacy path carries no host effort
+
+
+def test_host_keyed_wins_over_legacy_scalar(monkeypatch):
+    """When both host-keyed and legacy scalar are present, host-keyed wins."""
+    monkeypatch.setenv("Z_HARNESS_HOST", "claude")
+    resolved = resolve_model_route("deep", _host_keyed_defaults(), source="test")
+    # Legacy scalar is also 'opus', so assert via the omp column to prove routing.
+    monkeypatch.setenv("Z_HARNESS_HOST", "codex")
+    omp_resolved = resolve_model_route("deep", _host_keyed_defaults(), source="test")
+    assert resolved.effective_model == "opus"
+    assert omp_resolved.effective_model == "gpt-5.6-sol-medium"
+
+
+def test_host_family_param_overrides_detection():
+    """An explicit host_family kwarg bypasses host detection entirely."""
+    resolved = resolve_model_route(
+        "standard", _host_keyed_defaults(), source="test", host_family="omp"
+    )
+    assert resolved.effective_model == "gpt-5.6-terra-medium"
 
 
 def test_dispatcher_model_resolved_telemetry_source_and_applied(monkeypatch, tmp_path):
