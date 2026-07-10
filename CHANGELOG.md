@@ -29,6 +29,17 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-09
+
+- _(auto)_ Reconfigure consult/reviewer roles to gpt-5.6 (T007) _(routing)_
+- _(auto)_ Add host axis to model_classes schema (T001) _(routing)_
+- _(auto)_ Host-aware class resolution in dispatcher (T002) _(routing)_
+- _(auto)_ Apply model+effort in /z-execute implementer (T003) _(routing)_
+- _(auto)_ Route fixed subagent fleet through host-aware classes (T004) _(routing)_
+- _(auto)_ Correct check-pi-auth.sh provider requirements (T-REV-003) _(routing)_
+- _(auto)_ Route mr-reviewer + explore fleet dispatches via config (T-REV-001) _(routing)_
+- _(auto)_ Backward-compat gotcha + MCP effort plumbing + host cache (T-REV-002+004) _(routing)_
+
 ## 2026-07-06
 
 - _(auto)_ Refresh stale MCP registration _(codex)_
