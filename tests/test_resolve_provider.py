@@ -25,6 +25,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = str(Path(__file__).parent.parent / "scripts" / "resolve-provider.py")
+REAL_PROVIDERS_JSON = str(Path(__file__).parent.parent / ".z-harness" / "providers.json")
 
 # resolve-provider.py validates that a provider's `command` is on PATH
 # (shutil.which) before returning it. The real provider CLIs (gemini, codex,
@@ -676,6 +677,78 @@ class TestCursorRoleReconfiguration(unittest.TestCase):
         backend, provider = mod._auth_backend_for(entry, argv)
         self.assertEqual(backend, "OMP OAuth / Cursor")
         self.assertEqual(provider, "cursor")
+
+
+class TestRealRepoExternalRoleReconfiguration(unittest.TestCase):
+    """T006: cross-cutting check against the REAL shipped .z-harness/providers.json.
+
+    ``TestCursorRoleReconfiguration`` above exercises the resolution mechanism
+    against a synthetic fixture. That proves the mechanism works but would stay
+    green even if the actual repo config regressed (e.g. a role pointed back at
+    the wrong provider). These tests resolve the real repo file directly so a
+    drift in the shipped config is caught here.
+    """
+
+    def setUp(self):
+        # Isolate from the developer's real user-global providers.json/config.toml
+        # so only the repo's shipped config is in play.
+        self._xdg = tempfile.mkdtemp(prefix="zh-real-repo-roles-xdg-")
+        fd, self._consult_on_config = tempfile.mkstemp(
+            prefix="zh-real-repo-roles-consult-on-", suffix=".toml"
+        )
+        with os.fdopen(fd, "w") as fh:
+            fh.write('schema_version = 2\n\n[runtime]\nconsult = "on"\n')
+
+    def tearDown(self):
+        shutil.rmtree(self._xdg, ignore_errors=True)
+        if os.path.exists(self._consult_on_config):
+            os.remove(self._consult_on_config)
+
+    def _run_real(self, role: str) -> subprocess.CompletedProcess:
+        env = {
+            **os.environ,
+            "XDG_CONFIG_HOME": self._xdg,
+            "Z_HARNESS_REPO_PROVIDERS": REAL_PROVIDERS_JSON,
+            "Z_HARNESS_REPO_CONFIG": self._consult_on_config,
+        }
+        if _STUB_BIN:
+            env["PATH"] = _STUB_BIN + os.pathsep + env.get("PATH", "")
+        return subprocess.run(
+            [sys.executable, SCRIPT, role],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_real_reviewer_resolves_terra_provider(self):
+        result = self._run_real("reviewer")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "omp-cursor-terra")
+        self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-terra-medium")
+
+    def test_real_consultant_secondary_resolves_sol_provider(self):
+        result = self._run_real("consultant_secondary")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "omp-cursor-sol")
+        self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-sol-medium")
+
+    def test_real_consultant_primary_stays_gemini_3_1_pro(self):
+        result = self._run_real("consultant_primary")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["provider"], "omp-antigravity-pro")
+        self.assertEqual(out["args_template"][0], "google-antigravity/gemini-3.1-pro")
+
+    def test_real_two_consultants_are_distinct_providers(self):
+        primary = self._run_real("consultant_primary")
+        secondary = self._run_real("consultant_secondary")
+        self.assertEqual(primary.returncode, 0, msg=primary.stderr)
+        self.assertEqual(secondary.returncode, 0, msg=secondary.stderr)
+        primary_out = json.loads(primary.stdout)
+        secondary_out = json.loads(secondary.stdout)
+        self.assertNotEqual(primary_out["provider"], secondary_out["provider"])
 
 
 if __name__ == "__main__":
