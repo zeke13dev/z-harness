@@ -11,5 +11,7 @@ from __future__ import annotations
 
 from runtime.watchdog.adapters.base import ContextReading, HostAdapter
 from runtime.watchdog.adapters.claude import ClaudeAdapter
+from runtime.watchdog.adapters.codex import CodexAdapter
+from runtime.watchdog.adapters.omp import OmpAdapter
 
-__all__ = ["HostAdapter", "ContextReading", "ClaudeAdapter"]
+__all__ = ["HostAdapter", "ContextReading", "ClaudeAdapter", "CodexAdapter", "OmpAdapter"]

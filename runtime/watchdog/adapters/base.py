@@ -63,12 +63,22 @@ class ContextReading:
         pct_used: ``used_tokens / window_tokens * 100``, or ``None`` exactly
             when ``used_tokens`` is ``None`` (the ``context_unknown``
             sentinel for this cycle).
+        degraded: ``True`` when ``used_tokens``/``pct_used`` come from a
+            low-confidence fallback estimator rather than a real usage event
+            (e.g. codex's/omp's byte-length heuristic when no usage-bearing
+            event exists yet — see ``HOST_MECHANICS.md``). ``False`` for a
+            confident reading and for the ``context_unknown`` (``None``)
+            case alike. Added as the bounded interface widening this
+            module's original docstring anticipated for the codex/omp
+            adapters (T008/T009); ``claude.py`` never sets it, so it
+            defaults to ``False`` and is fully backward compatible.
     """
 
     new_offset: int
     used_tokens: int | None
     window_tokens: int
     pct_used: float | None
+    degraded: bool = False
 
 
 class HostAdapter(abc.ABC):
