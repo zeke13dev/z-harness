@@ -3,7 +3,8 @@
   "roles": {
     "consultant_primary": "omp-antigravity-pro",
     "consultant_secondary": "omp-openai-sol",
-    "reviewer": "omp-openai-terra"
+    "reviewer": "omp-openai-terra",
+    "watchdog_judge": "omp-openai-luna"
   },
   "providers": {
     "gemini": {
@@ -270,6 +271,23 @@
       "stdin": true,
       "timeout_s": 300,
       "model_label": "GPT-5.6 Sol (omp/openai-codex OAuth)",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "omp-openai-luna": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": [
+        "openai-codex/gpt-5.6-luna",
+        "--fallback",
+        "codex",
+        "exec",
+        "-"
+      ],
+      "stdin": true,
+      "timeout_s": 60,
+      "model_label": "GPT-5.6 Luna (omp/openai-codex OAuth)",
       "model_arg_template": null,
       "model_env_var": null,
       "default_model": null
