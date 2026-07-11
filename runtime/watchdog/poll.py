@@ -73,13 +73,23 @@ Design decisions:
   ``awaiting_children`` until the pane is ready, no cycle double-sends. The
   child-terminal marking inside ``reconcile_children`` still runs every cycle
   (it is idempotent — already-terminal children are skipped).
-- Persistence: ``poll_session`` writes the full sessions mapping to
-  ``registry_path`` on the returning arm (``registry.write_registry`` — schema
-  validation + atomic replace). ``handoff.maybe_trigger_handoff`` additionally
-  persists each choreography transition itself (crash-safety, T010); the final
-  write reconciles the in-memory map with disk. Concurrency assumption: a single
-  daemon process owns the registry (``registry.acquire_single_instance_lock``,
-  T003/T015) — poll cycles are not concurrent with each other.
+- Persistence: ``poll_session`` persists on the returning arm through
+  ``registry.locked_registry_update`` (``_persist_changed``), which re-reads the
+  registry fresh under the sidecar lock and merges ONLY the records this cycle
+  changed (the polled session's record + any children ``reconcile_children``
+  marked) onto it — never a stale whole-file overwrite (T-REV-001). A single
+  daemon process owns the poll loop (``registry.acquire_single_instance_lock``,
+  T003/T015) so poll cycles are not concurrent with EACH OTHER, but a fanout CLI
+  invocation (``fanout.run_fanout``) can persist new child records to the same
+  registry concurrently with a poll pass; the locked-fresh-merge is what keeps a
+  poll's transition from clobbering those freshly-added children (and vice
+  versa). Precondition of the minimal merge: the ``sessions`` mapping handed to
+  ``poll_session`` reflects the on-disk registry the daemon started this pass
+  from (the single-writer invariant) — records the daemon holds but this cycle
+  did not touch are already on disk, so the fresh re-read carries them.
+  ``handoff.maybe_trigger_handoff`` additionally persists each choreography
+  transition itself (crash-safety, T010) via its own locked write; the final
+  merge reconciles the in-memory map with disk.
 
 Non-scope (the daemon loop owns these — deliberately absent here): capturing the
 pane text, resolving the ``watchdog.*`` knobs from config, the single-instance
@@ -89,6 +99,7 @@ poll passes.
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
@@ -195,6 +206,38 @@ def _noop_send_alerts(payload: Mapping[str, object]) -> int:
     return 0
 
 
+# ── serialized persistence ──────────────────────────────────────────────────
+
+def _persist_changed(
+    registry_path: Path | str,
+    incoming: dict[str, dict],
+    sessions: dict[str, dict],
+) -> dict[str, dict]:
+    """Persist only the records this cycle changed, merged onto a fresh read.
+
+    Diffs ``sessions`` (this cycle's working mapping) against ``incoming`` (the
+    snapshot the cycle started from) to isolate exactly the records THIS cycle
+    mutated — the polled session's record and any children
+    ``reconcile_children`` marked terminal — and routes them through
+    ``registry.locked_registry_update`` so they merge onto a fresh locked
+    re-read rather than a stale whole-file snapshot (T-REV-001). A record a
+    concurrent ``fanout.run_fanout`` persisted since this cycle read its
+    ``incoming`` snapshot is absent from the changed set, so the fresh re-read
+    carries it through untouched — the poll never clobbers freshly-added fanout
+    children.
+
+    Returns the merged mapping just written, so the daemon poll pass threads
+    fresh registry state (including any concurrent additions) into the next
+    session's cycle.
+    """
+    changed = {sid: rec for sid, rec in sessions.items() if incoming.get(sid) != rec}
+
+    def _apply(fresh: dict[str, dict]) -> None:
+        fresh.update(changed)
+
+    return registry.locked_registry_update(registry_path, _apply)
+
+
 # ── entry point ─────────────────────────────────────────────────────────────
 
 def poll_session(
@@ -280,6 +323,11 @@ def poll_session(
         fields are populated for the arm that acted and ``None`` otherwise.
     """
     sessions = dict(sessions)
+    # Deep snapshot of the state this cycle starts from — the diff base for
+    # ``_persist_changed`` so only records THIS cycle mutates are merged onto a
+    # fresh locked re-read at persist time (T-REV-001). Deep so later in-place
+    # mutations to the working records never retroactively alter the base.
+    incoming = copy.deepcopy(sessions)
     record = dict(record)
     session_id = record["session_id"]
     now_dt = _now_dt(now)
@@ -320,7 +368,7 @@ def poll_session(
     # ── (e) fanout-origin lifecycle ────────────────────────────────────────
     if record.get("children"):
         return _poll_fanout_origin(
-            record, sessions, result,
+            record, sessions, result, incoming,
             adapter=adapter, pane_text=pane_text, registry_path=registry_path,
             has_session=has_session, reconcile_alert_fn=reconcile_alert_fn,
             submit_fn=submit_fn, now_dt=now_dt, now_iso=now_iso,
@@ -352,7 +400,7 @@ def poll_session(
             # then its clear-equivalent, each a separate race-safe submit.
             submit_fn(record["tmux_target"], adapter.handoff_command())
             submit_fn(record["tmux_target"], adapter.clear_command())
-            registry.write_registry(registry_path, sessions)
+            sessions = _persist_changed(registry_path, incoming, sessions)
             result.update(
                 action="handoff", record=record, sessions=sessions,
                 handoff_result=handoff_result,
@@ -364,7 +412,7 @@ def poll_session(
     # ── (d) needs_input ────────────────────────────────────────────────────
     if adapter.needs_input(pane_text):
         return _poll_needs_input(
-            record, sessions, result,
+            record, sessions, result, incoming,
             adapter=adapter, pane_text=pane_text, registry_path=registry_path,
             digest_dir=resolved_digest_dir, alert_fn=needs_input_alert_fn,
             now_iso=now_iso,
@@ -387,7 +435,7 @@ def poll_session(
     # exactly-once across polls.
     record = stuck_result["record"]
     sessions[session_id] = record
-    registry.write_registry(registry_path, sessions)
+    sessions = _persist_changed(registry_path, incoming, sessions)
     result.update(
         action=stuck_result["action"], record=record, sessions=sessions,
         stuck_result=stuck_result,
@@ -399,6 +447,7 @@ def _poll_fanout_origin(
     record: dict,
     sessions: dict[str, dict],
     result: dict,
+    incoming: dict[str, dict],
     *,
     adapter: HostAdapter,
     pane_text: str,
@@ -425,7 +474,7 @@ def _poll_fanout_origin(
     if record["state"] in _ORIGIN_ARM_STATES:
         record = registry.transition(record, "awaiting_children", now=now_iso)
         sessions[session_id] = record
-        registry.write_registry(registry_path, sessions)
+        sessions = _persist_changed(registry_path, incoming, sessions)
         result.update(action="await_children", record=record, sessions=sessions)
         return result
 
@@ -449,7 +498,7 @@ def _poll_fanout_origin(
             sessions[session_id] = record
         # else: payload not ready or pane not ready — stay awaiting_children and
         # retry next cycle; nothing was sent, so no double-alert on retry.
-        registry.write_registry(registry_path, sessions)
+        sessions = _persist_changed(registry_path, incoming, sessions)
         result.update(
             action="reconcile", record=record, sessions=sessions,
             reconcile_payload=payload,
@@ -457,7 +506,7 @@ def _poll_fanout_origin(
         return result
 
     # A terminal / handoff-choreography origin: nothing to reconcile this cycle.
-    registry.write_registry(registry_path, sessions)
+    sessions = _persist_changed(registry_path, incoming, sessions)
     result.update(record=record, sessions=sessions)
     return result
 
@@ -466,6 +515,7 @@ def _poll_needs_input(
     record: dict,
     sessions: dict[str, dict],
     result: dict,
+    incoming: dict[str, dict],
     *,
     adapter: HostAdapter,
     pane_text: str,
@@ -501,7 +551,7 @@ def _poll_needs_input(
         record = registry.transition(record, "needs_input", now=now_iso)
         sessions[session_id] = record
 
-    registry.write_registry(registry_path, sessions)
+    sessions = _persist_changed(registry_path, incoming, sessions)
     result.update(
         action="needs_input", record=record, sessions=sessions,
         needs_input_result=ni_result,

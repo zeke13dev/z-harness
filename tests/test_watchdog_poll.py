@@ -32,6 +32,7 @@ from pathlib import Path
 
 from runtime.watchdog import poll, registry
 from runtime.watchdog.adapters.base import ContextReading, HostAdapter
+from runtime.watchdog.adapters.claude import ClaudeAdapter
 
 _NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -369,6 +370,9 @@ def test_fanout_origin_armed_into_awaiting_children(tmp_path):
     child = _child(tmp_path, "running", "zw-child-1")
     origin = _record(tmp_path, children=[child["session_id"]])
     sessions = {origin["session_id"]: origin, child["session_id"]: child}
+    # Seed disk to match the daemon's in-memory pass snapshot (the single-writer
+    # invariant poll's locked-fresh-merge assumes, T-REV-001).
+    registry.write_registry(tmp_path / "sessions.json", sessions)
     adapter = StubAdapter()
 
     res = poll.poll_session(
@@ -378,6 +382,8 @@ def test_fanout_origin_armed_into_awaiting_children(tmp_path):
     )
     assert res["action"] == "await_children"
     assert res["record"]["state"] == "awaiting_children"
+    # The untouched live child is preserved in the persisted registry.
+    assert _read_registry(tmp_path)[child["session_id"]]["state"] == "running"
 
 
 def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
@@ -395,6 +401,8 @@ def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
         done_child["session_id"]: done_child,
         live_child["session_id"]: live_child,
     }
+    # Seed disk to match the in-memory pass snapshot (single-writer invariant).
+    registry.write_registry(tmp_path / "sessions.json", sessions)
     adapter = StubAdapter()
     submit = RecordingSubmit()
     recon_alert = RecordingAlert(ret=1)
@@ -411,9 +419,10 @@ def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
 
     assert res["action"] == "reconcile"
     assert res["reconcile_payload"] is not None
-    # The dead child was marked failed.
+    # The dead child was marked failed; the untouched terminal child survives.
     persisted = _read_registry(tmp_path)
     assert persisted[live_child["session_id"]]["state"] == "failed"
+    assert persisted[done_child["session_id"]]["state"] == "done"
     # Exactly one text nudge listing both children's statuses.
     assert len(submit.calls) == 1
     summary = submit.calls[0][1]
@@ -434,6 +443,8 @@ def test_fanout_reconciliation_retries_when_pane_not_ready(tmp_path):
         tmp_path, state="awaiting_children", children=[live_child["session_id"]],
     )
     sessions = {origin["session_id"]: origin, live_child["session_id"]: live_child}
+    # Seed disk to match the in-memory pass snapshot (single-writer invariant).
+    registry.write_registry(tmp_path / "sessions.json", sessions)
     submit = RecordingSubmit()
     recon_alert = RecordingAlert(ret=1)
 
@@ -481,3 +492,92 @@ def test_context_read_persists_offset_and_advances_last_seen(tmp_path):
     )
     assert res["record"]["transcript_offset"] == 250
     assert res["record"]["last_seen"] == _NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ── (T-REV-001) poll persist does not clobber a concurrent fanout child ──────
+
+def test_poll_session_does_not_clobber_concurrent_fanout_child(tmp_path):
+    """A poll cycle persisting its own transition must not drop a fanout child
+    that a concurrent ``fanout.run_fanout`` added to ``sessions.json`` after the
+    daemon read its pass-start snapshot (T-REV-001, the "no session record is
+    lost" acceptance).
+
+    Modeled deterministically: the daemon reads its pass snapshot (``{watched}``)
+    from disk, then a concurrent fanout persists an unrelated child record
+    ``C`` to disk. When ``poll_session`` then persists its cycle for
+    ``watched``, its locked-fresh-merge re-reads the registry (now holding
+    ``C``) and applies ONLY the record it changed, so ``C`` survives rather than
+    being clobbered by the stale ``{watched}`` snapshot the poll started from.
+    """
+    watched = _record(tmp_path, last_seen=_NOW.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    # The daemon's pass-start registry + the snapshot it hands to poll_session.
+    registry.write_registry(tmp_path / "sessions.json", {watched["session_id"]: watched})
+    pass_snapshot = _read_registry(tmp_path)
+
+    # A concurrent fanout lands an unrelated child on disk AFTER the snapshot.
+    child = registry.new_session_record(
+        "root/cluster", str(tmp_path), "claude", "zw-child-99",
+        "", session_id="ws-fanout-child-99", now="2020-01-01T00:00:00Z",
+    )
+    on_disk = _read_registry(tmp_path)
+    on_disk[child["session_id"]] = child
+    registry.write_registry(tmp_path / "sessions.json", on_disk)
+
+    # Pane not injection_ready -> handoff arm skipped; not needs_input; the
+    # recent last_seen keeps stuck from nudging -> a plain persisting skip.
+    adapter = StubAdapter(injection_ready=False)
+    res = poll.poll_session(
+        watched, pass_snapshot, adapter=adapter, pane_text="working...",
+        threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
+        now=_NOW, submit_fn=RecordingSubmit(), stuck_alert_fn=RecordingAlert(),
+        **_paths(tmp_path),
+    )
+
+    persisted = _read_registry(tmp_path)
+    # The concurrently-added fanout child survives the poll's persist.
+    assert child["session_id"] in persisted
+    registry.validate_record(persisted[child["session_id"]])
+    # The polled session's own cycle still persisted, and the merged mapping the
+    # poll returns carries the concurrent child forward for the next cycle.
+    assert watched["session_id"] in persisted
+    assert child["session_id"] in res["sessions"]
+
+
+def test_fanout_child_first_poll_empty_transcript_path_degrades(tmp_path):
+    """A freshly spawned fanout child registers with ``transcript_path=""``
+    (T013's LEDGER decision — the host CLI assigns the transcript file only
+    after booting). The real ``ClaudeAdapter.read_context`` catches the
+    resulting ``FileNotFoundError`` from ``open("", "rb")`` and returns the
+    ``context_unknown`` degraded reading rather than raising; the poll cycle
+    must complete without propagating an exception, must not advance
+    ``transcript_offset`` past its starting value, and must leave
+    ``last_seen`` untouched (no new transcript bytes were consumed, so the
+    stuck-detection idle clock is not falsely reset)."""
+    original_last_seen = "2020-01-01T00:00:00Z"
+    rec = _record(tmp_path, last_seen=original_last_seen, transcript_path="")
+    sessions = {rec["session_id"]: rec}
+    adapter = ClaudeAdapter()  # real adapter — exercises its own FileNotFoundError catch
+    submit = RecordingSubmit()
+    alert = RecordingAlert()
+
+    res = poll.poll_session(
+        rec, sessions, adapter=adapter, pane_text="working...",
+        threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
+        now=_NOW, submit_fn=submit, stuck_alert_fn=alert,
+        **_paths(tmp_path),
+    )
+
+    # Degraded context-read path taken: no confident usage reading this cycle.
+    assert res["reading"].used_tokens is None
+    assert res["reading"].pct_used is None
+    assert res["reading"].new_offset == 0
+    # No new bytes consumed -> transcript_offset and last_seen are unchanged
+    # (the idle clock for stuck detection is not falsely advanced).
+    assert res["record"]["transcript_offset"] == 0
+    assert res["record"]["last_seen"] == original_last_seen
+    # The cycle completed (no exception propagated) and fell through to the
+    # stuck arm; the pane is not injection_ready, so it skips rather than
+    # nudging or alerting — nothing was submitted.
+    assert res["action"] == "skip"
+    assert submit.calls == []
+    assert alert.calls == []

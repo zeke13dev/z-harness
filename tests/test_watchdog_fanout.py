@@ -11,7 +11,15 @@ Coverage (T013 acceptance, criterion #6):
   ``sessions.json`` via ``run_fanout``;
 - a malformed manifest (no ``## Clusters`` heading) raises
   ``ManifestParseError``;
-- ``cli.build_parser`` wires the ``fanout <root-slug>`` subcommand.
+- ``cli.build_parser`` wires the ``fanout <root-slug>`` subcommand;
+- ``run_fanout`` spawns children while holding NO registry lock, so a
+  concurrent daemon persist / SIGTERM flush is never blocked by the tmux calls
+  (T-REV-001, MAJOR 2 — see
+  ``test_run_fanout_does_not_hold_registry_lock_during_spawn``), and its final
+  short locked merge preserves a fanout child against a concurrent daemon poll
+  pass that persists a stale whole-file snapshot after the child was added
+  (T-REV-001, MAJOR 1, the "no session record is lost" acceptance — see
+  ``test_run_fanout_child_survives_concurrent_stale_snapshot_writer``).
 
 Tests are hermetic (STYLE.md:T-004): all filesystem effects go under pytest's
 ``tmp_path`` fixture; no real tmux session is ever created (``new_session`` is
@@ -20,6 +28,9 @@ always a fake recorder, never the real ``tmux_actuator.new_session``).
 
 from __future__ import annotations
 
+import fcntl
+import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -220,6 +231,120 @@ def test_run_fanout_appends_to_existing_children(tmp_path: Path) -> None:
     }
     assert len(all_ids) == 2  # both children are distinct records
     assert set(sessions_2[origin_id]["children"]) == all_ids
+
+
+# ── run_fanout: concurrency discipline (T-REV-001) ───────────────────────────
+
+def test_run_fanout_does_not_hold_registry_lock_during_spawn(tmp_path: Path) -> None:
+    """The slow tmux ``new_session`` spawning runs with NO registry lock held
+    (T-REV-001, reviewer MAJOR 2): a 15s-timeout tmux call per cluster must
+    never block the daemon's registry persistence or its SIGTERM flush.
+
+    Proof: from inside the injected ``new_session`` (i.e. while ``run_fanout``
+    is mid-spawn), a NON-BLOCKING acquire of the registry's sidecar lock must
+    succeed. If ``run_fanout`` still wrapped spawning in the lock (the v1
+    behavior), this ``LOCK_NB`` acquire would raise ``BlockingIOError``.
+    """
+    rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+    origin = _origin_record()
+    registry.write_registry(registry_path, {origin["session_id"]: origin})
+
+    lock_free_during_spawn: list[bool] = []
+
+    def _new_session_probes_lock(
+        name: str, command: str | None = None, *, timeout: float
+    ) -> None:
+        lock_file = Path(str(registry_path) + ".lock")
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must NOT block
+            lock_free_during_spawn.append(True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            lock_free_during_spawn.append(False)
+        finally:
+            os.close(fd)
+
+    fanout.run_fanout(
+        plan_dir, origin, registry_path, new_session=_new_session_probes_lock
+    )
+
+    assert lock_free_during_spawn == [True], (
+        "run_fanout held the registry lock during spawn — the tmux calls can "
+        "block a concurrent daemon persist / SIGTERM flush"
+    )
+
+
+def test_run_fanout_child_survives_concurrent_stale_snapshot_writer(
+    tmp_path: Path,
+) -> None:
+    """A concurrent daemon poll pass persisting a stale whole-file snapshot
+    cannot clobber a fanout child (T-REV-001, reviewer MAJOR 1 — the core
+    acceptance: "no session record is lost").
+
+    Real interleaving modeled: the poll pass reads its sessions snapshot
+    UNLOCKED and early (before fanout runs), mutates the record it is polling,
+    then persists AFTER fanout has already added its child. Because the poll's
+    persist goes through ``registry.locked_registry_update`` (re-read fresh,
+    merge only the records it changed), the fanout child that landed after the
+    poll's stale read survives, and so does the poll's own transition — nothing
+    is lost. A naive whole-file ``write_registry(stale_snapshot)`` here would
+    drop the child; this test would fail in that case.
+    """
+    rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+
+    origin = _origin_record()
+    # A separate watched session the poll pass is transitioning this cycle.
+    watched = registry.new_session_record(
+        slug="watched-plan",
+        plan_dir="/plans/watched-plan",
+        host="claude",
+        tmux_target="zw-watched-00000001",
+        transcript_path="/transcripts/watched.jsonl",
+        session_id="ws-watched-0000",
+    )
+    registry.write_registry(
+        registry_path,
+        {origin["session_id"]: origin, watched["session_id"]: watched},
+    )
+
+    # 1. The poll pass reads its snapshot UNLOCKED and early.
+    poll_snapshot = registry.read_registry(registry_path)
+
+    # 2. Fanout runs concurrently and adds its child + origin linkage.
+    _sessions, child_records = fanout.run_fanout(
+        plan_dir, origin, registry_path, new_session=_RecordingNewSession()
+    )
+    child_id = child_records[0]["session_id"]
+
+    # 3. The poll pass now persists its own transition (watched -> needs_input)
+    #    using the SAME locked-fresh-merge discipline poll.py uses: merge ONLY
+    #    the record it changed onto a fresh locked re-read.
+    changed_watched = registry.transition(
+        poll_snapshot[watched["session_id"]], "needs_input",
+        now="2026-07-10T20:05:00Z",
+    )
+
+    def _apply(fresh: dict) -> None:
+        fresh[watched["session_id"]] = changed_watched
+
+    registry.locked_registry_update(registry_path, _apply)
+
+    persisted = registry.read_registry(registry_path)
+    # The fanout child survives the poll's post-fanout persist (no record lost).
+    assert child_id in persisted
+    registry.validate_record(persisted[child_id])
+    # The origin's freshly-added children linkage survives too.
+    assert child_id in persisted[origin["session_id"]]["children"]
+    # And the poll's own transition landed.
+    assert persisted[watched["session_id"]]["state"] == "needs_input"
 
 
 def test_default_command_uses_host_cli_and_cluster_dir(tmp_path: Path) -> None:

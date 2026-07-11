@@ -38,12 +38,17 @@ Design decisions:
   zero-arg ``get_sessions`` callable rather than a snapshot dict, so the
   handler always flushes whatever the caller's in-memory mapping holds *at
   signal time* — not a stale copy captured at installation time.
-- Signal-safety: the registered handler does the minimum possible work (one
-  flush call, then exit) and performs no other I/O or locking. CPython signal
+- Signal-safety: the registered handler does the minimum possible work (take
+  the registry sidecar lock, one flush call, then exit). CPython signal
   handlers execute between bytecode instructions in the main thread (not in a
-  true async-signal context), so calling ``registry.write_registry`` here is
-  safe in practice, but keeping the handler minimal bounds the work done
-  during signal delivery regardless.
+  true async-signal context), so calling ``registry.write_registry`` under
+  ``registry.hold_registry_lock`` here is safe in practice, and keeping the
+  handler minimal bounds the work done during signal delivery. The lock ensures
+  the flush never tears a concurrent writer's registry update (T-REV-001); the
+  critical section is a single validated ``os.replace`` write, so its window is
+  tiny. (The daemon poll loop never holds this lock across poll arms — its
+  ``locked_registry_update`` cycles acquire and release inside a single call —
+  so a SIGTERM arriving between poll passes finds the lock free.)
 - No swallowed flush failure (STYLE.md:EH-004, no-fallback stance):
   ``write_registry`` is hard-fail (T003). The handler does not catch its
   exceptions — a broken registry path must surface loudly rather than let the
@@ -86,11 +91,15 @@ def install_sigterm_handler(
     """Install a ``SIGTERM`` handler that flushes ``get_sessions()`` before exit.
 
     On receipt of ``SIGTERM``, the handler calls ``get_sessions()`` to read
-    whatever the daemon's current in-memory sessions mapping is, writes it via
-    ``registry.write_registry`` (validates + atomically flushes, T003), and
-    then exits. Never exits without flushing: if the flush raises, the
-    exception propagates uncaught rather than being swallowed to allow an
-    exit anyway (STYLE.md:EH-004).
+    whatever the daemon's current in-memory sessions mapping is and flushes it
+    as the authoritative shutdown snapshot via ``registry.write_registry``
+    (validates + atomically flushes, T003) — held under
+    ``registry.hold_registry_lock`` (with ``lock=False`` since the handler
+    already holds the sidecar lock) so the flush never tears a concurrent
+    registry writer's update mid-replace (T-REV-001) — and then exits. Never
+    exits without flushing: if the flush raises, the exception propagates
+    uncaught rather than being swallowed to allow an exit anyway
+    (STYLE.md:EH-004).
 
     Args:
         get_sessions: Zero-arg callable returning the CURRENT session-id ->
@@ -104,7 +113,14 @@ def install_sigterm_handler(
     """
 
     def _handler(signum: int, frame: object) -> None:
-        registry.write_registry(registry_path, get_sessions())
+        # Flush the live in-memory mapping as the authoritative shutdown
+        # snapshot, but hold the registry sidecar lock across the write
+        # (``lock=False`` since we already hold it) so the flush never tears a
+        # concurrent writer's registry update mid-``os.replace`` (T-REV-001).
+        # This is deliberately a snapshot write, not a merge: at exit the
+        # daemon's own mapping IS the authority for the sessions it owns.
+        with registry.hold_registry_lock(registry_path):
+            registry.write_registry(registry_path, get_sessions(), lock=False)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _handler)
@@ -176,6 +192,15 @@ def run_startup_reconcile(
     auto-adopting it back into a lifecycle state), persists the result, and
     returns the updated sessions mapping.
 
+    Concurrency (T-REV-001): the reconcile pass — whose per-record
+    ``has_session`` tmux checks each carry a subprocess timeout — runs against
+    an UNLOCKED snapshot read, holding no registry sidecar lock, so it never
+    blocks a concurrent ``fanout.run_fanout`` persist or the SIGTERM flush.
+    Only the resulting orphaned-record marks are then merged onto a fresh
+    locked re-read via ``registry.locked_registry_update``, so a child record a
+    fanout persisted while the tmux checks were running survives rather than
+    being clobbered by the pre-check snapshot.
+
     Args:
         registry_path: Path to ``sessions.json``.
         lock_path: Path to the daemon single-instance pidfile+lock.
@@ -194,16 +219,25 @@ def run_startup_reconcile(
             when a live daemon already holds the lock.
     """
     with run_lifecycle(lock_path):
-        sessions = registry.read_registry(registry_path)
-        updated = reconcile.startup_reconcile(
-            sessions,
+        # Run the tmux-check reconcile pass against an unlocked snapshot so the
+        # per-record has_session subprocess calls never hold the registry
+        # sidecar lock (T-REV-001), then merge only the records this pass
+        # actually changed (the newly-orphaned ones) onto a fresh locked
+        # re-read.
+        pre = registry.read_registry(registry_path)
+        reconciled = reconcile.startup_reconcile(
+            pre,
             has_session=has_session,
             timeout=timeout,
             alert_fn=alert_fn,
             now=now,
         )
-        registry.write_registry(registry_path, updated)
-        return updated
+        changed = {sid: rec for sid, rec in reconciled.items() if pre.get(sid) != rec}
+
+        def _apply(fresh: dict[str, dict]) -> None:
+            fresh.update(changed)
+
+        return registry.locked_registry_update(registry_path, _apply)
 
 
 def run_poll_pass(

@@ -33,6 +33,19 @@ Design decisions:
   ``tmux_actuator.new_session``) with an explicit ``timeout`` — no new raw
   subprocess call is introduced in this module.
 
+Concurrency (STYLE.md:P-006, T-REV-001): ``run_fanout`` spawns every child
+(the slow tmux ``new_session`` calls) FIRST, holding no registry lock — so a
+15s-timeout tmux call per cluster can never block the daemon's registry
+persistence or its SIGTERM flush. Only the final registry merge is serialized:
+it goes through ``registry.locked_registry_update``, whose short critical
+section re-reads the registry FRESH under the sidecar lock and applies just
+this fanout's origin-children linkage + new child records onto it. Because the
+merge base is the locked re-read (not the pre-spawn snapshot), a concurrent
+daemon poll pass persisting its own transition of the same registry cannot
+clobber the freshly-added children — the two writers serialize on the sidecar
+lock and each merges onto the other's fresh state. ``spawn_children`` itself
+takes no lock and persists nothing.
+
 Non-scope (later levels own these): resolving the origin record for a given
 root-slug (CLI concern, see ``cli.py``), reconciling child terminal states
 (T014), and populating a spawned child's real ``transcript_path``/``host``
@@ -270,11 +283,21 @@ def run_fanout(
 ) -> tuple[dict[str, dict], list[dict]]:
     """Spawn fanout children and persist the updated registry. Hard-fail.
 
-    Reads the existing registry at ``registry_path`` (``registry.read_registry``,
-    best-effort — an absent registry reads as ``{}``), calls ``spawn_children``,
-    merges the updated origin record and every new child record into the
-    sessions mapping, then persists via ``registry.write_registry`` (schema
-    validation + atomic write).
+    Spawns every child via ``spawn_children`` (the tmux ``new_session`` calls)
+    while holding NO registry lock, then persists the origin-children linkage
+    and the new child records through ``registry.locked_registry_update`` — a
+    short critical section that re-reads the registry fresh under the sidecar
+    lock and merges only this fanout's records onto it.
+
+    Concurrency (T-REV-001): the slow tmux spawning is deliberately OUTSIDE the
+    lock so it never blocks the daemon's registry persistence / SIGTERM flush;
+    the only serialized work is the final merge, whose fresh locked re-read is
+    the authoritative merge base. A concurrent daemon poll pass persisting its
+    own transition of the same registry therefore cannot clobber the
+    freshly-added children (and this merge cannot clobber the poll's
+    transition: the origin's own ``children`` list is appended onto whatever
+    origin record the fresh re-read holds, not overwritten with the pre-spawn
+    copy). See ``registry.locked_registry_update``'s docstring.
 
     Args:
         plan_dir: The completed ``/z-plan-split`` root-slug's directory.
@@ -293,7 +316,8 @@ def run_fanout(
         ValueError: if a resulting record fails ``registry.validate_record``.
         OSError: on a registry write failure.
     """
-    sessions = registry.read_registry(registry_path)
+    # Spawn every child FIRST, holding no registry lock — the tmux calls must
+    # never block a concurrent daemon persist / SIGTERM flush (T-REV-001).
     updated_origin, child_records = spawn_children(
         plan_dir,
         origin_record,
@@ -303,8 +327,27 @@ def run_fanout(
         timeout=timeout,
         now=now,
     )
-    sessions[str(updated_origin["session_id"])] = updated_origin
-    for child in child_records:
-        sessions[str(child["session_id"])] = child
-    registry.write_registry(registry_path, sessions)
+    origin_key = str(updated_origin["session_id"])
+    new_child_ids = [str(child["session_id"]) for child in child_records]
+
+    def _merge(fresh: dict[str, dict]) -> None:
+        # Append the new children onto whatever origin record the fresh locked
+        # re-read holds (preserving a concurrent poll's transition of the
+        # origin) rather than overwriting it with the pre-spawn copy; fall back
+        # to the spawned ``updated_origin`` only when the origin is not yet
+        # persisted (first fanout).
+        if origin_key in fresh:
+            base = dict(fresh[origin_key])
+            children = list(base.get("children", []))
+            for cid in new_child_ids:
+                if cid not in children:
+                    children.append(cid)
+            base["children"] = children
+            fresh[origin_key] = base
+        else:
+            fresh[origin_key] = updated_origin
+        for child in child_records:
+            fresh[str(child["session_id"])] = child
+
+    sessions = registry.locked_registry_update(registry_path, _merge)
     return sessions, child_records

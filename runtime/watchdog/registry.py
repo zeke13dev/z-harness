@@ -35,6 +35,27 @@ Concurrency (STYLE.md:P-006): ``atomic_write_json`` serializes writers on a
 sidecar ``<path>.lock`` (``flock`` LOCK_EX) and publishes via ``os.replace`` so a
 concurrent reader always observes either the old or the new file, never a torn
 one. Readers (``read_json`` / ``read_registry``) take no lock and are best-effort.
+A caller mutating the registry (add/transition some records, write it back) must
+NOT read a whole-file snapshot, mutate that snapshot, and write it back while a
+concurrent writer does the same — the two snapshots diverge and whichever writes
+last silently clobbers the other's records (a lost update). ``fanout.run_fanout``
+(adds fanout children) and the daemon's poll pass (transitions the polled
+session) are exactly this pair. Route every such mutation through
+``locked_registry_update(path, mutate_fn)``: it takes the sidecar lock, re-reads
+the registry FRESH under that lock, applies ONLY the caller's own record changes
+(``mutate_fn`` mutates the fresh mapping in place — the polled session's record,
+the new children, the marked-orphaned records — never a stale whole-file
+overwrite), writes under the held lock, and releases. Because the merge base is
+the locked re-read, a record a concurrent writer persisted after this caller's
+own in-memory snapshot was taken survives. ``locked_registry_update`` is built on
+``hold_registry_lock`` (holds the SAME ``<path>.lock`` sidecar
+``atomic_write_json`` locks on, so any writer using the default ``lock=True``
+blocks until the cycle releases it) + ``write_registry(..., lock=False)`` (the
+holder must pass ``lock=False`` to avoid self-deadlocking on its own already-held
+lock). A shutdown flush that legitimately writes an authoritative snapshot (the
+SIGTERM handler) still holds ``hold_registry_lock`` around its
+``write_registry(..., lock=False)`` so it never tears a concurrent writer's
+update, but does not merge — its in-memory mapping IS the authority at exit.
 
 Config (STYLE.md:P-004): ``get_config_int`` shells out to ``scripts/config.py``
 rather than reimplementing the config precedence chain; nothing threshold-shaped
@@ -51,8 +72,10 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Iterator
 
 # ── schema constants (frozen public surface) ─────────────────────────────────
 
@@ -421,7 +444,7 @@ def read_json(path: Path | str, default: object = None) -> object:
         return default
 
 
-def write_registry(path: Path | str, sessions: dict[str, dict]) -> None:
+def write_registry(path: Path | str, sessions: dict[str, dict], *, lock: bool = True) -> None:
     """Validate every record then atomically write the registry. Hard-fail.
 
     Wraps ``sessions`` (a mapping of ``session_id`` -> record) under a top-level
@@ -432,6 +455,9 @@ def write_registry(path: Path | str, sessions: dict[str, dict]) -> None:
     Args:
         path: Destination ``sessions.json``.
         sessions: Mapping of session id -> session record.
+        lock: Forwarded to ``atomic_write_json``; set False only when the
+            caller already holds the sidecar lock (``hold_registry_lock``)
+            across a wider read-modify-write cycle, to avoid self-deadlocking.
 
     Raises:
         ValueError: if any record fails ``validate_record``.
@@ -439,7 +465,100 @@ def write_registry(path: Path | str, sessions: dict[str, dict]) -> None:
     """
     for record in sessions.values():
         validate_record(record)
-    atomic_write_json(path, {"schema_version": SCHEMA_VERSION, "sessions": sessions})
+    atomic_write_json(
+        path, {"schema_version": SCHEMA_VERSION, "sessions": sessions}, lock=lock
+    )
+
+
+@contextmanager
+def hold_registry_lock(path: Path | str) -> Iterator[None]:
+    """Hold the registry's sidecar lock across a read-modify-write cycle. Hard-fail.
+
+    Serializes a caller's read -> mutate -> write sequence on ``path`` (e.g.
+    ``fanout.run_fanout``) against any concurrent writer that goes through
+    ``atomic_write_json``'s default ``lock=True`` (e.g. the daemon's poll loop
+    persisting its own in-memory mutation via ``write_registry``) — see the
+    module docstring's Concurrency section. Without this, a competing write
+    landing between the caller's read and write is a lost update: the
+    caller's write, sourced from an in-memory snapshot taken before the
+    competing write landed, silently overwrites it (or vice versa).
+
+    Reuses the SAME ``<path>.lock`` sidecar file ``atomic_write_json`` locks
+    on (not a new lock primitive) — a caller inside this context must pass
+    ``lock=False`` to ``write_registry`` / ``atomic_write_json``, since
+    ``flock`` on a *different* file descriptor to the same file (even from
+    the same process) blocks rather than re-entering.
+
+    Args:
+        path: The registry path (e.g. ``sessions.json``) whose ``<path>.lock``
+            sidecar is acquired; ``path`` itself is never opened here.
+
+    Yields:
+        None. The lock is held for the duration of the ``with`` block.
+
+    Raises:
+        OSError: on an unexpected filesystem failure opening the lock file.
+    """
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        # Best-effort unlock/close (STYLE.md:EH-005): closing the fd alone
+        # drops the flock even if LOCK_UN raises.
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+
+
+def locked_registry_update(
+    path: Path | str,
+    mutate_fn: Callable[[dict[str, dict]], None],
+) -> dict[str, dict]:
+    """Lock, re-read FRESH, apply ``mutate_fn``, write, release. Hard-fail.
+
+    The one safe way for a concurrent writer to mutate ``sessions.json``
+    (STYLE.md:P-006, T-REV-001): take the sidecar lock, re-read the registry
+    fresh UNDER that lock (the authoritative merge base), hand the fresh
+    mapping to ``mutate_fn`` to apply ONLY this caller's own record changes in
+    place, then persist under the still-held lock via
+    ``write_registry(..., lock=False)`` and release. Because the merge base is
+    the locked re-read — not a whole-file snapshot the caller took earlier —
+    any record a concurrent writer persisted between this caller's own
+    snapshot and this write survives instead of being clobbered (see the
+    module docstring's Concurrency section for the lost-update scenario this
+    closes, e.g. ``fanout.run_fanout`` children vs. a poll pass's transition).
+
+    ``mutate_fn`` MUST be minimal — it applies only the records THIS caller
+    changed (a poll cycle: the polled session's record + any transitions it
+    made; a fanout: the origin's children linkage + the new child records; a
+    startup reconcile: the records it marked ``orphaned``) — and must NOT
+    reintroduce a stale whole-file overwrite (e.g. ``fresh.clear()`` followed
+    by a stale snapshot), which would defeat the point.
+
+    Args:
+        path: The registry path (``sessions.json``).
+        mutate_fn: A callable that mutates the freshly-read ``session_id`` ->
+            record mapping IN PLACE, applying this caller's record changes.
+
+    Returns:
+        The merged mapping just written (the fresh re-read after ``mutate_fn``).
+
+    Raises:
+        ValueError: if a resulting record fails ``validate_record``.
+        OSError: on a registry write failure (see ``atomic_write_json``).
+    """
+    with hold_registry_lock(path):
+        sessions = read_registry(path)
+        mutate_fn(sessions)
+        write_registry(path, sessions, lock=False)
+        return sessions
 
 
 def read_registry(path: Path | str) -> dict[str, dict]:

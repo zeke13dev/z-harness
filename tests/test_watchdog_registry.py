@@ -278,6 +278,76 @@ def test_concurrent_writes_never_expose_torn_json(tmp_path: Path) -> None:
     registry.validate_record(only_record)
 
 
+# ── locked_registry_update (serialized read-modify-write, T-REV-001) ─────────
+
+def _rec(slug: str, session_id: str) -> dict:
+    return registry.new_session_record(
+        slug=slug, plan_dir="/p", host="claude",
+        tmux_target=f"zw-{slug}-1", transcript_path="/t",
+        session_id=session_id,
+    )
+
+
+def test_locked_registry_update_merges_onto_fresh_read(tmp_path: Path) -> None:
+    """The mutate fn is applied to a FRESH re-read, not a stale snapshot: a
+    record another writer persisted since is preserved (T-REV-001)."""
+    path = tmp_path / "sessions.json"
+    registry.write_registry(path, {"ws-a": _rec("a", "ws-a")})
+
+    # Another writer lands a record on disk before our update runs.
+    on_disk = registry.read_registry(path)
+    on_disk["ws-b"] = _rec("b", "ws-b")
+    registry.write_registry(path, on_disk)
+
+    def _add_c(fresh: dict) -> None:
+        # The fresh mapping must already reflect ws-b (the merge base is the
+        # locked re-read), and we only add our own record.
+        assert "ws-b" in fresh
+        fresh["ws-c"] = _rec("c", "ws-c")
+
+    merged = registry.locked_registry_update(path, _add_c)
+
+    assert set(merged) == {"ws-a", "ws-b", "ws-c"}
+    assert set(registry.read_registry(path)) == {"ws-a", "ws-b", "ws-c"}
+
+
+def test_locked_registry_update_serializes_concurrent_updates(tmp_path: Path) -> None:
+    """Two threads each adding their own record via locked_registry_update lose
+    nothing: the sidecar lock serializes the read-modify-write cycles so neither
+    add clobbers the other (T-REV-001, the "no session record is lost" contract
+    at the primitive level)."""
+    import threading
+
+    path = tmp_path / "sessions.json"
+    registry.write_registry(path, {"ws-seed": _rec("seed", "ws-seed")})
+
+    start = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _adder(session_id: str) -> None:
+        try:
+            start.wait(timeout=5)
+            registry.locked_registry_update(
+                path, lambda fresh: fresh.__setitem__(session_id, _rec("w", session_id))
+            )
+        except BaseException as exc:  # noqa: BLE001 — surfaced via assertion
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_adder, args=(sid,))
+        for sid in ("ws-w1", "ws-w2")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"a concurrent update raised: {errors}"
+    final = registry.read_registry(path)
+    # The seed and BOTH concurrent adds survive — no lost update.
+    assert set(final) == {"ws-seed", "ws-w1", "ws-w2"}
+
+
 # ── daemon single-instance pidfile lock ──────────────────────────────────────
 
 def _dead_pid() -> int:
