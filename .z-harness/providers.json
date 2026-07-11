@@ -2,14 +2,21 @@
   "version": 2,
   "roles": {
     "consultant_primary": "omp-antigravity-pro",
-    "consultant_secondary": "omp-cursor-sol",
-    "reviewer": "omp-cursor-terra"
+    "consultant_secondary": "omp-openai-sol",
+    "reviewer": "omp-openai-terra"
   },
   "providers": {
     "gemini": {
       "kind": "cli",
       "command": "gemini",
-      "args_template": ["-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "-",
+        "--approval-mode",
+        "plan",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gemini-2.5-pro",
@@ -20,7 +27,10 @@
     "codex": {
       "kind": "cli",
       "command": "codex",
-      "args_template": ["exec", "-"],
+      "args_template": [
+        "exec",
+        "-"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gpt-5-codex",
@@ -31,7 +41,11 @@
     "claude": {
       "kind": "cli",
       "command": "claude",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "claude-opus-4",
@@ -42,7 +56,14 @@
     "gemini-cli": {
       "kind": "cli",
       "command": "gemini",
-      "args_template": ["-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "-",
+        "--approval-mode",
+        "plan",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gemini-2.5-pro",
@@ -53,7 +74,10 @@
     "codex-cli": {
       "kind": "cli",
       "command": "codex",
-      "args_template": ["exec", "-"],
+      "args_template": [
+        "exec",
+        "-"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gpt-5-codex",
@@ -64,7 +88,11 @@
     "claude-cli": {
       "kind": "cli",
       "command": "claude",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "claude-opus-4",
@@ -75,29 +103,47 @@
     "cursor": {
       "kind": "cli",
       "command": "cursor-agent",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "auto",
-      "model_arg_template": ["--model", "{model}"],
+      "model_arg_template": [
+        "--model",
+        "{model}"
+      ],
       "model_env_var": null,
       "default_model": "auto"
     },
     "cursor-cli": {
       "kind": "cli",
       "command": "cursor-agent",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "auto",
-      "model_arg_template": ["--model", "{model}"],
+      "model_arg_template": [
+        "--model",
+        "{model}"
+      ],
       "model_env_var": null,
       "default_model": "auto"
     },
     "agy": {
       "kind": "cli",
       "command": "agy",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gemini-3.5-flash",
@@ -108,7 +154,11 @@
     "agy-cli": {
       "kind": "cli",
       "command": "agy",
-      "args_template": ["-p", "--output-format", "text"],
+      "args_template": [
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gemini-3.5-flash",
@@ -119,7 +169,13 @@
     "omp-codex": {
       "kind": "cli",
       "command": "omp-consult.sh",
-      "args_template": ["openai-codex/gpt-5.5", "--fallback", "codex", "exec", "-"],
+      "args_template": [
+        "openai-codex/gpt-5.5",
+        "--fallback",
+        "codex",
+        "exec",
+        "-"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gpt-5.5 (omp/openai-codex OAuth)",
@@ -130,7 +186,17 @@
     "omp-antigravity-pro": {
       "kind": "cli",
       "command": "omp-consult.sh",
-      "args_template": ["google-antigravity/gemini-3.1-pro", "--fallback", "gemini", "-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "args_template": [
+        "google-antigravity/gemini-3.1-pro",
+        "--fallback",
+        "gemini",
+        "-p",
+        "-",
+        "--approval-mode",
+        "plan",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "Antigravity Gemini 3.1 Pro (omp/google-antigravity OAuth)",
@@ -141,7 +207,14 @@
     "omp-cursor-terra": {
       "kind": "cli",
       "command": "omp-consult.sh",
-      "args_template": ["cursor/gpt-5.6-terra-medium", "--fallback", "cursor-agent", "-p", "--output-format", "text"],
+      "args_template": [
+        "cursor/gpt-5.6-terra-medium",
+        "--fallback",
+        "cursor-agent",
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "GPT-5.6 Terra medium (omp/cursor OAuth)",
@@ -152,10 +225,51 @@
     "omp-cursor-sol": {
       "kind": "cli",
       "command": "omp-consult.sh",
-      "args_template": ["cursor/gpt-5.6-sol-medium", "--fallback", "cursor-agent", "-p", "--output-format", "text"],
+      "args_template": [
+        "cursor/gpt-5.6-sol-medium",
+        "--fallback",
+        "cursor-agent",
+        "-p",
+        "--output-format",
+        "text"
+      ],
       "stdin": true,
       "timeout_s": 300,
       "model_label": "GPT-5.6 Sol medium (omp/cursor OAuth)",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "omp-openai-terra": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": [
+        "openai-codex/gpt-5.6-terra",
+        "--fallback",
+        "codex",
+        "exec",
+        "-"
+      ],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "GPT-5.6 Terra (omp/openai-codex OAuth)",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "omp-openai-sol": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": [
+        "openai-codex/gpt-5.6-sol",
+        "--fallback",
+        "codex",
+        "exec",
+        "-"
+      ],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "GPT-5.6 Sol (omp/openai-codex OAuth)",
       "model_arg_template": null,
       "model_env_var": null,
       "default_model": null
