@@ -221,6 +221,36 @@ def test_busy_pane_is_neither_ready_nor_needs_input() -> None:
     assert adapter.needs_input(_BUSY_PANE) is False
 
 
+_STATUSLINE_FOOTER_PANE = (
+    FIXTURES_DIR / "prompt_ready_pane_statusline_footer.txt"
+).read_text(encoding="utf-8")
+
+
+def test_idle_pane_with_statusline_footer_is_ready() -> None:
+    """Live-captured 2026-07-11: the composer glyph sits 4 non-blank lines
+    above the pane bottom (statusline footer below it); the original last-3
+    window missed this genuinely idle pane."""
+    adapter = claude.ClaudeAdapter()
+    assert adapter.injection_ready(_STATUSLINE_FOOTER_PANE) is True
+    assert adapter.needs_input(_STATUSLINE_FOOTER_PANE) is True
+
+
+def test_busy_pane_with_visible_composer_glyph_is_not_ready() -> None:
+    """A working session can render the composer glyph above its spinner;
+    the busy marker must win over the widened glyph window."""
+    pane = "\n".join(
+        [
+            "❯",
+            "────────",
+            "⠋ Thinking…",
+            "  (esc to interrupt)",
+        ]
+    )
+    adapter = claude.ClaudeAdapter()
+    assert adapter.injection_ready(pane) is False
+    assert adapter.needs_input(pane) is False
+
+
 def test_selection_menu_pane_is_ready_and_needs_input_via_footer_hint() -> None:
     adapter = claude.ClaudeAdapter()
     assert adapter.injection_ready(_MENU_PANE) is True

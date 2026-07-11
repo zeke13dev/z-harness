@@ -1,0 +1,24 @@
+│                        ▘▘ ▝▝                       │ Added directory path s… │
+│ Opus 4.8 (1M context) with me… · API Usage Billing │ Added a `/doctor` chec… │
+│ · zbarnett@andrew.cmu.edu's Organization           │ `/commit-push-pr` now … │
+│              /…/scratchpad/live-test               │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ ▎ Extended: Fable 5 is included in your weekly limit
+ ▎ Through July 12, you can use up to 50% of your weekly usage limit on Fable 5.
+ ▎ If you hit your limit, you can continue on Fable 5 with usage credits. Fable
+ ▎ 5 draws down usage faster than Opus 4.8. Run /model and select Fable to use
+ ▎ it. Learn more
+
+❯ Write a 5-line poem about a watchdog daemon into poem.txt, then tell me which
+  line you like best and ask if I want any changes.
+
+⏺ Login expired · Please run /login
+
+✻ Brewed for 0s
+                                                     Not logged in · Run /login
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  Opus 4.8 (1M context)
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

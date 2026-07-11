@@ -32,3 +32,9 @@ generic placeholders (`<redacted user prompt>`, `<redacted response>`,
 `requestId`/`version`/`gitBranch`/`entrypoint`/`userType` fields (not needed
 by the adapter) are dropped entirely; `uuid`/`sessionId` values are replaced
 with synthetic sequential ids (`u-000N`/`a-000N`/`test-session-000N`).
+
+prompt_ready_pane_statusline_footer.txt: captured live 2026-07-11 via
+`tmux capture-pane -p` from a real idle Claude Code session (Opus 4.8 UI):
+the composer glyph sits 4 non-blank lines above the pane bottom because the
+statusline footer (separator + model line + auto-mode line) renders below it.
+Regression fixture for the _prompt_glyph_ready window widening.

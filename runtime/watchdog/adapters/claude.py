@@ -169,13 +169,24 @@ def _extract_usage(record: object) -> dict[str, int] | None:
 def _prompt_glyph_ready(pane_text: str) -> bool:
     """Reimplementation of so-MCP's ``_needs_input()``
     (``mcp_hermes_orchestrator.py:534-563``, read-only reference, never
-    imported): the pane's last 3 non-blank lines end in the omp glyph ``❯``
-    or a bare ``>`` continuation glyph (Claude Code's own idle-composer
-    marker), OR a still-visible selection-menu footer ("enter select" /
-    "esc cancel") appears in the last 8 non-blank lines.
+    imported), adjusted for Claude Code's statusline footer: the idle
+    composer glyph ``❯`` (or a bare ``>`` continuation glyph) may sit up to
+    ~4 non-blank lines above the pane bottom because the current UI renders
+    a separator + model line + mode footer BELOW the composer (found live,
+    2026-07-11 session-watchdog smoke test — the original last-3 window
+    missed a genuinely idle pane). The glyph scan therefore covers the last
+    6 non-blank lines, and a visible busy marker ("esc to interrupt")
+    anywhere in that window wins over the glyph: a working session can
+    still render the composer glyph above its spinner. A still-visible
+    selection-menu footer ("enter select" / "esc cancel") in the last 8
+    non-blank lines also counts as ready/needs-input.
     """
     lines = [line.rstrip() for line in pane_text.strip().splitlines() if line.strip()]
-    for line in lines[-3:]:
+    for line in lines[-8:]:
+        low = line.strip().lower()
+        if "esc to interrupt" in low:
+            return False
+    for line in lines[-6:]:
         stripped = line.strip()
         if stripped.endswith("❯") or stripped.endswith(">"):
             return True
