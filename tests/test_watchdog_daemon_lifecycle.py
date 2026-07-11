@@ -12,6 +12,12 @@ Coverage:
   orphaned exactly once (alerted once) and never re-alerted on a second call;
   a stale lock naming a dead pid is acquired successfully; every
   ``has_session`` call is passed an explicit timeout.
+- ``run_poll_pass`` (T019, criterion #1): resolves every ``watchdog.*`` knob
+  exactly once, dispatches the injected ``poll_session`` exactly once per
+  non-terminal session with the record's captured pane, skips a terminal-state
+  record outright (no capture/dispatch), and skips (without crashing the
+  pass) a session whose pane capture raises ``TmuxActuationError``/
+  ``TmuxTimeoutError``.
 
 Tests are hermetic (STYLE.md:T-004): all filesystem effects go under
 pytest's ``tmp_path`` fixture. An autouse fixture restores the process's real
@@ -31,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.watchdog import daemon, registry
+from runtime.watchdog import daemon, registry, tmux_actuator
 
 
 @pytest.fixture(autouse=True)
@@ -261,3 +267,168 @@ def test_run_startup_reconcile_acquires_stale_lock_from_dead_pid(
         alert_fn=lambda title, body: True,
     )
     assert updated == {}
+
+
+# ── run_poll_pass ────────────────────────────────────────────────────────────
+
+class _RecordingCall:
+    """Records every positional/keyword invocation and returns a canned value
+    (or invokes an injected side-effect callable) per call."""
+
+    def __init__(self, ret=None, side_effect=None) -> None:
+        self.calls: list[tuple[tuple, dict]] = []
+        self._ret = ret
+        self._side_effect = side_effect
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self._side_effect is not None:
+            return self._side_effect(*args, **kwargs)
+        return self._ret
+
+
+def _poll_pass_fixture(tmp_path: Path) -> tuple[Path, dict, dict]:
+    """Write a two-record (both ``running``) registry; return (path, live, live2)."""
+    registry_path = tmp_path / "sessions.json"
+    live = registry.new_session_record(
+        slug="alpha", plan_dir="/p", host="claude",
+        tmux_target="zw-alpha-1", transcript_path="/t-alpha.jsonl",
+    )
+    live = registry.transition(live, "running")
+    live2 = registry.new_session_record(
+        slug="beta", plan_dir="/p", host="codex",
+        tmux_target="zw-beta-1", transcript_path="/t-beta.jsonl",
+    )
+    live2 = registry.transition(live2, "running")
+    sessions = {live["session_id"]: live, live2["session_id"]: live2}
+    registry.write_registry(registry_path, sessions)
+    return registry_path, live, live2
+
+
+def _fake_poll_session(record, sessions, **kwargs):
+    """Fake ``poll.poll_session``: leaves the mapping untouched, returns it."""
+    updated = dict(sessions)
+    updated[record["session_id"]] = record
+    return {"sessions": updated}
+
+
+def test_run_poll_pass_dispatches_poll_session_once_per_non_terminal_session(
+    tmp_path: Path,
+) -> None:
+    registry_path, live, live2 = _poll_pass_fixture(tmp_path)
+    sessions = registry.read_registry(registry_path)
+
+    capture_pane = _RecordingCall(ret="pane text")
+    poll_session = _RecordingCall(side_effect=_fake_poll_session)
+    get_config_int = _RecordingCall(ret=1)
+    adapter_calls: list[str] = []
+
+    def adapter_for_host(host: str):
+        adapter_calls.append(host)
+        return object()
+
+    daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=adapter_for_host,
+        get_config_int=get_config_int,
+        capture_pane=capture_pane,
+        poll_session=poll_session,
+    )
+
+    assert len(poll_session.calls) == 2
+    dispatched_ids = {call[0][0]["session_id"] for call in poll_session.calls}
+    assert dispatched_ids == {live["session_id"], live2["session_id"]}
+    assert sorted(adapter_calls) == ["claude", "codex"]
+    captured_targets = {call[0][0] for call in capture_pane.calls}
+    assert captured_targets == {"zw-alpha-1", "zw-beta-1"}
+
+
+def test_run_poll_pass_resolves_every_knob_exactly_once(tmp_path: Path) -> None:
+    registry_path, _live, _live2 = _poll_pass_fixture(tmp_path)
+    sessions = registry.read_registry(registry_path)
+
+    get_config_int = _RecordingCall(ret=1)
+
+    daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=get_config_int,
+        capture_pane=lambda target, **kwargs: "pane text",
+        poll_session=_fake_poll_session,
+    )
+
+    resolved_keys = [call[0][0] for call in get_config_int.calls]
+    assert sorted(resolved_keys) == sorted(
+        [
+            "watchdog.context_threshold_pct",
+            "watchdog.context_window_tokens",
+            "watchdog.stuck_after_s",
+            "watchdog.nudge_max",
+            "watchdog.judge_timeout_s",
+            "watchdog.signals_max_mb",
+        ]
+    )
+    # Exactly once each — no per-session re-resolution.
+    assert len(resolved_keys) == len(set(resolved_keys)) == 6
+
+
+def test_run_poll_pass_skips_terminal_state_session(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    done = registry.new_session_record(
+        slug="gamma", plan_dir="/p", host="claude",
+        tmux_target="zw-gamma-1", transcript_path="/t-gamma.jsonl",
+    )
+    done = registry.transition(done, "orphaned")
+    sessions = {done["session_id"]: done}
+    registry.write_registry(registry_path, sessions)
+
+    capture_pane = _RecordingCall(ret="pane text")
+    poll_session = _RecordingCall(side_effect=_fake_poll_session)
+
+    result = daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=lambda key: 1,
+        capture_pane=capture_pane,
+        poll_session=poll_session,
+    )
+
+    assert capture_pane.calls == []
+    assert poll_session.calls == []
+    assert result == sessions
+
+
+def test_run_poll_pass_skips_session_on_capture_pane_failure(tmp_path: Path) -> None:
+    """A dead/hung pane for one session must not block dispatching the other."""
+    registry_path, live, live2 = _poll_pass_fixture(tmp_path)
+    sessions = registry.read_registry(registry_path)
+
+    def flaky_capture_pane(target, **kwargs):
+        if target == live["tmux_target"]:
+            raise tmux_actuator.TmuxActuationError("no such pane")
+        return "pane text"
+
+    poll_session = _RecordingCall(side_effect=_fake_poll_session)
+
+    daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=lambda key: 1,
+        capture_pane=flaky_capture_pane,
+        poll_session=poll_session,
+    )
+
+    assert len(poll_session.calls) == 1
+    assert poll_session.calls[0][0][0]["session_id"] == live2["session_id"]

@@ -20,8 +20,18 @@ actual startup sequence — acquire the single-instance lock, reconcile the
 registry against live tmux state, persist the result — so every later poll
 cycle starts from a registry that already reflects reality.
 
-Non-scope (level 2 owns these — deliberately absent here): the poll loop and
-the ``status`` / ``run --once`` CLI verbs.
+Also (T019, criterion #1): ``run_poll_pass`` composes the level-2 per-session
+cycle (``poll.poll_session``) into a single pass over every non-terminal
+registered session: resolve every ``watchdog.*`` knob exactly once
+(``registry.get_config_int``), capture each session's pane
+(``tmux_actuator.capture_pane``), select the record's host adapter, and
+dispatch ``poll.poll_session``. The ``cli.py`` ``status`` / ``run [--once]``
+verbs are the thin argparse layer over this module's primitives.
+
+Non-scope (deliberately absent here): the ``status`` / ``run [--once]``
+argparse wiring itself (``cli.py``'s job) and host-adapter selection (the
+caller supplies ``adapter_for_host`` — this module stays host-agnostic,
+mirroring every sibling module's DI-seam discipline).
 
 Design decisions:
 - DI seam (STYLE.md:P-004 spirit): ``install_sigterm_handler`` takes a
@@ -39,6 +49,19 @@ Design decisions:
   exceptions — a broken registry path must surface loudly rather than let the
   daemon exit "cleanly" over an un-flushed registry. ``sys.exit(0)`` is only
   reached after the flush succeeds.
+- ``run_poll_pass`` skips a terminal-state record (``registry.is_terminal``)
+  outright rather than dispatching it to ``poll.poll_session``:
+  ``tmux_actuator.capture_pane`` hard-fails on a dead pane
+  (``TmuxActuationError``), and a terminal session (``done``/``failed``/
+  ``orphaned``) needs no further polling — capturing its pane would only
+  crash the whole pass for no benefit.
+- A per-session ``capture_pane`` failure (a hung or already-dead pane this
+  cycle — narrower than the terminal-state check above, e.g. a target that
+  died out-of-band since the last reconcile) is caught by NAMED exception
+  only (STYLE.md:EH-002: ``TmuxActuationError``/``TmuxTimeoutError``) and
+  that session is skipped for this pass rather than crashing the remaining
+  siblings — mirrors ``reconcile.py``'s T014 "never blocking sibling
+  evaluation" precedent.
 """
 
 from __future__ import annotations
@@ -50,7 +73,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from runtime.watchdog import notify, reconcile, registry, tmux_actuator
+from runtime.watchdog import notify, poll, reconcile, registry, tmux_actuator
+from runtime.watchdog.adapters.base import HostAdapter
 
 SigtermHandler = Callable[[int, object], None]
 
@@ -180,3 +204,94 @@ def run_startup_reconcile(
         )
         registry.write_registry(registry_path, updated)
         return updated
+
+
+def run_poll_pass(
+    sessions: dict[str, dict],
+    *,
+    registry_path: Path | str,
+    signals_path: Path | str,
+    repo_root: Path | str,
+    adapter_for_host: Callable[[str], HostAdapter],
+    get_config_int: Callable[[str], int] = registry.get_config_int,
+    capture_pane: Callable[..., str] = tmux_actuator.capture_pane,
+    poll_session: Callable[..., dict] = poll.poll_session,
+) -> dict[str, dict]:
+    """Run one poll pass over every non-terminal registered session.
+
+    Resolves every ``watchdog.*`` knob exactly once (T019, criterion #1),
+    then for each ``sessions`` record NOT in a terminal state
+    (``registry.is_terminal``): selects its host adapter via
+    ``adapter_for_host``, captures its pane (``capture_pane``), and dispatches
+    ``poll_session`` exactly once. A per-session pane-capture failure (a dead
+    or hung target — narrower than the terminal-state skip above) is caught
+    by named exception and that session is skipped for this pass rather than
+    crashing the remaining siblings (see module docstring).
+
+    This function does not itself acquire the single-instance lock or touch
+    the heartbeat — the caller (``cli.py``'s ``run [--once]`` verb) wraps this
+    call in ``run_lifecycle`` and calls ``touch_heartbeat`` after it returns,
+    mirroring every other primitive in this module.
+
+    Args:
+        sessions: The current ``session_id`` -> record mapping (e.g. from
+            ``run_startup_reconcile`` or ``registry.read_registry``). Not
+            mutated in place.
+        registry_path: Path to ``sessions.json`` (forwarded to
+            ``poll_session``, which persists after each dispatched session).
+        signals_path: Path to ``signals.jsonl`` (forwarded to
+            ``poll_session``'s ``judge_degraded`` sink).
+        repo_root: Absolute repo root (forwarded to ``poll_session`` for
+            judge provider-role resolution).
+        adapter_for_host: Callable resolving a session record's ``host``
+            field (``"claude"``/``"codex"``/``"omp"``) to a ``HostAdapter``
+            instance. Injected so this module stays host-agnostic (mirrors
+            every sibling module's DI-seam discipline) — ``cli.py`` owns the
+            actual claude/codex/omp mapping.
+        get_config_int: Injected ``registry.get_config_int``-shaped callable
+            (deterministic tests never shell out to ``scripts/config.py``).
+        capture_pane: Injected ``tmux_actuator.capture_pane``-shaped callable.
+        poll_session: Injected ``poll.poll_session``-shaped callable.
+
+    Returns:
+        The final ``session_id`` -> record mapping after every dispatched
+        session's cycle (already persisted to ``registry_path`` by
+        ``poll_session`` itself on each dispatch).
+    """
+    threshold_pct = get_config_int("watchdog.context_threshold_pct")
+    window_tokens = get_config_int("watchdog.context_window_tokens")
+    stuck_after_s = get_config_int("watchdog.stuck_after_s")
+    nudge_max = get_config_int("watchdog.nudge_max")
+    judge_timeout_s = get_config_int("watchdog.judge_timeout_s")
+    signals_max_mb = get_config_int("watchdog.signals_max_mb")
+
+    sessions = dict(sessions)
+    for record in list(sessions.values()):
+        if registry.is_terminal(record["state"]):
+            continue
+
+        try:
+            pane_text = capture_pane(record["tmux_target"])
+        except (tmux_actuator.TmuxActuationError, tmux_actuator.TmuxTimeoutError):
+            # Dead or hung pane this cycle — retried next pass rather than
+            # blocking the remaining sessions.
+            continue
+
+        adapter = adapter_for_host(record["host"])
+        result = poll_session(
+            record, sessions,
+            adapter=adapter,
+            pane_text=pane_text,
+            registry_path=registry_path,
+            signals_path=signals_path,
+            repo_root=repo_root,
+            threshold_pct=float(threshold_pct),
+            window_tokens=window_tokens,
+            stuck_after_s=stuck_after_s,
+            nudge_max=nudge_max,
+            judge_timeout_s=float(judge_timeout_s),
+            signals_max_mb=signals_max_mb,
+        )
+        sessions = result["sessions"]
+
+    return sessions
