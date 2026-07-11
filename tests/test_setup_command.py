@@ -5,7 +5,10 @@ import subprocess
 import tempfile
 import sys
 import unittest
+
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -241,7 +244,11 @@ class InstallCommandProdScopeTest(unittest.TestCase):
         args = run_mock.call_args[0][0]
         self.assertIn("--target=all", args)
 
-    @unittest.skip("pre-existing, unrelated to session-watchdog; identical at merge-base b5be06e per git diff — see LEDGER")
+    @unittest.skipUnless(
+        (_REPO_ROOT / ".git").is_dir(),
+        "install.sh is_repo_clone() requires .git to be a directory; in a git worktree "
+        ".git is a file, so this test only runs on a normal clone (see LEDGER, T020)",
+    )
     def test_install_sh_prod_codex_repo_mode_is_valid(self) -> None:
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
             fake_codex = Path(bin_dir) / "codex"
@@ -265,7 +272,11 @@ class InstallCommandProdScopeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("z-harness installed for Codex", result.stdout)
 
-    @unittest.skip("pre-existing, unrelated to session-watchdog; identical at merge-base b5be06e per git diff — see LEDGER")
+    @unittest.skipUnless(
+        (_REPO_ROOT / ".git").is_dir(),
+        "install.sh is_repo_clone() requires .git to be a directory; in a git worktree "
+        ".git is a file, so this test only runs on a normal clone (see LEDGER, T020)",
+    )
     def test_install_sh_prod_all_repo_mode_installs_claude_and_codex(self) -> None:
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
             fake_codex = Path(bin_dir) / "codex"
