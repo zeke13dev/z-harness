@@ -1,0 +1,46 @@
+{
+  "_provenance": "Excerpted from a real ~/.omp/agent/sessions/-dev-z-harness/2026-07-10T02-17-39-823Z_019f49d0-f8ef-7000-b46a-fa3fdf9bd13f.jsonl (omp v16.1.15, PI_CODING_AGENT_DIR default ~/.omp/agent), line 9. The 'thinking' block's encrypted reasoning payload (thinkingSignature) was truncated to a placeholder for fixture size -- it is an opaque provider-encrypted blob, not user content, and its exact bytes are not load-bearing for context-usage parsing.",
+  "case": "nominal_context_read",
+  "session_header": {
+    "type": "session",
+    "version": 3,
+    "id": "019f49d0-f8ef-7000-b46a-fa3fdf9bd13f",
+    "cwd": "/Users/zeke/dev/z-harness"
+  },
+  "assistant_message_with_usage": {
+    "type": "message",
+    "id": "2234babf",
+    "timestamp": "2026-07-10T02:17:59.673Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        { "type": "thinking", "thinking": "", "thinkingSignature": "<truncated-encrypted-reasoning-blob>" },
+        { "type": "toolCall", "id": "call_RHMtNt1YsFAISaVPMcq2fXho", "name": "job", "arguments": { "i": "Waiting auth docs", "poll": ["AuthDocs"] } }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "usage": {
+        "input": 851,
+        "output": 60,
+        "cacheRead": 30208,
+        "cacheWrite": 0,
+        "totalTokens": 31119,
+        "reasoningTokens": 25,
+        "cost": {
+          "input": 0.004255,
+          "output": 0.0018,
+          "cacheRead": 0.015104,
+          "cacheWrite": 0,
+          "total": 0.021159
+        }
+      },
+      "stopReason": "toolUse",
+      "contextSnapshot": {
+        "promptTokens": 31059,
+        "nonMessageTokens": 28112
+      }
+    }
+  },
+  "gotcha": "Unlike codex's token_count event, this message never carries the model's max context window. `omp models` (or the local models.db) must be cross-referenced by model id (here 'gpt-5.5') to get a denominator -- confirmed via live `omp models` output showing gpt-5.5-* variants at 200K context on this machine."
+}

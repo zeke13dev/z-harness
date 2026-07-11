@@ -335,6 +335,25 @@ DEFAULTS: dict = {
             "cargo": 1800,
             "reviewer": 300,
         },
+        # --- session-watchdog daemon knobs (runtime/watchdog/) ---
+        # Percent of context_window_tokens at which a registered session is
+        # driven through the handoff state machine.
+        "context_threshold_pct": 80,       # int>0: context fill % that triggers handoff
+        # Fallback context window (tokens) for sessions whose host adapter does
+        # not report one directly. Distinct from runtime.context_window_tokens
+        # (that key is a rough-estimate fallback for /z-execute pressure checks).
+        "context_window_tokens": 200000,   # int>0: watchdog-daemon context window fallback
+        # Seconds with no new transcript events (and not needs_input/awaiting_children)
+        # before a session receives a plain-text nudge.
+        "stuck_after_s": 600,              # int>0: stuck-session detection threshold
+        # Unanswered nudges before exactly one Discord escalation alert is posted.
+        "nudge_max": 2,                    # int>0: nudge count before Discord escalation
+        # Subprocess timeout for the watchdog_judge provider role.
+        "judge_timeout_s": 60,             # int>0: judge-call subprocess timeout
+        # Rotation ceiling for signals.jsonl (internal event log).
+        "signals_max_mb": 50,              # int>0: signals.jsonl size cap before rotation
+        # Daemon poll-loop cadence. Documented range: 30-60s.
+        "poll_interval_s": 45,             # int>0: daemon poll interval in seconds (30-60s range)
     },
 }
 
@@ -803,6 +822,14 @@ VALIDATORS: dict = {
     "watchdog.timeout_secs.rsync":    _validate_positive_int,
     "watchdog.timeout_secs.cargo":    _validate_positive_int,
     "watchdog.timeout_secs.reviewer": _validate_positive_int,
+    # session-watchdog daemon knobs — flat keys, round-trip via env.
+    "watchdog.context_threshold_pct":  _validate_positive_int,
+    "watchdog.context_window_tokens":  _validate_positive_int,
+    "watchdog.stuck_after_s":          _validate_positive_int,
+    "watchdog.nudge_max":              _validate_positive_int,
+    "watchdog.judge_timeout_s":        _validate_positive_int,
+    "watchdog.signals_max_mb":         _validate_positive_int,
+    "watchdog.poll_interval_s":        _validate_positive_int,
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -950,6 +977,28 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "watchdog.timeout_secs.reviewer": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    # session-watchdog daemon knobs — flat int coercers (round-trip via env)
+    "watchdog.context_threshold_pct": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.context_window_tokens": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.stuck_after_s": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.nudge_max": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.judge_timeout_s": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.signals_max_mb": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.poll_interval_s": lambda v: (
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
 }

@@ -1,0 +1,47 @@
+# Durable evidence for the codex claims in runtime/watchdog/HOST_MECHANICS.md.
+# Every block below is verbatim output from a read-only inspection command
+# re-run on this machine on 2026-07-10 (codex-cli 0.142.5, macOS). Re-run any
+# block to reproduce. HOST_MECHANICS.md cites these blocks by their [C-n] tag.
+# Home dir shown as /Users/zeke (no PII in these outputs).
+
+# ==== [C-1] Transcript path naming convention ====
+# $ find ~/.codex/sessions -type f -iname "*.jsonl" | head -3
+/Users/zeke/.codex/sessions/2026/03/05/rollout-2026-03-05T22-12-01-019cc0ea-86e9-7443-a624-c7418b8e2de8.jsonl
+/Users/zeke/.codex/sessions/2026/03/16/rollout-2026-03-16T23-09-58-019cf9c5-87bb-7101-8d42-99288a7a667d.jsonl
+/Users/zeke/.codex/sessions/2026/03/17/rollout-2026-03-17T10-09-17-019cfc21-2812-7ee0-9608-9f3d3508282f.jsonl
+# => path shape: ~/.codex/sessions/YYYY/MM/DD/rollout-<ISO-ts>-<session-id>.jsonl
+
+# ==== [C-2] One file per chat (date-sharded dir has many same-day rollouts) ====
+# $ ls -1 ~/.codex/sessions/2026/07/10/ | head -5
+rollout-2026-07-10T00-04-50-019f4ad7-e532-7e30-ae75-d732f28e0dda.jsonl
+rollout-2026-07-10T00-11-05-019f4add-9d91-7ee2-a1ab-e4daef93b6d0.jsonl
+rollout-2026-07-10T00-14-49-019f4ae1-09f9-70b0-b0c8-65cec4b60f1d.jsonl
+rollout-2026-07-10T00-15-34-019f4ae1-b79a-71f3-b8a6-69b3f8fbe2bd.jsonl
+rollout-2026-07-10T00-25-04-019f4aea-6940-7440-8535-ffc599ab42de.jsonl
+# => many rollout files on a single day, one per chat/session id. This is the
+#    DURABLE corroboration that a new chat gets a new file (the specific /new
+#    keystroke that triggers rotation was observed live during grounding and is
+#    recorded in task_complete_missing_usage.json's _provenance; it is not
+#    re-runnable from a checked-in artifact, so HOST_MECHANICS.md scopes that
+#    keystroke claim to that single grounding observation, backed durably by the
+#    per-chat file multiplicity shown here).
+
+# ==== [C-3] Adjacent (non-transcript) codex state files ====
+# $ ls -1 ~/.codex/*.jsonl
+/Users/zeke/.codex/history.jsonl
+/Users/zeke/.codex/session_index.jsonl
+# => history.jsonl (global prompt history) and session_index.jsonl (metadata
+#    index) are NOT per-session turn transcripts.
+
+# ==== [C-4] token_count event carries usage AND model_context_window ====
+# $ f=/Users/zeke/.codex/sessions/2026/07/10/rollout-2026-07-10T09-39-12-019f4ce5-bec6-7d13-ad5d-65233a163782.jsonl
+# $ grep -n '"type":"token_count"' "$f" | head -1   => first at line 12
+# $ (parse line 12's payload.info)
+total_tokens= 19837 model_context_window= 353400
+# => a single token_count event is a self-contained usage read
+#    (19837 / 353400 = 5.6% used).
+
+# ==== [C-5] task_started ALSO carries model_context_window ====
+# $ (parse the same file's task_started payload)
+model_context_window= 353400
+# => the context ceiling is knowable before the first token_count arrives.

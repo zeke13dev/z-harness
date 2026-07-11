@@ -1,0 +1,34 @@
+Source and redaction notes for tests/fixtures/watchdog/claude/*.jsonl (T005).
+
+Source: a real ~/.claude/projects/<project-slug>/<session-id>.jsonl transcript
+for this repo's own session-watchdog planning/implementation session
+(sessionId 381af3ca-21cf-4e03-88e3-1166fe571ef2, this repo's worktree project
+slug), captured 2026-07-10.
+
+Real, unmodified fields carried into the fixtures: top-level record shape
+(parentUuid/isSidechain/type/message/uuid/timestamp/sessionId/cwd), the
+`message.usage` object's shape and the four numeric fields the adapter reads
+(input_tokens/cache_creation_input_tokens/cache_read_input_tokens/
+output_tokens) — every usage number below is copied verbatim from a real
+line in that transcript:
+
+- transcript_nominal.jsonl line 3 (uuid a-0001): real line 13
+  (input=17809, cache_creation=11121, cache_read=25725, output=255).
+- transcript_nominal.jsonl line 5 (uuid a-0002): real line 39/40
+  (input=2, cache_creation=826, cache_read=173301, output=1115).
+- transcript_appended_lines.jsonl (uuid a-0003): real line 244
+  (input=131, cache_creation=2296, cache_read=261843, output=2451) — the
+  latest usage line seen in that transcript's growth, used here to represent
+  a subsequent turn appended after the initial read.
+- transcript_malformed_tail.jsonl line 3 (uuid a-0001): same real line 13
+  values as above, followed by a deliberately-truncated 4th line (valid JSON
+  up through the `usage` object's opening bytes, no closing braces, no
+  trailing newline) simulating a write flushed mid-append.
+
+Redactions applied (no real prompt/response content or account identifiers
+are present in these fixtures): `message.content` text replaced with
+generic placeholders (`<redacted user prompt>`, `<redacted response>`,
+`<redacted tool result>`); the real `thinking` signature blob and
+`requestId`/`version`/`gitBranch`/`entrypoint`/`userType` fields (not needed
+by the adapter) are dropped entirely; `uuid`/`sessionId` values are replaced
+with synthetic sequential ids (`u-000N`/`a-000N`/`test-session-000N`).

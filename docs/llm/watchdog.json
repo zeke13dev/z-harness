@@ -160,5 +160,16 @@
     "watchdog.timeout_secs.cargo",
     "watchdog.timeout_secs.reviewer"
   ],
-  "memories": []
+  "memories": [
+    {
+      "type": "gotcha",
+      "date": "2026-07-11",
+      "source": "incident:20260711T071654Z-review",
+      "text": "runtime/watchdog registry: flock-on-write (atomic_write_json) serializes writes only, not read-modify-write cycles. fanout.run_fanout (fanout.py:296-309) does read_registry->mutate->write_registry unlocked; a concurrent daemon poll pass can interleave after the read and lose freshly-added child records. Serialize the full cycle (hold the registry .lock sidecar across RMW, or take the daemon single-instance lock non-blocking + retry).",
+      "tags": [
+        "race-condition",
+        "correctness"
+      ]
+    }
+  ]
 }

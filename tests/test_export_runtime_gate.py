@@ -31,6 +31,7 @@ import tempfile
 import textwrap
 import tomllib
 import unittest
+
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
@@ -880,6 +881,11 @@ class TestUnsupportedCallBlockRewrites(unittest.TestCase):
             self.assertTrue(rendered.exists(), f"missing rendered file: {rendered}")
             return rendered.read_text(encoding="utf-8")
 
+    @unittest.skipUnless(
+        (REPO_ROOT / ".git").is_dir(),
+        "install.sh is_repo_clone() requires .git to be a directory; in a git worktree "
+        ".git is a file, so this test only runs on a normal clone (see LEDGER, T020)",
+    )
     def test_antigravity_preserves_gate_comments_without_orphaned_agent_args(self) -> None:
         content = self._rendered(
             "runtime.drivers.antigravity.export",
@@ -913,6 +919,11 @@ class TestUnsupportedCallBlockRewrites(unittest.TestCase):
         self.assertIn("> [pi] Dispatch a subagent here via the subagent tool", rewritten)
         self.assertNotIn('CURATOR_RETURN="$(Agent(', rewritten)
 
+    @unittest.skipUnless(
+        (REPO_ROOT / ".git").is_dir(),
+        "install.sh is_repo_clone() requires .git to be a directory; in a git worktree "
+        ".git is a file, so this test only runs on a normal clone (see LEDGER, T020)",
+    )
     def test_pi_preserves_gate_comments_with_legacy_line_based_agent_args(self) -> None:
         content = self._rendered(
             "runtime.drivers.pi.export",

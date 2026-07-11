@@ -1,0 +1,30 @@
+# Provenance: `tmux capture-pane -p -t zw-grounding-codex` against a real
+# `codex` v0.142.5 TUI session spawned for T001 grounding on 2026-07-10.
+# Two states captured back to back: (1) the idle input-ready composer after
+# a completed turn, (2) a `/model` selection menu (needs_input: interactive
+# choice), which the session then produced when an unsupported model id was
+# selected. No redactions needed in this excerpt (no account/email lines).
+#
+# ==== STATE 1: input-ready composer (ready for send-keys) ====
+# The `›` glyph at the START of the composer's placeholder line is codex's
+# ready-for-input marker -- distinct from omp's usage, see HOST_MECHANICS.md.
+› Write tests for @filename
+
+  gpt-5.5 medium · /private/tmp/scratchpad
+#
+# ==== STATE 2: interactive selection menu (needs_input) ====
+# Note the footer phrasing: "Press enter to confirm or esc to go back" --
+# this does NOT match the omp-tuned footer substrings ("enter select",
+# "esc cancel") that scripts/hermes/mcp_hermes_orchestrator.py:559-563
+# checks for. A codex-specific needs_input detector must match on this
+# distinct phrasing (or on the `›` leading a numbered option list) instead
+# of reusing the omp footer-hint list unmodified.
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
+› 1. gpt-5.5 (default)    Frontier model for complex coding, research, and real-world work.
+  2. gpt-5.4              Strong model for everyday coding.
+  3. gpt-5.4-mini         Small, fast, and cost-efficient model for simpler coding tasks.
+  4. gpt-5.3-codex-spark  Ultra-fast coding model.
+
+  Press enter to confirm or esc to go back
