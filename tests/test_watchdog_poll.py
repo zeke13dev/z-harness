@@ -386,6 +386,45 @@ def test_fanout_origin_armed_into_awaiting_children(tmp_path):
     assert _read_registry(tmp_path)[child["session_id"]]["state"] == "running"
 
 
+def test_fanout_origin_stuck_in_needs_input_is_unblocked_and_armed(tmp_path):
+    """An origin that entered needs_input BEFORE fanout must not deadlock:
+    once the pane is no longer waiting, the origin arm clears
+    needs_input -> running and arms awaiting_children in the same cycle
+    (found live, 2026-07-11 fanout smoke test)."""
+    child = _child(tmp_path, "running", "zw-child-1")
+    origin = _record(tmp_path, children=[child["session_id"]])
+    origin = registry.transition(origin, "needs_input", now="2020-01-01T00:00:02Z")
+    sessions = {origin["session_id"]: origin, child["session_id"]: child}
+    registry.write_registry(tmp_path / "sessions.json", sessions)
+    adapter = StubAdapter(needs_input=False)
+
+    res = poll.poll_session(
+        origin, sessions, adapter=adapter, pane_text="working",
+        threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
+        now=_NOW, **_paths(tmp_path),
+    )
+    assert res["action"] == "await_children"
+    assert res["record"]["state"] == "awaiting_children"
+
+
+def test_fanout_origin_still_waiting_in_needs_input_is_not_armed(tmp_path):
+    """An origin whose pane still shows a menu stays needs_input — the clear
+    only fires once the human answered."""
+    child = _child(tmp_path, "running", "zw-child-1")
+    origin = _record(tmp_path, children=[child["session_id"]])
+    origin = registry.transition(origin, "needs_input", now="2020-01-01T00:00:02Z")
+    sessions = {origin["session_id"]: origin, child["session_id"]: child}
+    registry.write_registry(tmp_path / "sessions.json", sessions)
+    adapter = StubAdapter(needs_input=True)
+
+    res = poll.poll_session(
+        origin, sessions, adapter=adapter, pane_text="1. yes 2. no",
+        threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
+        now=_NOW, **_paths(tmp_path),
+    )
+    assert res["record"]["state"] == "needs_input"
+
+
 def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
     """When every child is terminal, the awaiting_children origin gets exactly
     one reconciliation nudge listing per-child statuses, one Discord alert per

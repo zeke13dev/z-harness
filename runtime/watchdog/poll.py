@@ -471,6 +471,17 @@ def _poll_fanout_origin(
     """
     session_id = record["session_id"]
 
+    # An origin that entered ``needs_input`` BEFORE fanout would otherwise
+    # deadlock: this arm captures every record with children ahead of the
+    # needs_input arm, but ``needs_input`` matched neither branch below, so
+    # the state never cleared (found live, 2026-07-11 fanout smoke test).
+    # Mirror the needs_input arm's clear here: once the pane is no longer
+    # waiting on a human, walk needs_input -> running and fall through to the
+    # arming branch in this same cycle.
+    if record["state"] == "needs_input" and not adapter.needs_input(pane_text):
+        record = registry.transition(record, "running", now=now_iso)
+        sessions[session_id] = record
+
     if record["state"] in _ORIGIN_ARM_STATES:
         record = registry.transition(record, "awaiting_children", now=now_iso)
         sessions[session_id] = record
