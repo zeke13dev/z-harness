@@ -2315,11 +2315,9 @@ _SCHEMA_PATH = _REPO_ROOT / "docs" / "schemas" / "handoff.schema.json"
 _ZHANDOFF_SKILL_PATH = _REPO_ROOT / "skills" / "z-handoff" / "SKILL.md"
 _ZEXECUTE_SKILL_PATH = _REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
 _ZAUDIT_SKILL_PATH = _REPO_ROOT / "skills" / "z-audit" / "SKILL.md"
-_ZMAP_SKILL_PATH = _REPO_ROOT / "skills" / "z-map" / "SKILL.md"
 _ZEXPLORE_SKILL_PATH = _REPO_ROOT / "skills" / "z-explore" / "SKILL.md"
 _ZRESEARCH_SKILL_PATH = _REPO_ROOT / "skills" / "z-research" / "SKILL.md"
 _ZTEST_SKILL_PATH = _REPO_ROOT / "skills" / "z-test" / "SKILL.md"
-_ZUPLIFT_SKILL_PATH = _REPO_ROOT / "skills" / "z-uplift" / "SKILL.md"
 _ZDEBUG_SKILL_PATH = _REPO_ROOT / "skills" / "z-debug" / "SKILL.md"
 _ZREVIEW_ALL_SKILL_PATH = _REPO_ROOT / "skills" / "z-review-all" / "SKILL.md"
 
@@ -2339,10 +2337,6 @@ def _load_zaudit_skill() -> str:
     return _ZAUDIT_SKILL_PATH.read_text(encoding="utf-8")
 
 
-def _load_zmap_skill() -> str:
-    """Load the live /z-map compatibility contract from disk."""
-    return _ZMAP_SKILL_PATH.read_text(encoding="utf-8")
-
 def _load_zexplore_skill() -> str:
     """Load the live /z-explore terrain contract from disk."""
     return _ZEXPLORE_SKILL_PATH.read_text(encoding="utf-8")
@@ -2356,11 +2350,6 @@ def _load_zresearch_skill() -> str:
 def _load_ztest_skill() -> str:
     """Load the live /z-test contract from disk."""
     return _ZTEST_SKILL_PATH.read_text(encoding="utf-8")
-
-
-def _load_zuplift_skill() -> str:
-    """Load the live /z-uplift contract from disk."""
-    return _ZUPLIFT_SKILL_PATH.read_text(encoding="utf-8")
 
 
 def _load_zdebug_skill() -> str:
@@ -3478,17 +3467,28 @@ class TestAuditStyleWorkflowCheckpointHooks:
         assert "local ack file" not in text
 
     def test_zaudit_registers_shared_hook_at_natural_pause_points(self):
+        """z-audit (T110) uses the checkpoint-seam.sh/audit_checkpoint_seam wrapper
+        convention, not the legacy inline run_workflow_compaction_seam function —
+        this reconciles the test with T110's already-shipped SKILL-STYLE.md rewrite,
+        it is not a new product regression."""
         text = _load_zaudit_skill()
-        self._assert_shared_hook_contract(
-            text,
-            (
-                "audit-phase4-pre-consult",
-                "audit-phase4-post-consult",
-                "audit-phase5-pre-promotion",
-                "audit-phase6-pre-review",
-                "audit-phase7-pre-user-report",
-            ),
-        )
+        assert "audit_checkpoint_seam" in text
+        assert "scripts/checkpoint-seam.sh" in text
+        assert "check-compaction.sh" in text
+        assert "write-clear-checkpoint.sh" in text
+        assert "never write `handoff.json` directly" in text
+        assert "Skipped candidate seams" in text
+        assert not re.search(r'cat\s+>\s*["$A-Za-z0-9_/{}/.-]*handoff\.json', text)
+        assert "checkpoint_ack" not in text
+        assert "local ack file" not in text
+        for seam_id in (
+            "audit-phase4-pre-consult",
+            "audit-phase4-post-consult",
+            "audit-phase5-pre-promotion",
+            "audit-phase6-pre-review",
+            "audit-phase7-pre-user-report",
+        ):
+            assert seam_id in text
         assert "Before dispatching Phase 4 consultants" in text
         assert "After `REPORT.md` has been updated with `## Consult additions`" in text
         assert "before run-brief/final user-facing report generation" in text
@@ -3514,27 +3514,6 @@ class TestAuditStyleWorkflowCheckpointHooks:
         assert "Before dispatching Phase 3 consultants" in text
         assert "After both Phase 3 consultant transcripts are archived" in text
         assert "Before final push-notify/user summary" in text
-
-    def test_zuplift_registers_shared_hook_at_natural_pause_points(self):
-        text = _load_zuplift_skill()
-        self._assert_shared_hook_contract(
-            text,
-            (
-                "uplift-phase2-pre-cross-cutting-consultants",
-                "uplift-phase2-post-cross-cutting-consultants",
-                "uplift-phase2-pre-cross-cutting-promotion",
-                "uplift-phase3-pre-component-consultants",
-                "uplift-phase3-post-component-consultants",
-                "uplift-phase3-pre-component-task-promotion",
-                "uplift-phase3-pre-component-reviewer",
-                "uplift-phase4-pre-user-report",
-                "uplift-phase5-pre-dispatch",
-                "uplift-phase6-pre-final-report",
-            ),
-        )
-        assert "Before cross-cutting consultant dispatch" in text
-        assert "After per-component audit-review transcripts are archived" in text
-        assert "Before presenting the `/z-execute` dispatch command" in text
 
     def test_zreview_all_uses_shared_hook_before_consultants(self):
         text = _load_zreview_all_skill()
@@ -3795,43 +3774,6 @@ class TestMapResearchWorkflowCheckpointHooks:
         "map-phase5-pre-final-review",
         "map-phase5-pre-user-report",
     )
-
-    def test_zmap_delegates_checkpointing_to_canonical_explore(self):
-        text = _load_zmap_skill()
-
-        assert "LEGACY COMPATIBILITY WRAPPER" in text
-        assert "/z-explore --depth=deep $ARGUMENTS" in text
-        assert "Compatibility checkpoint delegation" in text
-        assert "research-draft.md" in text
-        assert "critique" in text
-        assert "MAP.md" in text
-        TestAuditStyleWorkflowCheckpointHooks()._assert_shared_hook_contract(
-            text,
-            self._MAP_SEAMS,
-        )
-        assert "Registered historical map seams" in text
-        assert "executed by `/z-explore --depth=deep`, not by this wrapper" in text
-
-        explore = _load_zexplore_skill()
-        TestAuditStyleWorkflowCheckpointHooks()._assert_shared_hook_contract(
-            explore,
-            self._MAP_SEAMS,
-        )
-        assert 'run_workflow_compaction_seam \\\n     "map-phase4-pre-critique"' in explore
-        assert "After `research-draft.md` is durable, checkpoint before bundled consultant critique" in explore
-        assert "After critique transcripts are archived" in explore
-        assert "After `MAP.md` is atomically written, checkpoint before final review/finalize checks" in explore
-        assert "### Deep-mode resume-phase gate" in explore
-        assert "RESUME_TARGET=\"critique\"" in explore
-        assert "CURRENT_GUARD" in explore
-        assert "stale /z-explore checkpoint guard" in explore
-        assert "do not rerun route/cost/doc/explore/critique phases" in explore
-        assert "/z-explore --depth=deep ${Z_HARNESS_SLUG:-<topic>} --resume-phase=$seam_id" in explore
-        assert "--resume-phase=$seam_id --resume-run=$RUN" in explore
-        assert "Z_EXPLORE_RESUME_TARGET" in explore
-        assert "Do not run Route Check, Phase 1, Phase 2, or Phase 3" in explore
-        assert "before slug derivation" in explore
-        assert 'RUN="${RESUME_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-<slug>}"' in explore
 
     def test_zresearch_registers_shared_hook_at_durable_phase_boundaries(self):
         text = _load_zresearch_skill()

@@ -1,6 +1,6 @@
 # active-plan-registry — Cross-session awareness registry
 
-> Last updated: 2026-06-26
+> Last updated: 2026-07-09
 > Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/artifact-scout-inventory.py, agents/artifact-scout.md, agents/scope-extractor.md, skills/z-execute/SKILL.md, skills/z-plan/SKILL.md, docs/human/active-plan-registry.md, docs/handoff-parallel-session-safety.md
 
 ## Overview
@@ -112,7 +112,7 @@ Each `<run-id>.json` record (schema_version 2) contains:
 | Subcommand | Purpose |
 |------------|---------|
 | `session-id` | Prints a stable session id for the current shell session. Returns `$Z_HARNESS_SESSION_ID` if set; otherwise derives `<ppid>-<start_epoch>` (Linux: from `/proc`; macOS: pure-Python fallback). Callers should `export Z_HARNESS_SESSION_ID="$(session-id)"` once at run start. |
-| `register --run-id ID --slug S --command C --phase P [--session SID] [--watchdog-pid PID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. `watchdog_pid` is advisory observability only; the authoritative PID source is the per-run `.watchdog.pid` file on disk. |
+| `register --run-id ID --slug S --command C --phase P [--session SID] [--watchdog-pid PID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. `watchdog_pid` is advisory observability only; the authoritative PID source is the per-run `.watchdog.pid` file on disk. **No current caller passes `--watchdog-pid`** — see "Watchdog PID field — currently inert" below. |
 | `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused] [--watchdog-pid PID]` | Updates `last_heartbeat`, `phase`, `current_task`, optional `watchdog_pid`, and (when provided) `status` in the own record. There is **no `--waiting-on` CLI flag** — the paused beat's combined atomic write of `status=paused + waiting_on` is performed internally by `_set_waiting_on()` inside `wait-for`'s poll loop, ensuring no window where status=paused but waiting_on is stale. If the record is absent (reaped or never registered), emits `registry_error(reason:missing_record)` and returns 0 — does NOT recreate a zombie record. |
 | `update-scope --run-id ID --scope-json FILE` | Merges a scope array `[{path, confidence, reason}]` into the record. |
 | `claim --run-id ID --paths p1,p2[,...]` | Stage and claim per-file leases. Performs a check-after-claim: re-reads all peer records, applies lexicographic run_id tiebreak (lower run_id = senior wins). Persists only the won set into `held_paths`. Stdout: JSON `{"claimed":[...],"conceded":[{"path","holder_run_id"}]}`. Exit 0 always (advisory). `Z_HARNESS_REGISTRY_ENABLED=0` → silent no-op. |
@@ -121,7 +121,7 @@ Each `<run-id>.json` record (schema_version 2) contains:
 | `overlaps --run-id ID [--strict] [--scope-json FILE]` | Computes path intersection against every other live record's scope AND `held_paths`. JSON payload includes a `peers` array (per-peer scope overlaps) and a top-level `held_conflict` flat array (held×held intersections across all live lease-capable peers; each entry: `{"path","peer_run_id","holder_seniority"}`). `held_conflict` is absent when there are no held-path conflicts — it is NOT nested inside each peer entry. Exit codes: `0` none, `10` advisory, `20` blocking (strict mode + explicit×explicit exact match). |
 | `list [--json]` | Returns all records (live and stale). |
 | `reap` | Deletes records where (a) host=localhost AND pid is dead, OR (b) past 2× stale threshold AND NOT a live-local-pid (see "Reaper carve-out" below). Marks remote/unknown-host records as `status:"stale"` at 1× threshold (no delete). |
-| `deregister --run-id ID [--status complete\|aborted]` | Removes `<active>/ID.json`. Emits `plan_deregistered`. |
+| `deregister --run-id ID [--status complete\|aborted]` | Removes `<active>/ID.json`. Emits `plan_deregistered`. Also attempts `_sigterm_watchdog()` (currently a guaranteed no-op — see below). |
 
 ### Scope-extractor integration
 
@@ -229,13 +229,23 @@ The `reap` subcommand (and its inline counterpart `_reap_inline()`) has a specif
 
 **Note:** `_reap_inline()` is the inline version called inside `wait-for`'s poll loop. It shares identical deletion/carve-out policy with `cmd_reap` but accepts a pre-resolved `active_dir` to avoid repeated `plan-path.sh` subprocess calls in tight poll loops.
 
+### Watchdog PID field — currently inert (dead code, flagged for cleanup)
+
+`register`/`heartbeat --watchdog-pid PID` (an advisory field) and `_sigterm_watchdog()` (line 281, invoked from `cmd_deregister`) exist in `scripts/active-plan-registry.py`, but **as of the 2026-06-21 statusline-hud cutover they do nothing in production**:
+
+- Commit `4216c05` ("cutover to scheduled hang-check, retire daemon poller (T008-T009)") deleted the long-lived `watchdog-spawn.sh`/`watchdog-sweep.sh` daemon-poller pair and replaced it with a scheduled **one-shot** `schedule-hang-check.sh` → `hang-check.sh` (no persistent sweep process, no pid to track).
+- Nothing writes `<plan>/active/<run-id>.watchdog.pid` anymore, and neither `skills/z-execute/SKILL.md` nor `skills/z-plan/SKILL.md` passes `--watchdog-pid` to `register` or `heartbeat`.
+- `_sigterm_watchdog()`'s first line of work is `pid_file.exists()` — since the file is never written, this is a **guaranteed no-op** on every `deregister` call.
+- This is documented in the commit message itself: *"active-plan-registry.py watchdog_pid/SIGTERM code left inert (deregister reads a pid file that's never written -> no-op) to avoid registry churn; flagged for later cleanup."*
+- The `--watchdog-pid` CLI flags and the `watchdog_pid` record field are still accepted/emitted by the schema (harmless), but treat them as vestigial. Do not build new watchdog integration on top of them — the live mechanism is `schedule-hang-check.sh` / `hang-check.sh` / `notify-watchdog.sh` (see `docs/human/watchdog.md`), which does not touch the active-plan registry at all.
+
 ### Wedged-but-alive senior: no auto-preemption (known limitation)
 
 **If a senior run is stuck** (e.g., waiting on user input, hung in a network call, or paused by the OS) but its pid is still alive on the same host, the reaper carve-out keeps its leases alive indefinitely. Juniors will burn their full budget then abort.
 
 There is **no automatic preemption**. By design — preemption would require a distributed lock or compare-and-delete, which the lockless registry does not have.
 
-**Diagnosis:** run `/z-where`. The output shows each plan's `held_paths`, `waiting_on`, and heartbeat age. Wait-edges are rendered as `A ──waits──▶ B`. A senior with stale heartbeat and live held_paths is the culprit.
+**Diagnosis:** run `/z-stats`. The output shows each plan's `held_paths`, `waiting_on`, and heartbeat age. Wait-edges are rendered as `A ──waits──▶ B`. A senior with stale heartbeat and live held_paths is the culprit.
 
 **Resolution (manual):**
 
@@ -269,7 +279,7 @@ A mechanical fallback is documented for offline use (parse `**Files:**` lines di
 
 ### `/z-execute`
 
-**Phase 0.0** (runs before the existing follow-up-running check):
+**Phase 0.0** (runs immediately after Setup step 3 binds `$BASE`, i.e. after slug discovery and all tree-validation gates — see "ORDERING" note in `skills/z-execute/SKILL.md` Phase 0.0):
 
 1. `register` the current run
 2. Invoke `scope-extractor` (Haiku) to populate scope
@@ -299,9 +309,9 @@ for each task T:
      On halt mid-task: rely on deregister/reap (do not release a partial edit)
 ```
 
-### `/z-plan`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
+### `/z-plan`, `/z-debug`, `/z-audit`, `/z-plan-split`
 
-All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `scope-extractor` runs after TASKS.md is written (Phase 8) to seed scope for overlap detection.
+All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `register` happens right after a successful plan-claim acquire (before scope is known); `scope-extractor` runs later, immediately after TASKS.md and complexity stamps are finalized (Phase 8), to seed scope for overlap detection. `/z-plan` also does a non-fatal, read-only `list --json` "awareness read" right after claim+register purely as an FYI to the user — it never gates any subsequent phase.
 
 ### Hermes orchestration
 
@@ -372,9 +382,9 @@ For full env-knob documentation including the base fallback chain and revert met
 
 ---
 
-## Discoverability: `/z-where`
+## Discoverability: `/z-stats`
 
-Run `/z-where` at any time to see:
+Run `/z-stats` at any time to see:
 - Resolved base (+ tier)
 - Repo-id
 - Active plans from `active-plan-registry.py list` (slug, command, phase, branch, current_task, heartbeat age, overlap-with-me)
@@ -395,7 +405,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 - `scripts/active-plan-registry.py:1642` — `cmd_overlaps` — scope+held-path intersection check
 - `scripts/active-plan-registry.py:1883` — `cmd_reap` — conservative dead-record cleanup
 - `scripts/active-plan-registry.py:1532` — `_reap_inline` — wait-for's internal reap (pre-resolved active_dir)
-- `scripts/active-plan-registry.py:281` — `_sigterm_watchdog` — best-effort SIGTERM/SIGKILL cleanup using `<plan>/active/<run-id>.watchdog.pid`; registry `watchdog_pid` is observability-only
+- `scripts/active-plan-registry.py:281` — `_sigterm_watchdog` — best-effort SIGTERM/SIGKILL cleanup using `<plan>/active/<run-id>.watchdog.pid`; registry `watchdog_pid` is observability-only. **Currently a guaranteed no-op in production** — nothing writes the pid file since the 2026-06-21 hang-check cutover (see "Watchdog PID field — currently inert" above).
 - `scripts/active-plan-registry.py:439` — `_is_lease_capable` — schema-v2 + held_paths guard
 - `scripts/active-plan-registry.py:460` — `_is_senior` — canonical lexicographic run_id ordering predicate
 - `scripts/plan-path.sh:178` — `z_harness_base` — five-tier base resolution with anchor
@@ -406,10 +416,11 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 
 - `plan-claim` — orthogonal hard slug-level mutex; uses `claims_dir()` from plan-path.sh. The lockless registry is advisory; plan-claim is the hard gate. Hermes cross-plan paths acquire plan-claim locks before operating.
 - `hermes-orchestration` — calls `session-id` at workstream start; depends on registry for concurrent plan awareness.
-- `commands` (z-execute, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
+- `commands` (z-execute, z-plan, z-stats, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
 - `artifact-scout` — consumes registry records through `artifact-scout-inventory.py` for duplicate/collision warnings. It is advisory and cannot mutate records or replace `overlaps`/lease enforcement.
 - `followup-sink` — shares `<base>` via `followups_dir()`; must not participate in per-entry→global lock ordering of `followup_common.py`.
 - `plan-layout-migration` — `migrate-plan-layout.sh` gates on `list --json` to refuse when any run is live.
+- `watchdog` (`docs/human/watchdog.md`) — historically shared a pid-file handoff with this registry (`watchdog_pid` field, `_sigterm_watchdog`); that link is now severed — the live watchdog mechanism (`schedule-hang-check.sh`/`hang-check.sh`) does not touch the registry at all. Treat the two subsystems as decoupled going forward.
 
 ## Edge cases / gotchas
 
@@ -423,6 +434,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 - `_reap_inline()` is the poll-loop reaper; `cmd_reap` is the CLI subcommand. Same policy, different call site — `_reap_inline` takes pre-resolved `active_dir`.
 - `session-id` on macOS uses `<ppid>-<current_epoch>` fallback; export `Z_HARNESS_SESSION_ID` once at run start to stabilize across repeated calls.
 - `Z_HARNESS_WAIT_REQUIRE_MERGE=1` is reserved/deferred — branch-ancestor cleared logic is NOT wired.
+- **`watchdog_pid` / `_sigterm_watchdog` are dead code in current production paths** (since commit `4216c05`, 2026-06-21): no caller passes `--watchdog-pid`, nothing writes `<plan>/active/<run-id>.watchdog.pid`, so the deregister-time SIGTERM cleanup is a guaranteed no-op. Left in place intentionally to avoid registry-schema churn; explicitly flagged in the retiring commit for later cleanup. Do not build new functionality on this field — the live watchdog path (`schedule-hang-check.sh`) is entirely separate from the registry.
 
 ## Examples
 
@@ -438,6 +450,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 
 - `docs/human/config.md` — base-dir env knobs + full fallback chain + revert methods
 - `docs/human/PLAN-LAYOUT.md` — plan directory layout + migration guide
+- `docs/human/watchdog.md` — the current (decoupled) watchdog mechanism: `schedule-hang-check.sh` / `hang-check.sh` / `notify-watchdog.sh`
 - `docs/handoff-parallel-session-safety.md` — incident record + root-cause analysis + resolution note
 - `scripts/active-plan-registry.py` — registry implementation
 - `scripts/plan-path.sh` — base resolution + all path helpers

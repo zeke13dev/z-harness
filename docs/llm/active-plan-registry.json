@@ -1,6 +1,7 @@
 {
   "concept": "active-plan-registry",
-  "last_updated": "2026-06-24",
+  "summary": "Lockless per-run JSON registry (under the external artifact base) that lets concurrent z-harness sessions discover each other's plans, seed likely file scope via a Haiku scope-extractor, and advisorily coordinate via a per-file claim/release/wait-for lease mechanism; overlap is always advisory except one strict-mode hard gate.",
+  "last_updated": "2026-07-09",
   "covers_spec": "cross-session-plan-coord",
   "source_file": [
     "scripts/active-plan-registry.py",
@@ -26,7 +27,7 @@
       "line": 675,
       "symbol": "cmd_register",
       "kind": "fn",
-      "summary": "register subcommand: creates/overwrites <active>/<run-id>.json atomically via tmpfile+os.replace. Validates run_id safe basename. Idempotent. Emits plan_registered. Returns 0 on success, 3 on failure (LOUD)."
+      "summary": "register subcommand: creates/overwrites <active>/<run-id>.json atomically via tmpfile+os.replace. Validates run_id safe basename. Idempotent. Emits plan_registered. Returns 0 on success, 3 on failure (LOUD). Accepts optional --watchdog-pid, but no current caller passes it (currently inert field)."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -54,7 +55,7 @@
       "line": 877,
       "symbol": "cmd_deregister",
       "kind": "fn",
-      "summary": "deregister subcommand: atomic unlink of <active>/<run-id>.json. FileNotFoundError is benign (no registry_error). Genuine OSError self-logs registry_error. Emits plan_deregistered. NON-FATAL always returns 0."
+      "summary": "deregister subcommand: atomic unlink of <active>/<run-id>.json. FileNotFoundError is benign (no registry_error). Genuine OSError self-logs registry_error. Emits plan_deregistered. NON-FATAL always returns 0. Also invokes _sigterm_watchdog() (currently always a no-op — no .watchdog.pid file is ever written in production)."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -89,7 +90,7 @@
       "line": 1883,
       "symbol": "cmd_reap",
       "kind": "fn",
-      "summary": "reap subcommand: (a) host=localhost AND pid dead → delete immediately; live-local-pid carve-out: host=localhost AND pid confirmed alive AND past 2× stale → mark status:stale, do NOT delete (deferred until pid dies); (b) past 2× stale margin AND no live-local-pid → delete (remote/unknown-host, missing/non-int pid); (c) remote/unknown host past 1× → mark status:stale only. NON-FATAL overall. Emits plan_reaped / plan_marked_stale. _reap_inline() (line 1423) duplicates the logic for use inside wait-for's poll loop without re-resolving active_plans_dir."
+      "summary": "reap subcommand: (a) host=localhost AND pid dead → delete immediately; live-local-pid carve-out: host=localhost AND pid confirmed alive AND past 2× stale → mark status:stale, do NOT delete (deferred until pid dies); (b) past 2× stale margin AND no live-local-pid → delete (remote/unknown-host, missing/non-int pid); (c) remote/unknown host past 1× → mark status:stale only. NON-FATAL overall. Emits plan_reaped / plan_marked_stale. _reap_inline() (line 1532) duplicates the logic for use inside wait-for's poll loop without re-resolving active_plans_dir."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -117,7 +118,7 @@
       "line": 535,
       "symbol": "_build_record",
       "kind": "fn",
-      "summary": "Helper: builds a fresh schema-v2 record dict. schema_version=2, includes held_paths:[] and waiting_on:[] fields. v1 records (pre-lease) lack these fields and are treated as lease-incapable by _is_lease_capable."
+      "summary": "Helper: builds a fresh schema-v2 record dict. schema_version=2, includes held_paths:[] and waiting_on:[] fields, plus a watchdog_pid field (currently always None/inert in production — no caller populates it). v1 records (pre-lease) lack held_paths/waiting_on and are treated as lease-incapable by _is_lease_capable."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -173,7 +174,7 @@
       "line": 281,
       "symbol": "_sigterm_watchdog",
       "kind": "fn",
-      "summary": "Best-effort SIGTERM/SIGKILL cleanup for the per-run hang-check watchdog using the authoritative .watchdog.pid file; registry watchdog_pid is observability only"
+      "summary": "Best-effort SIGTERM/SIGKILL cleanup for the per-run hang-check watchdog using the authoritative .watchdog.pid file; registry watchdog_pid is observability only. CURRENTLY DEAD CODE in production: since commit 4216c05 (2026-06-21) retired the daemon-poller watchdog in favor of a one-shot schedule-hang-check.sh, nothing writes .watchdog.pid, so pid_file.exists() is always False and this is a guaranteed no-op."
     }
   ],
   "depends_on": [
@@ -198,7 +199,7 @@
     "wait-for clears waiting_on on EVERY exit path (via finally) — no paused zombie is ever left behind, including on SIGINT.",
     "Release is per task, not per merge — leases are dropped on each task's clean success, not when the branch merges.",
     "Live-local-pid carve-out: a confirmed-alive local pid past 2x stale is marked status:stale but NOT deleted — requires integer pid + os.kill(pid,0) success. Missing/non-int pid does NOT qualify for the carve-out.",
-    "watchdog_pid in registry records is advisory observability only; the authoritative cleanup source is <plan>/active/<run-id>.watchdog.pid, which _sigterm_watchdog reads during deregister."
+    "watchdog_pid/_sigterm_watchdog are NOT a load-bearing dependency of any command — as of 2026-06-21 (commit 4216c05) nothing writes the .watchdog.pid file, so the field and cleanup helper are inert; do not add new behavior that assumes they fire."
   ],
   "gotchas": [
     "Z_HARNESS_BASE_DIR bypasses the anchor — two sessions with different Z_HARNESS_BASE_DIR values will partition their registries silently; the anchor exists to prevent exactly this.",
@@ -216,7 +217,7 @@
     "Z_HARNESS_WAIT_REQUIRE_MERGE=1 is reserved/deferred — the branch-ancestor cleared logic is NOT wired. Leave at 0. The operative cleared signal is deregister-only.",
     "run_id ordering is LEXICOGRAPHIC string comparison, NOT chronological by started_at. started_at is display-only. The _is_senior helper is the single authoritative predicate — never use started_at for ordering comparisons.",
     "_reap_inline() is the wait-for-internal reaper. It is NOT the same callsite as cmd_reap (the subcommand). Both share the same deletion/carve-out policy but _reap_inline takes a pre-resolved active_dir to avoid repeated plan-path.sh subprocess calls in tight poll loops.",
-    "register/heartbeat --watchdog-pid updates only the advisory record field. If the field and .watchdog.pid disagree, watchdog cleanup follows the file, not the registry value."
+    "register/heartbeat --watchdog-pid and _sigterm_watchdog are DEAD CODE in current production paths: since commit 4216c05 (2026-06-21, 'cutover to scheduled hang-check, retire daemon poller') deleted watchdog-spawn.sh/watchdog-sweep.sh, nothing writes <plan>/active/<run-id>.watchdog.pid and no SKILL.md caller passes --watchdog-pid. deregister's _sigterm_watchdog call is a guaranteed no-op. The commit message explicitly flags this for later cleanup — left in place to avoid registry-schema churn. The live watchdog mechanism (schedule-hang-check.sh / hang-check.sh / notify-watchdog.sh) is entirely decoupled from this registry."
   ],
   "events": [
     {

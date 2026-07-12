@@ -931,20 +931,57 @@ class TestCostGateBudgetResolverMatrix(unittest.TestCase):
 
 
 class TestZPlanCostGateSkillText(unittest.TestCase):
-    """Structural assertions for the documented /z-plan cost-gate branch."""
+    """Structural assertions for the documented /z-plan cost-gate branch.
+
+    T113 extracted the cost gate's mechanical bash/python (dispatch-count
+    computation, GATE_JSON normalization/parsing, sanitized-error mapping,
+    apply-reduction, halt-finalize) into scripts/zplan-cost-gate-runtime.sh,
+    and its decision-table/telemetry-field reference tables into
+    _fragments/zplan-cost-gate-reference.md. Assertions whose target text
+    moved now also read those two files (test update reconciling T113's
+    intentional extraction, not a product regression).
+    """
 
     _Z_PLAN_SKILL = _REPO_ROOT / "skills" / "z-plan" / "SKILL.md"
+    _COST_GATE_RUNTIME_SH = _REPO_ROOT / "scripts" / "zplan-cost-gate-runtime.sh"
+    _COST_GATE_REFERENCE_MD = _REPO_ROOT / "_fragments" / "zplan-cost-gate-reference.md"
+    _Z_TEARDOWN_SH = _REPO_ROOT / "scripts" / "z-teardown.sh"
 
     def setUp(self):
         if not self._Z_PLAN_SKILL.exists():
             self.skipTest(f"z-plan skill not found at {self._Z_PLAN_SKILL}")
         self._content = self._Z_PLAN_SKILL.read_text(encoding="utf-8")
+        self._runtime_content = (
+            self._COST_GATE_RUNTIME_SH.read_text(encoding="utf-8")
+            if self._COST_GATE_RUNTIME_SH.exists()
+            else ""
+        )
+        self._reference_content = (
+            self._COST_GATE_REFERENCE_MD.read_text(encoding="utf-8")
+            if self._COST_GATE_REFERENCE_MD.exists()
+            else ""
+        )
+        self._teardown_content = (
+            self._Z_TEARDOWN_SH.read_text(encoding="utf-8")
+            if self._Z_TEARDOWN_SH.exists()
+            else ""
+        )
+        # Union of all three files: the cost gate's documented contract now
+        # spans the skill, its runtime script, and its reference fragment.
+        self._all_content = "\n".join(
+            (self._content, self._runtime_content, self._reference_content)
+        )
 
     def test_malformed_helper_json_is_sanitized_not_logged_raw(self):
-        self.assertIn('"error": "malformed_helper_json"', self._content)
+        # GATE_JSON normalization (where "malformed_helper_json" is produced)
+        # now lives in scripts/zplan-cost-gate-runtime.sh's call-gate
+        # subcommand; the sanitized-error-outcome table lives in
+        # _fragments/zplan-cost-gate-reference.md. GATE_SANITIZED_ERROR is
+        # still read directly in skills/z-plan/SKILL.md's terminal branches.
+        self.assertIn('"error": "malformed_helper_json"', self._all_content)
         self.assertIn("GATE_SANITIZED_ERROR", self._content)
-        self.assertIn("Raw helper text is never logged", self._content)
-        self.assertIn("choice_source=sanitized_helper_error", self._content)
+        self.assertIn("Raw helper text is never logged", self._all_content)
+        self.assertIn("choice_source=sanitized_helper_error", self._all_content)
 
     def test_reestimate_attempt_telemetry_shape_is_documented(self):
         for marker in (
@@ -976,15 +1013,36 @@ class TestZPlanCostGateSkillText(unittest.TestCase):
         self.assertIn("Never emit a generic \"successful gate\" `cost_gate_decision`", self._content)
 
     def test_cleanup_matrix_and_release_before_deregister_ordering(self):
-        self.assertIn("Cleanup matrix:", self._content)
+        # T113 moved the cleanup matrix to _fragments/zplan-cost-gate-reference.md
+        # and zplan_cost_gate_halt_finalize's body to
+        # scripts/zplan-cost-gate-runtime.sh's halt-finalize subcommand, which
+        # delegates release-before-deregister ordering to scripts/z-teardown.sh
+        # (T106's one-funnel teardown convention). This test now verifies the
+        # ordering at its actual location instead of the now-moved inline
+        # markdown text (test update reconciling T113's intentional change,
+        # not a product regression).
+        self.assertIn("Cleanup matrix", self._all_content)
         self.assertIn("Run Brief — halt finalize", self._content)
-        release_idx = self._content.find("plan-claim.sh\" release", self._content.find("zplan_cost_gate_halt_finalize"))
-        deregister_idx = self._content.find("active-plan-registry.py\" deregister", self._content.find("zplan_cost_gate_halt_finalize"))
-        self.assertGreater(release_idx, -1, "cost-gate halt helper must release the claim")
-        self.assertGreater(deregister_idx, -1, "cost-gate halt helper must deregister after release")
-        self.assertLess(release_idx, deregister_idx, "cost-gate halt cleanup must release before deregister")
+
+        # skills/z-plan/SKILL.md's zplan_cost_gate_halt_finalize delegates to
+        # the runtime script's halt-finalize subcommand.
+        halt_finalize_fn = self._content[self._content.find("zplan_cost_gate_halt_finalize() {"):]
+        self.assertIn("halt-finalize", halt_finalize_fn[: halt_finalize_fn.find("\n}")])
+
+        # The runtime script's halt-finalize subcommand calls z-teardown.sh.
+        runtime_halt_finalize = self._runtime_content[self._runtime_content.find("halt-finalize)"):]
+        self.assertIn("TEARDOWN_SH", runtime_halt_finalize[: runtime_halt_finalize.find("\n  ;;")])
+
+        # z-teardown.sh itself releases the claim before deregistering
+        # (its own documented, unchanged invariant).
+        release_idx = self._teardown_content.find('"$PLAN_CLAIM_SH" release')
+        deregister_idx = self._teardown_content.find('deregister --run-id')
+        self.assertGreater(release_idx, -1, "z-teardown.sh must release the claim")
+        self.assertGreater(deregister_idx, -1, "z-teardown.sh must deregister after release")
+        self.assertLess(release_idx, deregister_idx, "z-teardown.sh must release before deregister")
 
     def test_cleanup_matrix_covers_terminal_branches(self):
+        # Table now lives in _fragments/zplan-cost-gate-reference.md (T113).
         for branch in (
             "| `auto_proceed` |",
             "| `ask` → Proceed |",
@@ -999,7 +1057,7 @@ class TestZPlanCostGateSkillText(unittest.TestCase):
             "| Missing estimate fields |",
             "| Interrupted user wait after claim/register |",
         ):
-            self.assertIn(branch, self._content)
+            self.assertIn(branch, self._reference_content)
 # ---------------------------------------------------------------------------
 # Run tests
 # ---------------------------------------------------------------------------

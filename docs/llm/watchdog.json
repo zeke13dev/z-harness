@@ -1,8 +1,9 @@
 {
   "concept": "watchdog",
-  "last_updated": "2026-06-24",
+  "summary": "Two-layer liveness protection: supervised-run.sh enforces hard process-group deadlines for killable subprocesses (confirmed active in production telemetry); schedule-hang-check.sh/hang-check.sh schedule a metrics-derived one-shot stall detector for native-agent stalls that has never been observed to fire outside tests.",
+  "last_updated": "2026-07-09",
   "covers_spec": "silent-failure-watchdog/statusline-hud",
-  "source_files": [
+  "source_file": [
     "scripts/supervised-run.sh",
     "scripts/hang-threshold.py",
     "scripts/schedule-hang-check.sh",
@@ -12,25 +13,25 @@
     "scripts/check-timeout.sh",
     "scripts/config.py",
     "scripts/active-plan-registry.py",
+    "scripts/hermes/watchdog_webhook.py",
     "agents/reviewer.md",
     "agents/remote-runner.md",
     "skills/z-execute/SKILL.md",
     "skills/z-overnight/SKILL.md"
   ],
-  "confidence": "high",
-  "summary": "Two-layer liveness protection: supervised-run enforces hard deadlines for killable subprocesses, while z-execute/z-overnight schedule one-shot hang-checks based on metrics-derived thresholds to detect and notify on native-agent stalls.",
+  "confidence": "medium",
   "entry_points": [
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 130,
-      "symbol": "z-execute hang-check scheduling",
+      "line": 138,
+      "symbol": "z-execute hang-check scheduling (step 1b)",
       "kind": "module",
       "summary": "Schedules schedule-hang-check.sh after successful registry registration when watchdog and registry are enabled."
     },
     {
       "file": "skills/z-overnight/SKILL.md",
       "line": 251,
-      "symbol": "z-overnight hang-check scheduling",
+      "symbol": "z-overnight hang-check scheduling (step 11)",
       "kind": "module",
       "summary": "Schedules a one-shot hang-check at a metrics-derived horizon; no daemon teardown required."
     },
@@ -53,14 +54,14 @@
       "line": 1,
       "symbol": "schedule-hang-check",
       "kind": "script",
-      "summary": "Schedules self-removing launchd one-shot or detached fallback for hang-check.sh."
+      "summary": "Schedules self-removing launchd one-shot or detached fallback for hang-check.sh; emits no scheduling telemetry."
     },
     {
       "file": "scripts/hang-check.sh",
       "line": 1,
       "symbol": "hang-check",
       "kind": "script",
-      "summary": "One-shot liveness check; exits 0; notifies once when stale unmatched starts remain."
+      "summary": "One-shot liveness check; exits 0; notifies once (watchdog_stall) only when stale unmatched starts remain."
     },
     {
       "file": "scripts/liveness.sh",
@@ -74,21 +75,21 @@
       "line": 1,
       "symbol": "notify-watchdog",
       "kind": "script",
-      "summary": "Best-effort Discord/macOS alert path for watchdog_stall and watchdog_timeout."
+      "summary": "Best-effort Discord/macOS alert path for watchdog_stall and watchdog_timeout, gated by notify.level."
     },
     {
       "file": "scripts/check-timeout.sh",
-      "line": 37,
+      "line": 40,
       "symbol": "timeout_backend",
       "kind": "fn",
-      "summary": "Resolve timeout, gtimeout, or bash_fallback backend."
+      "summary": "Resolve timeout, gtimeout, or bash_fallback backend; header still mentions retired watchdog-sweep.sh."
     },
     {
       "file": "scripts/config.py",
-      "line": 191,
+      "line": 243,
       "symbol": "watchdog defaults",
       "kind": "config",
-      "summary": "watchdog.enabled, stale_secs, kill_grace_secs, intervention_level, timeout_secs.*."
+      "summary": "watchdog.enabled (default true), stale_secs, kill_grace_secs, intervention_level, timeout_secs.*."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -98,15 +99,22 @@
       "summary": "Legacy pid-file cleanup during deregister; best-effort and non-fatal."
     },
     {
+      "file": "scripts/hermes/watchdog_webhook.py",
+      "line": 1,
+      "symbol": "watchdog_webhook (orphaned)",
+      "kind": "module",
+      "summary": "Only self-referenced; no importers found. Superseded by scripts/hermes/mcp-hermes-orchestrator.py."
+    },
+    {
       "file": "agents/reviewer.md",
-      "line": 47,
+      "line": 48,
       "symbol": "reviewer supervised-run",
       "kind": "agent",
       "summary": "External reviewer provider calls are wrapped in supervised-run."
     },
     {
       "file": "agents/remote-runner.md",
-      "line": 68,
+      "line": 71,
       "symbol": "remote supervised operations",
       "kind": "agent",
       "summary": "rsync/cargo/ssh remote operations run under supervised-run and emit orphan hints on timeout."
@@ -114,40 +122,42 @@
   ],
   "depends_on": [
     "config",
-    "active-plan-registry",
-    "agents",
-    "remote-runner",
-    "notification"
+    "active-plan-registry"
   ],
   "consumed_by": [
-    "z-execute",
-    "z-overnight",
-    "reviewer",
-    "remote-runner"
+    "reviewer-capture",
+    "agents"
   ],
   "invariants": [
-    "Killable subprocesses can be killed; native Agent stalls are alert-only.",
-    "dispatch_id is mandatory for robust lease matching.",
-    "supervised-run diagnostics are stderr-only; child stdout is preserved.",
-    "Exit 124 means the wrapper enforced timeout.",
-    "Telemetry/notify failures are fail-open.",
-    "Scheduled hang-check exits 0 and never fails loudly.",
-    "Notify-once marker dedups repeated stall alerts.",
-    "watchdog.timeout_secs.* is config-file-only."
+    "Killable subprocesses can be killed and routed to retry/halt; native Agent stalls can only be detected and alerted.",
+    "dispatch_id pairs dispatch start/end events; matching must not rely only on type or pid.",
+    "supervised-run.sh preserves child stdout and writes its own diagnostics to stderr.",
+    "Exit code 124 means the wrapper enforced a deadline.",
+    "Watchdog telemetry and notification are fail-open; failure must not prevent the wrapped command or scheduled check from completing.",
+    "Scheduled hang-check exits 0 even on detection/evaluation issues; it must not fail loudly.",
+    "Notify-once markers prevent repeated alerts for the same run/reason.",
+    "watchdog.timeout_secs.* is config-file-only and read via config.py get, not env-exported.",
+    "notify.level defaults to approval_only and watchdog_stall/watchdog_timeout are in the approval_only fire-set (since commit e6c54a0, 2026-06-19)."
   ],
   "gotchas": [
-    "Old watchdog-sweep/watchdog-spawn daemon path is retired and scripts may be absent.",
-    "Notifications must be configured or stalls are silent aside from events/output.",
-    "liveness.sh lifecycle deny-list avoids treating run/phase starts as stuck subagents.",
-    "Sparse metrics classes use watchdog.stale_secs fallback.",
-    "Remote timeouts may leave remote units alive; remote-runner emits cleanup hints."
+    "Old watchdog-sweep.sh/watchdog-spawn.sh daemon scripts are gone from the tree; do not document them as live paths.",
+    "schedule-hang-check.sh emits no scheduling telemetry event, so 0 watchdog_stall events in history does not distinguish never-scheduled from scheduled-but-never-stale.",
+    "As of this refresh: 0 watchdog_stall events found anywhere in local .local/state/z-harness run history (all repos, all runs); Layer 1 (supervised-run) has 124+ real dispatch pairs and confirmed real (non-test) watchdog_timeout firings.",
+    "The 2026-06-21 'notify.level=off' root cause for Layer 2 silence is stale — fixed 2026-06-19 in commit e6c54a0; current silence is unexplained by config, not a known misconfiguration.",
+    "liveness.sh ignores broad lifecycle brackets and focuses on subagent/action starts with matching ends.",
+    "hang-threshold.py class keys depend on event fields that actually exist (persona_attempt_outcome role/tier, subagent_model, or kind).",
+    "Remote command timeouts may leave a remote systemd-run unit alive; remote-runner emits remote_orphan_possible guidance.",
+    "scripts/hermes/watchdog_webhook.py is dead code (no importers); do not treat as live Discord so integration.",
+    "check-timeout.sh header comments still reference watchdog-sweep.sh as a caller; stale comment, not a real dependency."
   ],
   "event_vocabulary": [
     "dispatch_start",
     "dispatch_end",
     "watchdog_timeout",
     "watchdog_stall",
-    "remote_orphan_possible"
+    "remote_orphan_possible",
+    "timeout_availability",
+    "timeout_degraded"
   ],
   "config_vocabulary": [
     "watchdog.enabled",
@@ -158,7 +168,8 @@
     "watchdog.timeout_secs.ssh",
     "watchdog.timeout_secs.rsync",
     "watchdog.timeout_secs.cargo",
-    "watchdog.timeout_secs.reviewer"
+    "watchdog.timeout_secs.reviewer",
+    "notify.level"
   ],
   "memories": [
     {

@@ -6,7 +6,7 @@
 > (default `false`). To revive, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
 > Deletion of `scripts/hermes/` is a **deferred cleanup** — files are kept to prevent bit-rot until
 > a deliberate removal task is planned.
-> **Version:** 1.6.0
+> **Version:** 1.7.0
 >
 > This document defines the contract between z-harness (the planning layer)
 > and any orchestrator (the execution layer) that wants to execute z-harness
@@ -19,6 +19,7 @@
 > **v1.4** (amended 2026-06-16): Hermes gated OFF by default (`workflow.hermes_enabled=false`). All concurrency/retry/timeout knobs moved from `HERMES_*` env vars to `workflow.*` file config. File deletion deferred.
 > **v1.5** (amended 2026-07-03): `/z-plan-split` fanout uses MCP `so` sessions over grouped split-plan cluster directories. Split workstreams are not required to contain `<path>/TASKS.md`; legacy flat `/z-plan` executors may still require that path.
 > **v1.6** (amended 2026-07-03): Intent-mode `/z-execute` treats `work-graph.json` as the append-only known-work DAG. `workstreams.json` remains static scope/conflict metadata; levels are computed ready sets over the graph, not preplanned execution phases.
+> **v1.7** (amended 2026-07-09, doc refresh): Corrected the cycle-detection contract in the 5-rule algorithm (see below) — `scripts/generate-workstreams.py` now hard-fails (`CycleError`, exit 2, no file written) instead of emitting a `partial_tree: true` manifest with an empty `workstreams` array. Documented `scripts/hermes/config.py` multi-project Discord `so`-gateway config (`DiscordSoConfig`/`DiscordProjectAlias`).
 
 ---
 
@@ -251,8 +252,13 @@ lines across all tasks into a DAG via a deterministic 5-rule algorithm:
    `Txxx → this task` is an edge.
 2. **Assign depths.** Depth 0 for tasks with no dependencies;
    `depth = max(parent depths) + 1` otherwise. If cycles are detected,
-   the TASKS.md is malformed — reject, set `partial_tree: true`, and
-   emit a minimal `workstreams.json` with an empty `workstreams` array.
+   the TASKS.md is malformed — `run_5rule_algorithm` raises `CycleError`,
+   which propagates uncaught out of `build_from_flat`/`build_workstreams_json`.
+   `scripts/generate-workstreams.py main()` catches it at the top level,
+   prints `Cycle detected: ...` to stderr, and exits 2 — **no `workstreams.json`
+   is written** (this replaced the older behavior of emitting a minimal
+   `partial_tree: true` manifest with an empty `workstreams` array; callers
+   MUST treat a nonzero exit as "no manifest available", not "empty manifest").
 3. **Group by depth.** Each depth group becomes a workstream candidate.
 4. **Collapse linear chains.** If depth N has exactly 1 task AND that
    task is the sole dependency of depth N+1 (which also has exactly 1
@@ -613,6 +619,36 @@ The operator must identify non-file shared-state dependencies manually and set
 `workflow.serialize_all = true` (or `workflow.max_parallel_workstreams = 1`)
 accordingly. There is no automatic detection for these cases.
 
+### Multi-project Discord `so`-gateway config
+
+`scripts/hermes/config.py` also loads a `discord.so` block (`DiscordSoConfig`) used by the
+external Hermes gateway (`~/.hermes/hermes-agent`) to scope and route `so` MCP sessions across
+multiple local checkouts:
+
+```yaml
+discord:
+  bot_token: "..."
+  user_id: "..."
+  so:
+    allowed_user_ids: ["123456789"]
+    allowed_channel_ids: ["987654321"]
+    allowed_hosts: ["my-mac", "my-server"]
+    project_aliases:
+      qt-bot:
+        repo_root: "/Users/me/dev/qt-bot"
+        execution_host: "my-server"
+        transport: "ssh"
+        ssh_target: "me@my-server"
+        workdir: "/home/me/qt-bot"
+```
+
+`allowed_user_ids` / `allowed_channel_ids` / `allowed_hosts` gate who/where `so` sessions may be
+spawned from; `project_aliases` maps a short project name to a repo root plus an optional
+remote execution target (local vs SSH transport), so one Discord gateway can drive `so` sessions
+against several checkouts without hardcoding paths. This config is consumed by the external
+gateway, not by `scripts/hermes-execute.py` directly — `load_config()` in this repo only parses
+and validates the block.
+
 ### Deferred cleanup
 
 The `scripts/hermes/` directory and `scripts/hermes-execute.py` are intentionally **not deleted**
@@ -759,6 +795,8 @@ Schema evolution rules:
 | v1.3 | `parallel_group` populated (`level-{depth}`); `scope_unknown`; concurrency execution contract; cross-plan `--slugs` mode; non-file shared-state limitation |
 | v1.4 | Hermes gated OFF by default (`workflow.hermes_enabled=false`); `HERMES_*` env vars removed; all knobs via `workflow.*` file config; file deletion deferred |
 | v1.5 | MCP `so_start_fanout` bridge for `/z-plan-split`; split workstream paths are cluster plan directories and do not require `<path>/TASKS.md` |
+| v1.6 | Intent-mode `/z-execute` schedules over `work-graph.json` (append-only known-work DAG); `workstreams.json` stays static scope/conflict metadata |
+| v1.7 | Doc-only correction: cycle detection in `generate-workstreams.py` hard-fails (exit 2, no file written), not `partial_tree: true`; documented Discord `so`-gateway multi-project config |
 
 ---
 

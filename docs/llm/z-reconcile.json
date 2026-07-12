@@ -1,14 +1,14 @@
 {
   "concept": "z-reconcile",
-  "last_updated": "2026-06-24",
+  "summary": "Read-mostly workspace consistency audit joining worktrees, plan artifacts, active-plan registry records, claim locks, uncommitted work, and follow-up opportunities; cleanup is opt-in per flag with per-item confirmation.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
-  "source_files": [
+  "source_file": [
     "skills/z-reconcile/SKILL.md",
     "scripts/reconcile.py",
     "scripts/plan-claim.sh"
   ],
   "confidence": "high",
-  "summary": "Read-mostly workspace consistency audit joining worktrees, plan artifacts, active-plan registry records, claim locks, uncommitted work, and follow-up opportunities; cleanup is opt-in per flag with per-item confirmation.",
   "flags": [
     {
       "flag": "--prune-worktrees",
@@ -107,7 +107,7 @@
     },
     {
       "file": "scripts/plan-claim.sh",
-      "line": 416,
+      "line": 468,
       "symbol": "reap-stale",
       "kind": "script",
       "summary": "Read-only claim status: held/free/stale/corrupt; used before lock cleanup."
@@ -148,14 +148,14 @@
   "depends_on": [
     "active-plan-registry",
     "plan-claim",
-    "followups",
+    "followup-sink",
     "scripts"
   ],
   "consumed_by": [
     "operators"
   ],
   "related_commands": [
-    "z-where",
+    "z-stats",
     "z-debt",
     "z-followup-list"
   ],

@@ -8,17 +8,14 @@ rewrites, or line-rewrite helpers are imported or called here.
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 from runtime.drivers._export_utils import ExportResult, enumerate_sources, export_resume_runtime_scripts
-from runtime.drivers._persona_utils import parse_persona_file
 
 _PACKAGE_DIR = ".omp/z-harness"
 _CONFIG_PATH = ".omp/config.yml"
-_PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _current_fidelity() -> str:
@@ -101,13 +98,11 @@ def _render_manifest(repo_root: Path, sources: dict[str, list[dict[str, Any]]], 
             f"  rules: {len(_prompt_entries(sources))}\n",
             f"  prompts: {len(_prompt_entries(sources))}\n",
             f"  agents: {len(sources['agents'])}\n",
-            "  profiles: profiles/\n",
             "paths:\n",
             "  skills: skills/\n",
             "  rules: rules/\n",
             "  prompts: prompts/\n",
             "  agents: agents/\n",
-            "  profiles: profiles/\n",
             "config_guidance:\n",
             "  skills.enableAgentsProject: false\n",
         ]
@@ -139,13 +134,6 @@ def _prompt_entries(sources: dict[str, list[dict[str, Any]]]) -> list[dict[str, 
     return [by_id[key] for key in sorted(by_id)]
 
 
-def _runtime_ids(sources: dict[str, list[dict[str, Any]]]) -> set[str]:
-    ids: set[str] = set()
-    for kind in ("commands", "agents", "skills"):
-        ids.update(entry["id"] for entry in sources.get(kind, []))
-    return ids
-
-
 def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -160,65 +148,6 @@ def _remove_owned_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _profile_output_path(profiles_dir: Path, name: str) -> Path:
-    if not _PROFILE_NAME_RE.fullmatch(name):
-        raise RuntimeError(
-            "omp export invalid profile name: "
-            f"{name!r}. Profile names must be lowercase slugs containing only "
-            "letters, digits, '-' or '_', and may not contain path separators."
-        )
-    profiles_boundary = profiles_dir.absolute()
-    profile_path = (profiles_boundary / f"{name}.yml").resolve()
-    try:
-        profile_path.relative_to(profiles_boundary)
-    except ValueError:
-        raise RuntimeError(
-            "omp export invalid profile path: "
-            f"{profile_path} escapes {profiles_boundary}."
-        ) from None
-    return profile_path
-
-
-def _export_profiles(personas_dir: Path, profiles_dir: Path, runtime_ids: set[str]) -> list[Path]:
-    emitted: list[Path] = []
-    seen_profile_paths: dict[Path, Path] = {}
-    if not personas_dir.is_dir():
-        return emitted
-
-    for persona_file in sorted(personas_dir.glob("*.md")):
-        name, frontmatter, body = parse_persona_file(persona_file)
-        if name in runtime_ids or persona_file.stem in runtime_ids:
-            raise RuntimeError(
-                "omp export collision: persona/profile name "
-                f"{name!r} conflicts with an existing command/agent/skill id. "
-                "Rename the persona or the conflicting source file."
-            )
-        profile_path = _profile_output_path(profiles_dir, name)
-        if profile_path in seen_profile_paths:
-            raise RuntimeError(
-                "omp export duplicate profile name: "
-                f"{name!r} from {persona_file} would overwrite "
-                f"{seen_profile_paths[profile_path]}."
-            )
-        seen_profile_paths[profile_path] = persona_file
-        profile = [
-            "# Generated from z-harness persona source.\n",
-            f"name: {_yaml_scalar(name)}\n",
-            "type: profile\n",
-            f"source: {_yaml_scalar(persona_file.as_posix())}\n",
-            "frontmatter: |\n",
-        ]
-        for line in frontmatter.splitlines():
-            profile.append(f"  {line}\n")
-        profile.extend(["body: |\n"])
-        for line in body.splitlines():
-            profile.append(f"  {line}\n")
-        if body.endswith("\n") or not body:
-            profile.append("\n")
-        emitted.append(_write(profile_path, "".join(profile)))
-    return emitted
-
-
 def export(
     repo_root: Path,
     export_root: Path,
@@ -228,8 +157,8 @@ def export(
     """Export z-harness resources to the OMP-native package layout.
 
     The export root receives ``.omp/config.yml`` guidance plus the package root
-    ``.omp/z-harness`` containing manifest, skills, rules, prompts, agents, and
-    profiles. Fidelity remains ``partial`` until the final OMP parity gate.
+    ``.omp/z-harness`` containing manifest, skills, rules, prompts, and agents.
+    Fidelity remains ``partial`` until the final OMP parity gate.
     """
     del options
     repo_root = Path(repo_root).resolve()
@@ -261,14 +190,6 @@ def export(
         emitted.append(_write(package_root / "agents" / f"{entry['id']}.md", agent_text))
 
     emitted.extend(export_resume_runtime_scripts(repo_root, package_root))
-
-    emitted.extend(
-        _export_profiles(
-            repo_root / "personas" / "builtin",
-            package_root / "profiles",
-            _runtime_ids(sources),
-        )
-    )
 
     return ExportResult(
         dest=package_root.resolve(),

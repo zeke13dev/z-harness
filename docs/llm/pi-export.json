@@ -1,6 +1,7 @@
 {
   "concept": "pi-export",
-  "last_updated": "2026-06-24",
+  "summary": "pi (pi.dev) is an export-only compatibility target: runtime/drivers/pi/export.py renders z-harness agents/skills as pi agent/prompt files, copies vendored pi-only assets and deterministic /z-resume runtime scripts, and applies four layers of YAML frontmatter defense; no adapter/HostDriver exists, unlike OMP's native T009 support.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "runtime/drivers/pi/__init__.py",
@@ -15,11 +16,11 @@
     "scripts/lint-frontmatter.sh",
     "Makefile"
   ],
-  "confidence": "high",
+  "confidence": "medium",
   "entry_points": [
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 360,
+      "line": 370,
       "symbol": "export",
       "kind": "fn",
       "summary": "Public entry: export(repo_root, export_root, *, options=None) -> ExportResult; builds full exports/pi/ tree"
@@ -33,66 +34,73 @@
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 85,
+      "line": 86,
       "symbol": "_TOOL_MAP",
       "kind": "const",
       "summary": "Maps Claude Code/z-harness tool names to pi tool names (Glob -> find)"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 97,
+      "line": 98,
       "symbol": "_TOOL_UNSUPPORTED",
       "kind": "const",
       "summary": "Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, etc.)"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 146,
+      "line": 151,
       "symbol": "_replacement_for_line",
       "kind": "fn",
       "summary": "Rewrites Agent()/Skill() lines and AskUserQuestion()/TaskCreate()/SubagentCreate()/EnterPlanMode()/ExitPlanMode() lines to pi subagent/skill/inline hints; handles prose AskUserQuestion refs"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 193,
+      "line": 203,
       "symbol": "_yaml_quote",
       "kind": "fn",
       "summary": "Quotes YAML scalar values containing colons/brackets/hashes/quotes; preventive layer against pi YAML parse failures"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 223,
+      "line": 233,
       "symbol": "_render_agent",
       "kind": "fn",
       "summary": "Renders z-harness agent as pi agent .md with _yaml_quote, semantic model tier mapping (haiku->flash, sonnet/opus->pro), _TOOL_MAP"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 257,
+      "line": 267,
       "symbol": "_render_prompt",
       "kind": "fn",
       "summary": "Renders command as pi prompt .md; injects prompt defense after heading if no sentinel marker found"
     },
     {
       "file": "runtime/drivers/pi/export.py",
-      "line": 295,
+      "line": 305,
       "symbol": "_validate_frontmatter_yaml",
       "kind": "fn",
       "summary": "Post-export strict YAML 1.2 validation via yaml.safe_load(); silently skips if PyYAML unavailable"
+    },
+    {
+      "file": "runtime/drivers/_export_utils.py",
+      "line": 633,
+      "symbol": "export_resume_runtime_scripts",
+      "kind": "fn",
+      "summary": "Copies deterministic /z-resume runtime scripts into export root's scripts/... paths; gated on source repo having scripts/resume-context.py; shared across host drivers"
     },
     {
       "file": "scripts/lint-frontmatter.sh",
       "line": 1,
       "symbol": "lint-frontmatter.sh",
       "kind": "module",
-      "summary": "Standalone source-tree frontmatter lint; wired into make lint-frontmatter and CI at tests.yml:49"
+      "summary": "Standalone source-tree frontmatter lint; wired into make lint-frontmatter and CI at tests.yml:55"
     },
     {
       "file": "Makefile",
       "line": 74,
       "symbol": "lint-frontmatter",
       "kind": "target",
-      "summary": "make lint-frontmatter invokes scripts/lint-frontmatter.sh; wired into CI (.github/workflows/tests.yml:49)"
+      "summary": "make lint-frontmatter invokes scripts/lint-frontmatter.sh; wired into CI (.github/workflows/tests.yml:55)"
     },
     {
       "file": "scripts/pi_assets/AGENTS.preamble.md",
@@ -137,9 +145,7 @@
     "export-utils",
     "capabilities-matrix"
   ],
-  "consumed_by": [
-    "test-export-golden"
-  ],
+  "consumed_by": [],
   "invariants": [
     "pi is EXPORT-ONLY: no adapter, no HostDriver, no --host pi, no launch/inject host; all interaction is through the exported resource files",
     "skills/<id>/SKILL.md is the prompt source; commands/ is retained only as a back-compat enumerate_sources key and is normally empty in the current tree",
@@ -149,9 +155,10 @@
     "Post-export validation (_validate_frontmatter_yaml) re-validates every agent file with a strict YAML 1.2 parser; silently skips if PyYAML unavailable",
     "Model tiers are mapped on export: haiku->deepseek-v4-flash, sonnet/opus->deepseek-v4-pro; agents without a tier inherit pi's default",
     "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate, EnterPlanMode, ExitPlanMode) are rewritten line-by-line to pi hints, never silently dropped",
-    "make lint-frontmatter is wired into CI at .github/workflows/tests.yml:49; frontmatter regressions are caught at PR time",
+    "make lint-frontmatter is wired into CI at .github/workflows/tests.yml:55; frontmatter regressions are caught at PR time",
     "OMP support is separate from pi export; OMP paths must not reuse pi prompt rewrites, scripts/pi_assets, or the vendored subagent extension.",
-    "pi remains export-only while OMP is a first-class native host (T009 complete: fidelity='native', four command families native)."
+    "pi remains export-only while OMP is a first-class native host (T009 complete: fidelity='native', four command families native).",
+    "export() also copies the deterministic /z-resume runtime script set (export_resume_runtime_scripts) into the export root when the source repo has scripts/resume-context.py; this helper is shared across host drivers, not pi-specific."
   ],
   "gotchas": [
     "pi has no native subagent dispatch — fan-out runs through the vendored extensions/subagent/ extension which spawns isolated pi child processes",
@@ -162,9 +169,12 @@
     "Multi-line Agent()/Skill() call rewrites are line-based; argument lines on subsequent lines are not rewritten",
     "Many internal agents assume a driving orchestrator and may not be useful as standalone one-shot pi subagents; doc-fetcher and explore are the headline fan-out agents",
     "Agents are discovered from ~/.pi/agent/agents/*.md — NOT a pi package resource type; must be symlinked separately even when z-harness is installed as a pi package",
-    "The subagent extension at exports/pi/extensions/subagent/ is a vendored copy that must be refreshed after pi upgrades (see VENDOR.md)",
+    "The subagent extension at the export root's extensions/subagent/ is a vendored copy that must be refreshed after pi upgrades (see VENDOR.md)",
     "Do not infer OMP behavior from pi export behavior; OMP has its own frozen argv/prompt/output/event/session/profile/rules/model contract and is now native (T007/T009).",
-    ".omp/config.yml belongs to OMP sessions, not pi export; it intentionally suppresses project AGENTS autoloading."
+    ".omp/config.yml belongs to OMP sessions, not pi export; it intentionally suppresses project AGENTS autoloading.",
+    "runtime/tests/test_export_golden.py (previously the documented pi golden-snapshot consumer) was deleted 2026-06-18; current pi export coverage lives in runtime/tests/test_export_utils.py (TestPiLegacyAgentRewrite, TestPiLegacyAssetDocs) and runtime/tests/test_omp_export.py (forbidden-cross-use guard).",
+    "runtime/tests/test_export_utils.py::TestPiLegacyAssetDocs asserts against a committed exports/pi/README.md and exports/pi/CAPABILITIES.md that do not exist in this checkout (export output now goes to scratch roots like temp/exports/pi/); 3 of its assertions currently fail with FileNotFoundError — appears to be pre-existing test/tree drift, not something this doc refresh should paper over.",
+    "There is no docs/llm/export-utils.json concept doc yet even though _export_utils.py is a real dependency; depends_on keeps the export-utils reference as a placeholder for when that doc is written."
   ],
   "memories": [
     {

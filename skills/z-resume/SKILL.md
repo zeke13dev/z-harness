@@ -258,7 +258,7 @@ Safe next options (advisory only)
 2. <copyable command/prompt> — why this is safe [citation]
 ```
 
-Recommendation matrix is deterministic and advisory. It is keyed by selected target type, confidence, ambiguity, task completion, registry state, branch/worktree state, report availability, and known command forms. It may recommend commands such as `/z-where`, `/z-stats`, `/z-execute`, `/z-review-all`, `/z-report`, `/z-explain`, or a `cd <worktree>` prompt, but it must not execute them.
+Recommendation matrix is deterministic and advisory. It is keyed by selected target type, confidence, ambiguity, task completion, registry state, branch/worktree state, report availability, and known command forms. It may recommend commands such as `/z-stats`, `/z-execute`, `/z-review-all`, `/z-report`, `/z-explain`, or a `cd <worktree>` prompt, but it must not execute them.
 
 If no useful candidate exists, render `status: not_found` with searched sources, caps, degraded providers, and exact examples the user can supply next.
 
@@ -319,7 +319,7 @@ Memories and follow-ups can explain why a candidate is relevant, preserve review
 
 | Command | Use it for | `/z-resume` boundary |
 |---|---|---|
-| `/z-where` | Current active-plan registry status, wait edges, and path overlaps | `/z-resume` uses registry evidence but also searches bounded historical artifacts, sessions, handoffs, branches, reports, and repo context to select a recovery target. Use `/z-where` when active plans are the entire question. |
+| `/z-stats` | Current active-plan registry status, wait edges, and path overlaps | `/z-resume` uses registry evidence but also searches bounded historical artifacts, sessions, handoffs, branches, reports, and repo context to select a recovery target. Use `/z-stats` when active plans are the entire question. |
 | `/z-report` | Narrative for a known run/slug/PR/range/base/worktree | `/z-resume` finds/selects the target first; `--report` delegates to `/z-report` only after selection and never for `needs_selection`. |
 | `/z-explore` | Code terrain mapping, entry points, seams, or investigative source context | `/z-resume` reconstructs a work thread, not code architecture; recommend `/z-explore` only after selected evidence says code terrain is the gap. |
 | `/z-explain` | One-shot cited explanation of code/repo/topic | `/z-resume` may recommend it for understanding a selected surface, but work-thread continuation/reorientation routes to `/z-resume`, not `/z-explain`. |

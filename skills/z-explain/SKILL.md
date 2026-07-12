@@ -65,7 +65,7 @@ Run this when intent clearly mismatches a one-shot explanation:
 |--------|----------|
 | Code terrain reconstruction: "where does X live?", "map the codebase", "find entry points/seams" | `/z-explore <target> --depth=quick|standard|deep` |
 | Find bugs / correctness issues | `/z-audit <target>` |
-| Change or fix code | `/z-do <task>` or `/z-plan <task>` |
+| Change or fix code | `/z-plan --quick <task>` or `/z-plan <task>` |
 | Multi-turn tutoring already needed ("walk me through everything", "keep going") | `/z-learn <target>` |
 | Completed-work narrative, evidence summary, backtest writeup, technical handoff, or external/shareable report | `/z-report <target> <profile>` |
 | Work-thread recovery/reorientation: "what was I doing?", "where did that run/branch/worktree end up?", "how do I continue safely?" | `/z-resume <topic|--slug|--run|--branch|--worktree>` |

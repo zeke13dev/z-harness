@@ -1,6 +1,6 @@
 # z-reconcile
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 > Covers source: skills/z-reconcile/SKILL.md, scripts/reconcile.py, scripts/plan-claim.sh
 
 ## Overview
@@ -60,8 +60,24 @@ Staleness uses latest activity (events/artifact mtimes) against a 14-day thresho
 - `scripts/reconcile.py:258` — `classify_worktree` — six-class precedence and dead-only prune eligibility.
 - `scripts/reconcile.py:344` — `classify_plan` — four plan classes with 14-day staleness default.
 - `scripts/reconcile.py:404` — `cross_ref_join` — computes the four cross-reference booleans.
-- `scripts/plan-claim.sh:416` — `reap-stale` statuses — free/stale/corrupt/held without acquiring or killing.
+- `scripts/plan-claim.sh:468` — `reap-stale` case dispatch — free/stale/corrupt/held without acquiring or killing.
 <!-- AUTO-END: entry-points -->
+
+## How it interacts with others
+
+- `plan-claim` — Phase 1f/4 call `plan-claim.sh reap-stale` (read-only) to classify each claim lock before any removal decision; Phase 4 never calls `rm` on a lock without going through it first.
+- `active-plan-registry` — Phase 1e/5 read `active-plan-registry.py list --json` for live records and use per-record `deregister --run-id` in Phase 5; the global `reap` subcommand is never invoked.
+- `followup-sink` — Phase 6 creates advisory follow-up entries via `sink-add.sh` for `tasks-complete-unmerged` plans; creation is idempotent (duplicate → exit 3).
+- `scripts` (plan-path.sh) — Phase 1a/1d resolve the base dir, plans dir, claims dir, and slug enumeration through `plan-path.sh`.
+
+## Edge cases / gotchas
+
+- Remote reachability timeout/failure yields `unknown-remote` and surface-only (never auto-prune-eligible).
+- `has_unpushed = None` routes to `unknown-remote` regardless of `remote_reachable`'s value — a fail-safe against an indeterminate unpushed-commit check silently falling through to a prunable class.
+- `merged_worktree_on_disk` excludes worktrees already classified `dead` (they're already on the prune path).
+- Staleness uses latest activity (events.jsonl / artifact mtime), not directory mtime.
+- Follow-ups section is always rendered in the Phase 1 report; `--open-followups` controls creation only, not visibility.
+- Global `active-plan-registry.py reap` and direct `rm` on a lock file are both hard-forbidden; only per-item `deregister --run-id` and `plan-claim.sh reap-stale`-gated removal are permitted.
 
 ## Memories
 

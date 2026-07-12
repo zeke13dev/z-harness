@@ -1,6 +1,7 @@
 {
   "concept": "reviewer-capture",
-  "last_updated": "2026-06-24",
+  "summary": "Shared Codex final-message capture pattern (-o outfile probe/fallback) plus review/consult telemetry and contracts shared by agents/reviewer.md, agents/consultant-primary.md, and agents/consultant-secondary.md.",
+  "last_updated": "2026-07-09",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 1",
   "source_file": [
     "agents/reviewer.md",
@@ -11,38 +12,59 @@
   "entry_points": [
     {
       "file": "agents/reviewer.md",
-      "line": 221,
+      "line": 20,
+      "symbol": "expected_contract",
+      "kind": "const",
+      "summary": "Reviewer persona contract is review-verdict."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 95,
+      "symbol": "misconfiguration guard",
+      "kind": "fn",
+      "summary": "Exactly one of intent_snapshot/ledger_path present returns BLOCKED."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 231,
       "symbol": "PROBE_SENTINEL",
       "kind": "module",
       "summary": "PPID-keyed Codex output-last-message capability probe."
     },
     {
       "file": "agents/reviewer.md",
-      "line": 240,
+      "line": 250,
       "symbol": "ARCHIVE_DIR",
       "kind": "module",
       "summary": "Reviewer artifact dir under plan archive tasks."
     },
     {
       "file": "agents/reviewer.md",
-      "line": 248,
+      "line": 258,
       "symbol": "CAPTURE_MODE=file",
       "kind": "module",
       "summary": "Codex -o outfile final-message capture branch."
     },
     {
       "file": "agents/reviewer.md",
-      "line": 263,
+      "line": 273,
       "symbol": "review_capture_fallback",
       "kind": "event",
       "summary": "Uniform fallback event with id/cycle/role/reason."
     },
     {
       "file": "agents/reviewer.md",
-      "line": 354,
-      "symbol": "FOLLOWUPS",
+      "line": 364,
+      "symbol": "**FOLLOWUPS:**",
       "kind": "section",
       "summary": "Reviewer minors/nits routed to follow-up sink."
+    },
+    {
+      "file": "agents/consultant-primary.md",
+      "line": 20,
+      "symbol": "expected_contract",
+      "kind": "const",
+      "summary": "Primary consultant persona contract is freeform."
     },
     {
       "file": "agents/consultant-primary.md",
@@ -60,6 +82,13 @@
     },
     {
       "file": "agents/consultant-secondary.md",
+      "line": 20,
+      "symbol": "expected_contract",
+      "kind": "const",
+      "summary": "Secondary consultant persona contract is freeform."
+    },
+    {
+      "file": "agents/consultant-secondary.md",
       "line": 49,
       "symbol": "consult_start",
       "kind": "event",
@@ -74,29 +103,49 @@
     }
   ],
   "depends_on": [
-    "agents",
     "providers-registry",
     "subagent-telemetry",
-    "followup-sink"
+    "followup-sink",
+    "liveness"
   ],
   "consumed_by": [
-    "commands",
+    "z-execute",
+    "z-review-all",
+    "z-plan",
+    "z-debug",
+    "z-fix",
+    "z-audit",
+    "z-mr-review",
+    "z-improve",
+    "z-amend",
+    "z-maintain-docs",
+    "z-test",
+    "z-explore",
+    "z-brainstorm",
+    "z-research",
+    "z-style-init",
+    "z-test-prune",
+    "z-audit-plan",
+    "z-audit-plan-style",
     "subagent-telemetry"
   ],
   "invariants": [
     "Only provider==codex with a positive output-last-message probe uses -o file capture.",
     "Non-codex path remains stdout capture.",
-    "Probe sentinel is keyed on PPID.",
+    "Probe sentinel is keyed on PPID, not $$.",
     "Fallback emits review_capture_fallback before stdout retry.",
     "Reviewer INTENT mode requires both intent_snapshot and ledger_path.",
     "Reviewer minors/nits must be represented in FOLLOWUPS rather than silently dropped.",
-    "All three agents call log-subagent.sh after capture."
+    "All three agents call log-subagent.sh after capture.",
+    "Reviewer response_chars/artifact are sourced from the captured final message, never the discarded codex transcript."
   ],
   "gotchas": [
-    "Reviewer and consultant archive paths differ.",
-    "Codex non-zero exit invalidates outfile and triggers fallback.",
+    "Reviewer and consultant archive paths differ (task archive dir vs run transcripts dir).",
+    "Codex non-zero exit invalidates outfile and triggers fallback even if a partial file exists.",
     "Z_HARNESS_PLAN_DIR is required for reviewer artifact path construction.",
-    "Consultants use freeform contract; reviewer uses review-verdict contract."
+    "Consultants use freeform contract; reviewer uses review-verdict contract.",
+    "Entry-point line numbers in the human doc drift whenever these three templated agent files are edited; re-verify with grep -n before trusting cited lines.",
+    "Repo migrated commands/ -> skills/ as the single source (skills-removed-single-source); consumed_by lists skill slugs, not command paths."
   ],
   "memories": []
 }

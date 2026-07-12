@@ -1,5 +1,6 @@
 {
   "concept": "config",
+  "summary": "Unified z-harness configuration system: 4-layer TOML config loader (Loader API) plus the workflow question-registry/resolver/writer built on top of it (Workflow Resolver), including model-class routing.",
   "last_updated": "2026-07-09",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
@@ -17,207 +18,235 @@
       "line": 61,
       "symbol": "DEFAULTS",
       "kind": "const",
-      "summary": "[Loader API] Built-in defaults for all config sections including workflow.pre_run_cost_gate and cost.token_budget (layer 1)"
+      "summary": "[Loader API] Built-in defaults for all config sections incl. model_classes/model_routing (added T007/T008, layer 1)"
     },
     {
       "file": "scripts/config.py",
-      "line": 323,
+      "line": 523,
       "symbol": "VALIDATORS",
       "kind": "const",
-      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; covers workflow.pre_run_cost_gate and cost.token_budget"
+      "summary": "[Loader API] Allowed enum/validator sets per dotted-key; hard-fail repo/env, soft-warn global; includes model_classes.*/model_routing.* leaves"
     },
     {
       "file": "scripts/config.py",
-      "line": 401,
+      "line": 353,
+      "symbol": "_MODEL_CLASS_FIELDS / _DYNAMIC_MODEL_CONFIG_SECTIONS",
+      "kind": "const",
+      "summary": "[Model routing] Frozensets defining model_classes leaf fields (model/thinking/reasoning) and the dynamic-table section names {model_classes, model_routing}"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 410,
+      "symbol": "_dynamic_model_config_validator",
+      "kind": "fn",
+      "summary": "[Model routing] Returns the leaf validator for a (section, group, leaf) dynamic model_classes/model_routing key, or None if unsupported"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 618,
       "symbol": "_COERCERS",
       "kind": "const",
-      "summary": "[Loader API] Post-validation normalizers; converts env-var strings to typed Python values, including cost.token_budget string -> int/null"
+      "summary": "[Loader API] Post-validation normalizers; converts env-var strings to typed Python values"
     },
     {
       "file": "scripts/config.py",
-      "line": 565,
+      "line": 785,
       "symbol": "QUESTION_IDS",
       "kind": "const",
-      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys, including workflow.pre_run_cost_gate; callsites list includes /z-plan"
+      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys; validated against VALIDATORS at module load by _run_startup_guards"
     },
     {
       "file": "scripts/config.py",
-      "line": 640,
+      "line": 860,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "[Workflow Resolver] Default overnight allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}"
     },
     {
       "file": "scripts/config.py",
-      "line": 646,
+      "line": 866,
       "symbol": "RESULT_MAP",
       "kind": "const",
       "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask|halt|defer-to-sink)"
     },
     {
       "file": "scripts/config.py",
-      "line": 679,
+      "line": 891,
       "symbol": "_run_startup_guards",
       "kind": "fn",
       "summary": "[Workflow Resolver] Module-load consistency check: asserts QUESTION_IDS<=VALIDATORS, every qid has skill_default and valid halt_category, RESULT_MAP references valid choices; SystemExit(2) on violation"
     },
     {
       "file": "scripts/config.py",
-      "line": 707,
+      "line": 988,
       "symbol": "_ENV_VAR_ALIASES",
       "kind": "const",
-      "summary": "[Loader API] Dotted keys whose exported env var name differs from mechanical _dotted_to_env() mapping (egress aliases for T003a/T003b legacy names)"
+      "summary": "[Loader API] Dotted keys whose exported env var name differs from mechanical _dotted_to_env() mapping (egress aliases)"
     },
     {
       "file": "scripts/config.py",
-      "line": 750,
+      "line": 1031,
       "symbol": "_INGRESS_LEGACY_ALIASES",
       "kind": "const",
       "summary": "[Loader API] Ingress fallback map: all _ENV_VAR_ALIASES plus ingress-only legacies (notify.level->Z_HARNESS_NOTIFY, runtime.max_parallel->HERMES_MAX_PARALLEL)"
     },
     {
       "file": "scripts/config.py",
-      "line": 780,
+      "line": 1061,
       "symbol": "LEGAL_ENV_KEYS",
       "kind": "const",
       "summary": "[Loader API] Frozenset of plumbing/unattended-entry env vars that never trigger the preference-class deprecation warning"
     },
     {
       "file": "scripts/config.py",
-      "line": 1065,
-      "symbol": "load_config",
+      "line": 1111,
+      "symbol": "_validate_toml_keys",
       "kind": "fn",
-      "summary": "[Loader API] Build resolved config from all 4 layers; TOML wins over env for preference-class vars (T001 ingress-ignore gate); returns (values, sources) dicts"
+      "summary": "[Loader API] Generic recursive walk (rewritten to support dynamic 3-level model_classes/model_routing tables); rejects non-canonical segments and >3-level nesting"
     },
     {
       "file": "scripts/config.py",
-      "line": 1303,
+      "line": 1316,
+      "symbol": "_validate_dynamic_model_config_value",
+      "kind": "fn",
+      "summary": "[Model routing] Validate a supported dynamic model_classes/model_routing 3-level key; soft-warn+skip on global layer, hard exit 2 on repo/env layer"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1379,
+      "symbol": "load_config",
+      "kind": "fn",
+      "summary": "[Loader API] Build resolved config from all 4 layers; TOML wins over env for preference-class vars; returns (values, sources) dicts"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1711,
       "symbol": "cmd_get",
       "kind": "fn",
       "summary": "[Loader API] Resolve and print single dotted-key value; exits 3 on unknown or meta key"
     },
     {
       "file": "scripts/config.py",
-      "line": 1334,
+      "line": 1742,
       "symbol": "cmd_get_batch",
       "kind": "fn",
       "summary": "[Loader API] Resolve multiple keys in one process; output JSON object {key: value}; unknown/meta keys -> null + stderr; always exits 0"
     },
     {
       "file": "scripts/config.py",
-      "line": 1426,
+      "line": 1837,
       "symbol": "cmd_export_env",
       "kind": "fn",
       "summary": "[Loader API] Print export+unset lines for all user knobs; emit config_resolved once per run; emit config_env_deprecated per deprecated preference env var"
     },
     {
       "file": "scripts/config.py",
-      "line": 1484,
+      "line": 1900,
       "symbol": "cmd_ensure_defaults",
       "kind": "fn",
       "summary": "[Loader API] Write global config with defaults + inline comments if absent; never overwrites existing file; exits 4 on empty/unparseable existing file"
     },
     {
       "file": "scripts/config.py",
-      "line": 1561,
+      "line": 1977,
       "symbol": "cmd_explain",
       "kind": "fn",
       "summary": "[Loader API] Print effective value and source layer for one dotted key"
     },
     {
       "file": "scripts/config.py",
-      "line": 1593,
+      "line": 2009,
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "[Workflow Resolver] Print sorted JSON array of registered question IDs; consumed by /z-suggest-memory for routing-preference validation"
     },
     {
       "file": "scripts/config.py",
-      "line": 1598,
+      "line": 2014,
       "symbol": "cmd_resolve_halt_category",
       "kind": "fn",
       "summary": "[Loader API] Print halt_category tag for a question_id (decision|risk|shortcut|archiving|mechanical_proceed) or 'ask' for unknown IDs; used by chain-runner.sh; always exits 0"
     },
     {
       "file": "scripts/config.py",
-      "line": 2071,
+      "line": 2524,
       "symbol": "_load_axiom_store_module",
       "kind": "fn",
       "summary": "[Axiom Layer] Dynamically load scripts/axiom-store.py (hyphen in filename prevents normal import); cached per process; returns None when store absent or fails to import"
     },
     {
       "file": "scripts/config.py",
-      "line": 2109,
+      "line": 2562,
       "symbol": "_load_axiom_matches",
       "kind": "fn",
       "summary": "[Axiom Layer] Load graph-valid approved axioms for a question_id; gated on axioms.enabled; returns [] when disabled, store absent, or graph validation fails"
     },
     {
       "file": "scripts/config.py",
-      "line": 2208,
+      "line": 2661,
       "symbol": "_resolve_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Merge memory match list: highest strength wins on agreement; returns (None, 'conflict', sources) when entries disagree"
     },
     {
       "file": "scripts/config.py",
-      "line": 2244,
+      "line": 2697,
       "symbol": "_resolve_config_memory_envelope",
       "kind": "fn",
       "summary": "[Workflow Resolver] Pre-axiom resolution: config + routing-pref memory; returns 7-tuple (envelope, emit_result, emit_source, emit_strength, exit_code, resolved_value, memory_silent)"
     },
     {
       "file": "scripts/config.py",
-      "line": 2475,
+      "line": 2928,
       "symbol": "_build_resolve_envelope",
       "kind": "fn",
       "summary": "[Workflow Resolver] Full resolver: apply axiom layer on top of config+memory envelope; agree/gap-fill/direct-conflict axiom outcomes; returns 5-tuple"
     },
     {
       "file": "scripts/config.py",
-      "line": 2622,
+      "line": 3075,
       "symbol": "cmd_resolve_question",
       "kind": "fn",
       "summary": "[Workflow Resolver] Consult 4-layer config + memory + axioms + overnight overrides; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
     },
     {
       "file": "scripts/config.py",
-      "line": 2993,
+      "line": 3364,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
       "summary": "[Workflow Resolver] Overnight-gate checker with cost-gate delegation path (--range-high/--severity); hard severity under NO_ASK=halt applies cost.token_budget and may return halt or unhandled_gate"
     },
     {
       "file": "scripts/config.py",
-      "line": 3148,
+      "line": 3633,
       "symbol": "cmd_set",
       "kind": "fn",
       "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success"
     },
     {
       "file": "scripts/config.py",
-      "line": 3262,
+      "line": 3747,
       "symbol": "ENV_ONLY_KNOBS",
       "kind": "const",
       "summary": "[Loader API] List of env-only knob names (Z_HARNESS_NO_ASK, Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE, Z_HARNESS_ASK_ALL, etc.) surfaced by inspect-all; not settable via TOML"
     },
     {
       "file": "scripts/config.py",
-      "line": 3311,
+      "line": 3796,
       "symbol": "cmd_inspect_all",
       "kind": "fn",
-      "summary": "[Loader API] Print all config knobs with value/source/persistence_class; covers DEFAULTS keys (incl. models.*, export.*, changelog.*) + QUESTION_IDS + ENV_ONLY_KNOBS; --json for machine-parseable output"
+      "summary": "[Loader API] Print all config knobs with value/source/persistence_class; covers DEFAULTS keys (incl. models.*, model_classes.*, model_routing.*, export.*, changelog.*) + QUESTION_IDS + ENV_ONLY_KNOBS; --json for machine-parseable output"
     },
     {
       "file": "scripts/config.py",
-      "line": 3456,
+      "line": 3941,
       "symbol": "cmd_should_notify",
       "kind": "fn",
       "summary": "[Loader API] Print yes|no for a given event kind; always exits 0; exits 2 on unknown event. Valid kinds: approval, phase_end, error"
     },
     {
       "file": "scripts/config.py",
-      "line": 3547,
+      "line": 4034,
       "symbol": "cmd_migrate",
       "kind": "fn",
       "summary": "[Loader API] Rewrite old provider names (codex, gemini, claude) in roles.*.runtime to -cli suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error"
@@ -263,12 +292,11 @@
   ],
   "consumed_by": [
     "commands",
+    "skills",
     "followup-sink",
+    "active-plan-registry",
     "cost-estimation",
-    "amendment-brief",
-    "z-audit-plan",
-    "z-review-all",
-    "attend"
+    "amendment-brief"
   ],
   "invariants": [
     "[Loader API] schema_version current value is 2; loading a config with schema_version < 2 emits a non-fatal stderr warning pointing at `config.py ensure-defaults`; schema_version > 2 exits 2 (hard fail)",
@@ -280,38 +308,33 @@
     "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
     "[Loader API] config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",
     "[Loader API] transliteration rule: dotted.key -> Z_HARNESS_<SECTION>_<KEY> (uppercase, dot to underscore)",
-    "[Loader API] keys must match ^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$; hyphens or >2-level nesting exit 2",
+    "[Loader API] keys must match ^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$; hyphens or >2-level nesting exit 2 for 2-level env keys",
     "[Loader API] empty env vars are treated as missing (not as override)",
     "[Loader API] unknown keys in TOML files are silently ignored for forward compatibility",
-    "[Loader API] global-layer enum violations: soft-warn + fall back to default; repo/env-layer violations: exit 2",
+    "[Loader API] global-layer enum violations: soft-warn + fall back to default (via _default_for_dotted_key, now supports arbitrary dotted depth); repo/env-layer violations: exit 2",
     "[Loader API] get-batch always exits 0; unknown/meta keys -> null in output + stderr warning (never exit 3)",
     "[Loader API] inspect-all always exits 0 on success; covers DEFAULTS keys + QUESTION_IDS + ENV_ONLY_KNOBS",
     "[Loader API] TOML wins over env for preference-class vars: env layer is consulted only when the key's source is 'defaults' (TOML was silent)",
+    "[Loader API] _validate_toml_keys is a generic recursive walk (rewritten in the model-routing change); it enforces canonical lowercase/underscore segments at any depth and rejects >3-level table nesting, replacing the old hand-unrolled 4-level check",
+    "[Model routing] model_classes.<name>.model is required non-empty string for any custom class not already in DEFAULTS['model_classes']; thinking/reasoning are optional string metadata, auto-filled to '' when omitted",
+    "[Model routing] model_classes/model_routing keys are config-file-only (3-level dotted keys) — never exported as env vars",
+    "[Model routing] built-in model classes: cheap->haiku, standard->sonnet, deep->opus",
+    "[Model routing] model_routing.native_agents.default='' is the inherit sentinel: preserves each native agent's checked-in frontmatter model when no override is configured",
+    "[Model routing] model_routing.implementer.{low,medium,high,retry} default to sonnet/sonnet/opus/opus, reproducing pre-existing /z-execute model-tier labels",
+    "[Model routing] _validate_dynamic_model_config_value soft-warns+skips the key on the global layer and hard-exits 2 on repo/env layer for invalid dynamic model_classes/model_routing values",
     "[brainstorm] brainstorm.personas valid values: true | false; default true; env Z_HARNESS_BRAINSTORM_PERSONAS",
     "[brainstorm] brainstorm.wide_overflow_model valid values: non-empty string; default 'haiku'; env Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL",
-    "[brainstorm] brainstorm.personas controls ideator persona injection in /z-brainstorm ONLY; knob lives in [brainstorm] not [personas] by design",
-    "[personas] personas.critique_panel valid values: true | false; default true; env Z_HARNESS_PERSONAS_CRITIQUE_PANEL",
-    "[personas] personas.audit valid values: true | false; default true; env Z_HARNESS_PERSONAS_AUDIT",
-    "[personas] personas.review_eval valid values: true | false; default true; env Z_HARNESS_PERSONAS_REVIEW_EVAL",
-    "[personas] personas.consult_eval valid values: true | false; default FALSE (off); env Z_HARNESS_PERSONAS_CONSULT_EVAL",
-    "[personas] personas.implementer_retry valid values: same | new; default same; env Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
-    "[personas] there is NO personas.debug knob \u2014 it was removed as dead code; do not document or configure it",
-    "[personas] personas.consult_eval=false (default) means the neutral consult arm runs alone at convergent sites \u2014 no advisory overhead",
-    "[personas] personas.implementer_retry has no effect when experiment.persona_rotation=false",
-    "[personas] neutral-authority invariant: at all CONVERGENT sites the neutral arm is always the decision of record regardless of knob state",
+    "[brainstorm] brainstorm.personas controls ideator persona injection in /z-brainstorm ONLY; the knob lives in the [brainstorm] section by design",
     "[axioms] axioms.enabled valid values: true | false; default true; env Z_HARNESS_AXIOMS_ENABLED",
     "[axioms] axioms.kernel_budget_chars valid values: positive integer (>=1); default 6000; env Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS",
     "[axioms] axioms.extract_min_recurrence valid values: positive integer (>=1); default 3; env Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE",
     "[axioms] axioms.auto_extract_post_run valid values: true | false; default true; env Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN",
     "[axioms] axioms.enabled=false causes _load_axiom_matches to return [] immediately; envelope is byte-identical to pre-axiom result",
     "[axioms] axiom layer is lowest precedence: config and memory always win; axiom only fills a gap (config at default AND memory silent)",
-    "[experiment] experiment.persona_rotation valid values: true | false; default true; env Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
-    "[experiment] experiment.control_every_n valid values: positive integer; default 5; env Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
-    "[experiment] experiment.persona_rotation = false is a complete no-op: no draw events, no state files, no PERSONA_PREFIX, no persona_attempt_outcome",
     "[cost] cost.token_budget valid values: positive int or null; default null; env Z_HARNESS_COST_TOKEN_BUDGET",
     "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under NO_ASK=halt halts with rule_id: cost_budget_missing",
-    "[models] models.* valid values: any string including empty string (empty = use provider default); validated against providers.json at resolve time NOT at config-load time",
-    "[export] export.hosts valid values: non-empty list of strings from closed set {claude,antigravity,agy,cursor,codex,pi,windsurf,cline,kiro,copilot}; env Z_HARNESS_EXPORT_HOSTS as JSON-encoded array",
+    "[models] models.* valid values: any string including empty string (empty = use provider default); validated against providers.json at resolve time NOT at config-load time; distinct from model_classes.*/model_routing.* native-agent routing",
+    "[export] export.hosts valid values: non-empty list of strings from closed set {claude,antigravity,agy,cursor,codex,omp,pi,windsurf,cline,kiro,copilot}; env Z_HARNESS_EXPORT_HOSTS as JSON-encoded array; default now includes omp",
     "[export] export.strategy valid values: empty string (defer to driver default) | pointer | curated | full",
     "[changelog] changelog.auto valid values: true | false; default true; master switch for post-commit hook",
     "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask; effective behavior is SOURCE-KEYED: source==none -> auto_split (no popup); source in {config,memory} + ask|prefill -> force_ask; halt|stop -> halt; amend|skip -> auto_split; decision logic in scripts/amend-gate-decision.py",
@@ -343,29 +366,31 @@
     "[claim-lock] exit-2 from acquire is the normal post-crash recovery path (setsid-detached daemon survives SIGKILL, leaks until TTL); unattended exit-2 default-aborts unless Z_HARNESS_CLAIM_OVERRIDE=1",
     "[claim-lock] heartbeat exit-9 fires ONLY on confirmed ownership change; transient read error is heartbeat_error + exit-0 (NOT exit-9)",
     "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under Z_HARNESS_NO_ASK=halt halts with rule_id: cost_budget_missing for /z-plan and other hard gates",
-    "[Workflow Resolver] workflow.pre_run_cost_gate callsites include scripts/pre-run-cost-gate.sh, z-research, z-uplift, z-plan-split, and z-plan",
-    "[Overnight gate] Hard cost gates under Z_HARNESS_NO_ASK=halt auto_proceed only when range_high <= cost.token_budget; over-budget halts or returns unhandled_gate in policy mode."
+    "[Workflow Resolver] workflow.pre_run_cost_gate callsites include scripts/pre-run-cost-gate.sh, z-research, z-plan-split, and z-plan",
+    "[Overnight gate] Hard cost gates under Z_HARNESS_NO_ASK=halt auto_proceed only when range_high <= cost.token_budget; over-budget halts or returns unhandled_gate in policy mode.",
+    "[Model precedence] Native-agent model precedence: exact model_routing.native_agents.<agent_id>, then model_routing.native_agents.default when non-empty, then the source agent frontmatter (agents/*.md); CLAUDE.md and .omp/config.yml never participate in this chain",
+    "[Model precedence] External-provider role precedence: TOML [models.<role>] override, then .z-harness/providers.json role fallback/default_model"
   ],
   "gotchas": [
-    "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] \u2014 do NOT move it; existing configs already have it there",
+    "[brainstorm] brainstorm.personas lives in the [brainstorm] section by design; existing configs already have it there",
     "[brainstorm] brainstorm.wide_overflow_model='cheap-mixed' is accepted by the validator but acts as a no-op until the per-vendor cheap-model mechanism is verified",
-    "[personas] personas.consult_eval defaults OFF (false) \u2014 most expensive advisory arm; enabling it adds one extra subagent call at every convergent eval site",
-    "[personas] there is NO personas.debug knob \u2014 it was removed as dead; do not configure or document it",
-    "[personas] personas.implementer_retry is a no-op when experiment.persona_rotation=false regardless of its value",
-    "[personas] Global layer violations are soft (warn + default); repo/env layer violations exit 2 (hard fail)",
     "[axioms] axioms.kernel_budget_chars and axioms.extract_min_recurrence must be positive integers; string '0' fails validation (positive means >=1)",
     "[axioms] axiom-store.py is loaded via importlib (not normal import) because the filename has a hyphen; module load failures are silently tolerated",
-    "[experiment] Global layer experiment.* violations are soft; repo/env layer violations exit 2 (hard fail)",
     "[cost] cost.token_budget=null (default) causes check-no-ask to halt with cost_budget_missing under NO_ASK=halt policy; must be explicitly set for overnight cost-gate to auto-proceed",
-    "[models] models.* cross-checked against providers.json at RESOLVE time not at config-load time \u2014 invalid model strings are caught only when the role is dispatched, not during config load",
-    "[export] export.hosts must be non-empty; empty list is rejected; env transport is JSON-encoded array (e.g. '[\"cursor\",\"codex\"]')",
+    "[models] models.* cross-checked against providers.json at RESOLVE time not at config-load time — invalid model strings are caught only when the role is dispatched, not during config load",
+    "[export] export.hosts must be non-empty; empty list is rejected; env transport is JSON-encoded array (e.g. '[\"cursor\",\"codex\"]'); default set now includes 'omp' (first-class native host) alongside cursor/codex/agy/pi",
     "[export] export.strategy='' (empty string, default) is the sentinel 'defer to driver default'; do not confuse with unset or missing",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2)",
-    "[Deprecation] runtime.env_strict cannot be set via env \u2014 the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
-    "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
-    "[Loader API] cmd_set exits 0 silently on success \u2014 no stdout output; do not parse stdout from cmd_set",
+    "[Deprecation] runtime.env_strict cannot be set via env — the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
+    "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (e.g. /z-plan --quick); heavy flows always dispatch doc-fetcher regardless",
+    "[Loader API] cmd_set exits 0 silently on success — no stdout output; do not parse stdout from cmd_set",
     "[Loader API] Valid event kinds for should-notify: approval, phase_end, error only. Passing run_complete exits 2; guard with || true if needed",
-    "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys \u2014 callers must check for null values in JSON output",
+    "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys — callers must check for null values in JSON output",
+    "[Loader API] _validate_toml_keys was rewritten from a hand-unrolled 4-level nested-loop check to a generic recursive walk; behavior for existing 2-3 level keys is unchanged but 3-level model_classes/model_routing tables are now validated by the same path",
+    "[Model routing] model_classes.<name>.model must be defined before optional thinking/reasoning metadata for a custom (non-built-in) class; violating this on repo/env layer exits 2, on global layer soft-warns and skips the class",
+    "[Model routing] model_classes/model_routing 3-level keys are config-file-only — never exported as env vars, unlike most 2-level knobs",
+    "[Model routing] model_routing.native_agents.default='' is NOT 'unset' in the usual sense — it is the explicit inherit-frontmatter sentinel; do not confuse with a missing key",
+    "[Model routing] CLAUDE.md and .omp/config.yml are policy/runtime surfaces, not model-routing override layers — per-role model overrides never belong there",
     "[Workflow Resolver] workflow.slug_confirm value domain (ask/auto_accept/recommend_derived) is NOT the same as the resolver result domain; RESULT_MAP translates between them",
     "[Workflow Resolver] workflow.audit_to_amend behavior is SOURCE-KEYED: source==none (no stored preference) -> auto_split even when the stored value would say 'ask'; setting 'ask' in config.toml opts back into the 3-way popup",
     "[Workflow Resolver] workflow.pre_run_cost_gate is a registered question_id; overnight allowlist can auto-decide it via Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
@@ -389,98 +414,81 @@
       "workflow.audit_to_amend": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "amend",
-          "stop"
-        ],
+        "valid_values": ["ask", "amend", "stop"],
         "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
         "callsites": [
           "commands/z-audit-plan.md",
           "commands/z-review-all.md",
           "scripts/amend-gate-decision.py"
         ],
-        "description": "Source-keyed force-ask override for /z-audit-plan Phase 5 and /z-review-all Phase 6.5. resolver source determines effective behavior: source==none (no preference stored) -> auto_split (no popup, INTENT-mode batches spec_gaps into one /z-amend call); source in {config,memory} with ask|prefill result -> force_ask (3-way popup); halt|stop from any source -> halt; amend|skip from any source -> auto_split. Setting 'ask' in config opts back into the 3-way popup. Decision logic in scripts/amend-gate-decision.py."
+        "description": "Source-keyed force-ask override for /z-audit-plan Phase 5 and /z-review-all Phase 6.5/6.6. resolver source determines effective behavior: source==none (no preference stored) -> auto_split (no popup, INTENT-mode batches spec_gaps into one /z-amend call); source in {config,memory} with ask|prefill result -> force_ask (3-way popup); halt|stop from any source -> halt; amend|skip from any source -> auto_split. Setting 'ask' in config opts back into the 3-way popup. Decision logic in scripts/amend-gate-decision.py."
       },
       "workflow.slug_confirm": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "auto_accept",
-          "recommend_derived"
-        ],
+        "valid_values": ["ask", "auto_accept", "recommend_derived"],
         "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
         "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept (resolver returns skip); recommend_derived=pre-select (resolver returns prefill). Collision check always runs unconditionally."
       },
       "workflow.implement_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "auto_resume",
-          "halt"
-        ],
+        "valid_values": ["ask", "auto_resume", "halt"],
         "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
         "description": "Controls halt-resolution gate in /z-execute. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
       },
       "workflow.review_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "proceed",
-          "halt"
-        ],
+        "valid_values": ["ask", "proceed", "halt"],
         "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
         "description": "Controls Phase 3.7 proceed gate in /z-review-all"
       },
       "workflow.plan_decisions_approval": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "approve",
-          "halt"
-        ],
+        "valid_values": ["ask", "approve", "halt"],
         "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
         "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan"
       },
       "workflow.pre_run_cost_gate": {
         "type": "string",
         "default": "ask",
-        "valid_values": [
-          "ask",
-          "auto_proceed",
-          "halt"
-        ],
+        "valid_values": ["ask", "auto_proceed", "halt"],
         "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
         "callsites": [
           "scripts/pre-run-cost-gate.sh",
           "skills/z-research/SKILL.md",
-          "skills/z-uplift/SKILL.md",
           "skills/z-plan-split/SKILL.md",
           "skills/z-plan/SKILL.md"
         ],
-        "description": "Controls pre-run cost gates for z-research/z-uplift/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
+        "description": "Controls pre-run cost gates for z-research/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
+      },
+      "workflow.planning_mode": {
+        "type": "string",
+        "default": "intent",
+        "valid_values": ["intent", "full"],
+        "env": "Z_HARNESS_WORKFLOW_PLANNING_MODE",
+        "description": "Default planner paradigm for /z-plan. intent=Adaptive INTENT mode (thin frozen INTENT.md + emergent BFS task-tree). full=legacy SDD mode."
+      },
+      "workflow.intent_level": {
+        "type": "string",
+        "default": "auto",
+        "valid_values": ["auto", "quick", "standard", "deep"],
+        "env": "Z_HARNESS_WORKFLOW_INTENT_LEVEL",
+        "description": "Forced INTENT level. auto=scope-classifier picks the level; other values force that level unconditionally."
       },
       "workflow.intent_parallel_levels": {
         "type": "bool",
         "default": true,
-        "valid_values": [
-          true,
-          false
-        ],
+        "valid_values": [true, false],
         "env": "Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS",
         "description": "Live plain /z-execute INTENT-mode same-level BFS concurrency knob. Default true attempts sibling parallelism only when every same-level task has precise parseable Files scope, scope_unknown is false, fan-out is bounded or partitioned, and review diffs are isolated per task or review capture is serialized. Explicit false opts out and serializes each level. This is unrelated to vestigial runtime.max_parallel* / HERMES_MAX_PARALLEL and unrelated to Hermes hermes-config.yaml concurrency."
       },
       "workflow.hermes_enabled": {
         "type": "bool",
         "default": false,
-        "valid_values": [
-          true,
-          false
-        ],
+        "valid_values": [true, false],
         "env": "Z_HARNESS_WORKFLOW_HERMES_ENABLED",
         "description": "Master gate for dormant Hermes cross-worktree/cross-plan orchestration. It does not control plain /z-execute INTENT same-level BFS concurrency; use workflow.intent_parallel_levels for that."
       }
@@ -501,46 +509,6 @@
         "default": "haiku",
         "env": "Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL",
         "description": "Model used for overflow ideators (waves 2+) in wide-mode /z-brainstorm runs (N > 3). 'haiku' (default), 'cheap-mixed' (reserved no-op), or any explicit non-empty model string."
-      }
-    }
-  },
-  "personas_section": {
-    "section": "[personas]",
-    "description": "Controls per-surface persona dispatch across all z-harness commands. Each boolean enables/disables persona injection at one dispatch site class. There is NO personas.debug knob \u2014 it was removed as dead code.",
-    "keys": {
-      "personas.critique_panel": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_CRITIQUE_PANEL",
-        "description": "Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct consultant personas are drawn and positionally prepended."
-      },
-      "personas.audit": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_AUDIT",
-        "description": "Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct audit_persona is drawn per dimension (correctness/perf/cleanliness/design)."
-      },
-      "personas.review_eval": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_REVIEW_EVAL",
-        "description": "Enable the advisory persona reviewer at code-review gates \u2014 z-execute, z-fix, z-do (CONVERGENT). Advisory only \u2014 never changes pass/fail outcome."
-      },
-      "personas.consult_eval": {
-        "type": "bool",
-        "default": false,
-        "env": "Z_HARNESS_PERSONAS_CONSULT_EVAL",
-        "description": "Enable the advisory persona consult arm at convergent evaluation sites \u2014 z-audit bundled consult (CONVERGENT). DEFAULT OFF \u2014 most expensive and lowest-signal advisory arm."
-      },
-      "personas.implementer_retry": {
-        "type": "string",
-        "default": "same",
-        "valid_values": [
-          "same",
-          "new"
-        ],
-        "env": "Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
-        "description": "Controls implementer persona strategy on retry. same=reuse cycle-1 persona for all retries (lifecycle traceability). new=fresh draw excluding prior persona on each retry. No effect when experiment.persona_rotation=false."
       }
     }
   },
@@ -574,24 +542,6 @@
       }
     }
   },
-  "experiment_section": {
-    "section": "[experiment]",
-    "description": "Feature-flag knobs for the persona-rotation data-collection experiment. All keys are on by default.",
-    "keys": {
-      "experiment.persona_rotation": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
-        "description": "Master on/off switch for persona rotation in z-execute, z-plan, z-debug. false = complete no-op."
-      },
-      "experiment.control_every_n": {
-        "type": "int",
-        "default": 5,
-        "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
-        "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor."
-      }
-    }
-  },
   "cost_section": {
     "section": "[cost]",
     "description": "Token budget configuration for hard cost-gate delegation. Used by check-no-ask when invoked with --range-high and --severity; /z-plan uses the same path.",
@@ -615,10 +565,7 @@
       },
       "changelog.types": {
         "type": "array<string>",
-        "default": [
-          "feat",
-          "fix"
-        ],
+        "default": ["feat", "fix"],
         "description": "Conventional-commit types that earn a bullet. Commits not matching are silently skipped."
       },
       "changelog.file": {
@@ -628,36 +575,34 @@
       },
       "changelog.repos": {
         "type": "array<string>",
-        "default": [
-          "*"
-        ],
+        "default": ["*"],
         "description": "Repo-ID allowlist; '*' means every repo."
       }
     }
   },
   "models_section": {
     "section": "[models]",
-    "description": "Per-role model overrides. Empty string (default for all) = use provider default_model. Validity cross-checked against providers.json at resolve time, not config-load time.",
+    "description": "Legacy per-role EXTERNAL-provider model overrides (distinct from native-agent [model_classes]/[model_routing]). Empty string (default for all) = use provider default_model. Validity cross-checked against providers.json at resolve time, not config-load time.",
     "keys": {
       "models.consultant_primary": {
         "type": "string",
         "default": "",
-        "description": "Model override for primary consultant. Empty=provider default."
+        "description": "Model override for primary external consultant. Empty=provider default."
       },
       "models.consultant_secondary": {
         "type": "string",
         "default": "",
-        "description": "Model override for secondary consultant. Empty=provider default."
+        "description": "Model override for secondary external consultant. Empty=provider default."
       },
       "models.reviewer": {
         "type": "string",
         "default": "",
-        "description": "Model override for reviewer. Empty=provider default."
+        "description": "Model override for external reviewer. Empty=provider default."
       },
       "models.implementer": {
         "type": "string",
         "default": "",
-        "description": "Model override for implementer. Empty=provider default."
+        "description": "Model override for external implementer provider role. Empty=provider default."
       },
       "models.pre_reviewer": {
         "type": "string",
@@ -789,14 +734,9 @@
     "keys": {
       "export.hosts": {
         "type": "array<string>",
-        "default": [
-          "cursor",
-          "codex",
-          "agy",
-          "pi"
-        ],
+        "default": ["cursor", "codex", "agy", "omp", "pi"],
         "env": "Z_HARNESS_EXPORT_HOSTS",
-        "description": "Export target hosts. Closed set: adapter names (claude, antigravity, agy, cursor, codex) + export-only driver names (pi, windsurf, cline, kiro, copilot). Non-empty required. Env transport: JSON-encoded array."
+        "description": "Export target hosts. Closed set: adapter names (claude, antigravity, agy, cursor, codex, omp) + export-only driver names (pi, windsurf, cline, kiro, copilot). Non-empty required. Default set now includes omp (first-class native host)."
       },
       "export.strategy": {
         "type": "string",
@@ -813,10 +753,7 @@
       "followup.default_sink": {
         "type": "string",
         "default": "project",
-        "valid_values": [
-          "project",
-          "global"
-        ],
+        "valid_values": ["project", "global"],
         "description": "Which sink new entries go to when no explicit --sink= flag is passed to sink-add.sh"
       },
       "followup.notion_enabled": {
@@ -846,11 +783,7 @@
       },
       "followup.audit_evidence_required_artifacts": {
         "type": "array<string>",
-        "default": [
-          "z_review_all_verdict",
-          "test_exit",
-          "cumulative_diff"
-        ],
+        "default": ["z_review_all_verdict", "test_exit", "cumulative_diff"],
         "description": "Named artifact kinds that must be present in an audit_evidence.json blob."
       }
     },

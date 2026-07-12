@@ -562,8 +562,8 @@ export Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1
 ```
 
 Map the command to a Skill invocation:
-- Parse `ENTRY_RECOMMENDED_CMD`: first token is the command (e.g. `/z-do`), remainder is args.
-- Map to `SKILL_ID = "z-harness:<command without leading />"` (e.g. `z-harness:z-do`).
+- Parse `ENTRY_RECOMMENDED_CMD`: first token is the command (e.g. `/z-fix`), remainder is args.
+- Map to `SKILL_ID = "z-harness:<command without leading />"` (e.g. `z-harness:z-fix`).
 - `SKILL_ARGS` = everything after the command token (the args string).
 
 <!-- RUNTIME-GATE: skill_invoke; non-supporting drivers must surface this dispatch requirement to the user. The Skill call is the core execution step; drivers that skip it must warn that the follow-up command was not executed. -->

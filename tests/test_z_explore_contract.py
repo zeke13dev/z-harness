@@ -64,7 +64,7 @@ class TestZExploreSkill:
         assert _has_phrase(self.text, "quick")
 
     def test_deep_mode_has_cost_gate(self):
-        """Deep mode must preserve the z-map cost gate."""
+        """Deep mode must preserve the deep-terrain cost gate."""
         assert _has_phrase(self.text, "Proceed") or _has_phrase(self.text, "cost-confirmation")
 
     def test_no_recommendation_invariant(self):
@@ -149,32 +149,28 @@ class TestZResearchDispatch:
         """z-research must dispatch z-explore --depth=deep, not z-map."""
         assert "z-explore --depth=deep" in self.text
 
-    def test_legacy_note(self):
-        """z-map should be noted as legacy."""
-        assert "z-map" in self.text and "legacy" in self.text.lower()
+    def test_no_z_map_reference(self):
+        """z-map is deleted; z-research must no longer reference it."""
+        assert "z-map" not in self.text
 
 
-# ── T002: z-map legacy marking ─────────────────────────────────────────────
+# ── T002: z-map removal ────────────────────────────────────────────────────
 
 
-class TestZMapLegacy:
-    """Validate z-map is marked as legacy/compatibility."""
+class TestZMapRemoved:
+    """Validate z-map is fully removed and z-explore owns terrain discovery."""
 
-    def test_z_map_skill_points_to_z_explore(self):
-        """z-map SKILL.md description or docs should reference z-explore."""
-        text = _read_skill(ZMAP_SKILL_PATH)
-        # z-map's own skill doesn't need to change, but verify it still defines MAP.md output
-        assert _has_section(text, "No-recommendation") or _has_phrase(text, "MAP.md")
+    def test_z_map_skill_deleted(self):
+        """z-map SKILL.md no longer exists — z-explore owns terrain discovery."""
+        assert not ZMAP_SKILL_PATH.exists()
 
-    def test_human_docs_mark_z_map_legacy(self):
+    def test_human_docs_reference_z_explore(self):
         text = _read_skill(REPO_ROOT / "docs" / "human" / "commands.md")
         assert "z-explore" in text
 
-    def test_capabilities_mark_z_map_legacy(self):
+    def test_capabilities_reference_z_explore(self):
         text = _read_skill(REPO_ROOT / "CAPABILITIES.md")
-        has_z_explore = "z-explore" in text
-        has_z_map = "z-map" in text
-        assert has_z_explore, "CAPABILITIES.md should mention z-explore"
+        assert "z-explore" in text, "CAPABILITIES.md should mention z-explore"
 
 
 # ── T005: z-plan precontext consumption ────────────────────────────────────

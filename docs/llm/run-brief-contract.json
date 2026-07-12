@@ -253,20 +253,20 @@
         {
           "artifact": "run_brief",
           "schema_version": 1,
-          "run_id": "20260607T130000Z-do",
-          "command": "/z-do",
+          "run_id": "20260607T130000Z-fix",
+          "command": "/z-fix",
           "slug": "adhoc",
           "profile": "lite",
           "status": "halted",
           "generated_at": "2026-06-07T13:05:00Z",
           "intent": "Fix typo in README heading",
-          "outcome": "Halted: scope exceeded light-mode threshold",
+          "outcome": "Halted before any artifact — auto-downgraded to lite profile",
           "next": {
             "label": "Run /z-plan",
             "command": "/z-plan"
           },
           "sources": {
-            "intent": "do_run_start",
+            "intent": "fix_run_start",
             "outcome": "run-status"
           }
         }

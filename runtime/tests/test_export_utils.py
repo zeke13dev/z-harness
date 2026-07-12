@@ -351,8 +351,6 @@ INTENT_CLASSIFIER_OUT="$(Agent(
 _PI_DOC_FILES = (
     _REPO_ROOT / "scripts" / "pi_assets" / "README.md",
     _REPO_ROOT / "scripts" / "pi_assets" / "CAPABILITIES.md",
-    _REPO_ROOT / "exports" / "pi" / "README.md",
-    _REPO_ROOT / "exports" / "pi" / "CAPABILITIES.md",
 )
 
 _PI_STALE_NAME_DOC_FILES = (
@@ -362,8 +360,20 @@ _PI_STALE_NAME_DOC_FILES = (
 
 
 class TestPiLegacyAssetDocs:
-    def test_pi_docs_use_runtime_export_entrypoint(self):
-        for path in _PI_DOC_FILES:
+    # exports/ is generated-not-committed since the portability overhaul
+    # (commit 2833ce4, "delete committed exports/ tree and gitignore it");
+    # this fixture generates a fresh pi export into a scratch dir instead of
+    # asserting against a committed exports/pi/ tree.
+    @pytest.fixture(scope="class")
+    def _pi_exported_doc_files(self, tmp_path_factory):
+        from runtime.drivers.pi.export import export
+
+        export_root = tmp_path_factory.mktemp("pi_export_docs")
+        export(_REPO_ROOT, export_root)
+        return (export_root / "README.md", export_root / "CAPABILITIES.md")
+
+    def test_pi_docs_use_runtime_export_entrypoint(self, _pi_exported_doc_files):
+        for path in _PI_DOC_FILES + _pi_exported_doc_files:
             text = path.read_text(encoding="utf-8")
             stale_basename = "export-" + "pi" + ".py"
             stale_script = "scripts/" + stale_basename
@@ -379,18 +389,21 @@ class TestPiLegacyAssetDocs:
             assert stale_basename not in text
             assert "runtime/drivers/pi/export.py" in text
 
-    def test_pi_docs_direct_native_omp_to_omp_export(self):
-        for path in _PI_DOC_FILES:
+    def test_pi_docs_direct_native_omp_to_omp_export(self, _pi_exported_doc_files):
+        for path in _PI_DOC_FILES + _pi_exported_doc_files:
             text = path.read_text(encoding="utf-8")
             assert "/z-export --target=omp" in text
             assert "scripts/omp-consult.sh" in text
             assert "not the native OMP export path" in text
 
-    def test_exports_pi_docs_match_asset_sources(self):
-        for name in ("README.md", "CAPABILITIES.md"):
-            asset = _REPO_ROOT / "scripts" / "pi_assets" / name
-            exported = _REPO_ROOT / "exports" / "pi" / name
-            assert exported.read_text(encoding="utf-8") == asset.read_text(encoding="utf-8")
+    def test_exports_pi_docs_match_asset_sources(self, _pi_exported_doc_files):
+        exported_readme, exported_capabilities = _pi_exported_doc_files
+        assert exported_readme.read_text(encoding="utf-8") == (
+            _REPO_ROOT / "scripts" / "pi_assets" / "README.md"
+        ).read_text(encoding="utf-8")
+        assert exported_capabilities.read_text(encoding="utf-8") == (
+            _REPO_ROOT / "scripts" / "pi_assets" / "CAPABILITIES.md"
+        ).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +489,7 @@ class TestOutputPathFor:
 
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError, match="Unknown kind"):
-            output_path_for(Path("/repo"), "cursor", "personas", "zeke")
+            output_path_for(Path("/repo"), "cursor", "widgets", "zeke")
 
 
 # ---------------------------------------------------------------------------

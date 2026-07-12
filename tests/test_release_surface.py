@@ -34,7 +34,6 @@ _HIDDEN_SURFACE_ONLY_PATHS = (
     "scripts/axiom-extract.py",
     "scripts/axiom-store.py",
     "scripts/overnight-preflight.sh",
-    "personas/builtin/overnight-intern.md",
     "docs/human/attend.md",
     "docs/human/axioms.md",
     "docs/human/overnight-run.md",

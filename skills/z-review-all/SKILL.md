@@ -909,7 +909,7 @@ If there are no actionable findings and no escalations, write `$BASE/archive/$RR
 
 ## Phase 6.5 — Auto-amend review findings (severity-based)
 
-After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severity. The cross-LLM review already validated these findings — asking "do you want to amend?" per finding wastes tokens. Plan-artifact amendments (spec_gap) are applied automatically via `/z-amend --skip-user-gate`. Implementation changes (implementation_drift) stay as candidate fixup tasks for the user to review and prune before `/z-execute`.
+After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severity. The cross-LLM review already validated these findings — asking "do you want to amend?" per finding wastes tokens. Plan-artifact amendments (spec_gap) are applied automatically via `/z-amend`. Step 3 below already excludes any finding that touches a `[x]` completed task, so `/z-amend`'s Phase 4 gate always finds an empty `Touched-but-completed tasks` list here and auto-proceeds without asking — the same effective behavior as before, now driven by the amendment's own impact analysis instead of a caller flag. Implementation changes (implementation_drift) stay as candidate fixup tasks for the user to review and prune before `/z-execute`.
 
 **Hard rules for this phase:**
 - Do NOT ask "do you want to amend?" for blocker/major/minor amendment proposals. Just do it.
@@ -928,7 +928,7 @@ After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severi
    - Read its `**Severity:**` — `blocker`, `major`, or `minor` all get auto-amended.
    - Read its `**Acceptance:**` line — it contains the `/z-amend` command (e.g. `run /z-amend "Add error-handling invariants to SPEC.md §3.2"`).
    - Extract the amendment text (the quoted string after `/z-amend`).
-   - Invoke `/z-amend --skip-user-gate "<amendment text>"` inline (not via subagent — same session). Follow the `/z-amend` pipeline (Phase 0–8) for this slug, with Phase 4 (user gate) skipped per the flag.
+   - Invoke `/z-amend "<amendment text>"` inline (not via subagent — same session). Follow the `/z-amend` pipeline (Phase 0–8) for this slug — since step 3's completed-task-contradiction skip above already excludes anything touching a `[x]` task, `/z-amend`'s own Phase 4 gate finds nothing to disposition and auto-proceeds straight to Phase 5.
    - After the amendment lands, verify by re-reading the affected artifacts (SPEC.md, PLAN.md, TASKS.md) to confirm the changes took effect.
    - Log each amendment to `$BASE/archive/$RRUN/auto-amend-log.md`.
 
@@ -945,7 +945,7 @@ After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severi
 
    ### T-REV-00N — [<severity>] <title>
    - **Source:** Prong <A|B>; <gemini|codex|both>; <finding reference>
-   - **Command:** `/z-amend --skip-user-gate "<amendment text>"`
+   - **Command:** `/z-amend "<amendment text>"`
    - **Result:** applied
    - **Artifacts changed:** <SPEC.md | PLAN.md | TASKS.md — whichever were modified>
 

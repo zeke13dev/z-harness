@@ -1,7 +1,8 @@
 {
   "concept": "capabilities-matrix",
-  "last_updated": "2026-07-05",
-  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native; INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T001 Codex capability contract; T009 Codex docs/memory refresh",
+  "summary": "Per-host adapter/export/command-tier capability matrix (claude/omp/antigravity/cursor/codex adapters + windsurf/kiro/cline/copilot/pi export-only hosts), gated for OMP and Codex by dedicated parity gates that read T008/Codex parity test evidence at call time.",
+  "last_updated": "2026-07-09",
+  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native; INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T001 Codex capability contract, gate-driven command tiers, native subagent dispatch primitive gating; fix(codex) MCP hardening follow-ups (refresh stale registration, auto-approve, narrow surface) 2026-07-06",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
     "z_harness_cli/adapters/antigravity.py",
@@ -11,61 +12,76 @@
     "z_harness_cli/adapters/registry.py",
     "z_harness_cli/adapters/omp.py",
     "z_harness_cli/adapters/omp_parity_gate.py",
+    "z_harness_cli/adapters/codex_parity_gate.py",
     "runtime/drivers/codex/probe.py",
+    "runtime/drivers/codex/export.py",
+    "runtime/drivers/codex/mcp.py",
     "runtime/drivers/omp/export.py",
     "runtime/drivers/omp/subprocess_driver.py",
-    ".omp/config.yml"
+    "runtime/drivers/windsurf/export.py",
+    "runtime/drivers/kiro/export.py",
+    "runtime/drivers/cline/export.py",
+    "runtime/drivers/copilot/export.py",
+    ".omp/config.yml",
+    "runtime/release_surface.py"
   ],
   "confidence": "high",
   "entry_points": [
     {
       "file": "z_harness_cli/adapters/base.py",
-      "line": 276,
+      "line": 279,
       "symbol": "COMMAND_CAPABILITY_MATRIX",
       "kind": "const",
       "summary": "nested dict {host_name: {command_id: CommandTier}}; populated at adapter import time"
     },
     {
       "file": "z_harness_cli/adapters/base.py",
-      "line": 302,
+      "line": 287,
+      "symbol": "COMMAND_CAPABILITY_PROVIDERS",
+      "kind": "const",
+      "summary": "optional dict host->CommandTierProvider; parity-gated hosts re-read live evidence instead of frozen matrix"
+    },
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 311,
       "symbol": "register_command_tiers",
       "kind": "fn",
-      "summary": "registers per-host command tiers; raises ValueError if any KNOWN_COMMANDS entry is missing"
+      "summary": "registers per-host command tiers + optional tier_provider; raises ValueError if any KNOWN_COMMANDS entry is missing"
     },
     {
       "file": "z_harness_cli/adapters/base.py",
-      "line": 320,
+      "line": 341,
       "symbol": "command_tier",
       "kind": "fn",
-      "summary": "O(1) lookup (host, command) -> CommandTier; returns 'blocked' for unknowns (fail-safe)"
+      "summary": "O(1) lookup (host, command) -> CommandTier; checks COMMAND_CAPABILITY_PROVIDERS first, then matrix; returns 'blocked' for unknowns (fail-safe)"
     },
     {
       "file": "z_harness_cli/adapters/base.py",
-      "line": 52,
+      "line": 53,
       "symbol": "Capabilities",
       "kind": "struct",
       "summary": "frozen dataclass of static per-host capability flags"
     },
     {
       "file": "z_harness_cli/adapters/base.py",
-      "line": 42,
+      "line": 44,
       "symbol": "ExportResult",
       "kind": "module",
       "summary": "re-export from runtime.drivers._export_utils; canonical import location for z_harness_cli callers"
     },
     {
       "file": "z_harness_cli/adapters/registry.py",
-      "line": 84,
+      "line": 95,
       "symbol": "detect_all",
       "kind": "fn",
       "summary": "probes all five adapters, including native OMP; returns (adapter, DetectResult) pairs in canonical order"
     },
     {
       "file": "z_harness_cli/adapters/registry.py",
-      "line": 110,
+      "line": 121,
       "symbol": "select",
       "kind": "fn",
-      "summary": "resolves host with optional Rich picker; raises UnknownHostError / NoHostInstalledError"
+      "summary": "resolves host with optional Rich picker; filters/orders by release_surface.public_release_hosts() under prod surface; raises UnknownHostError / NoHostInstalledError"
     },
     {
       "file": "z_harness_cli/adapters/claude.py",
@@ -90,10 +106,10 @@
     },
     {
       "file": "z_harness_cli/adapters/codex.py",
-      "line": 182,
+      "line": 194,
       "symbol": "CodexAdapter",
       "kind": "struct",
-      "summary": "first-class gate-driven adapter with flattened default; export_payload runs two-stage pipeline producing skills/<id>/SKILL.md, .codex/agents/<id>.toml, .codex-plugin/plugin.json, AGENTS.md, MCP config, and persona prompts"
+      "summary": "first-class gate-driven adapter with flattened default; export_payload runs two-stage pipeline; inject() registers MCP via runtime.drivers.codex.mcp.ensure_mcp_registered()"
     },
     {
       "file": "runtime/drivers/codex/probe.py",
@@ -103,6 +119,20 @@
       "summary": "Evidence-backed Codex capability contract emitted at ProbeResults.codex_capabilities: app/plugin multi-agent support, CLI-visible agent support, AskUser/gate support, event-frame support, and derived support_tier."
     },
     {
+      "file": "runtime/drivers/codex/export.py",
+      "line": 229,
+      "symbol": "_render_mcp_config",
+      "kind": "fn",
+      "summary": "renders z-harness MCP server config; narrows surface to enabled_tools=['z_detect'], default_tools_approval_mode='approve'"
+    },
+    {
+      "file": "runtime/drivers/codex/mcp.py",
+      "line": 66,
+      "symbol": "ensure_mcp_registered",
+      "kind": "fn",
+      "summary": "idempotent MCP registration; full desired-state comparison (command/args/env/enabled_tools/disabled_tools/approval_mode); remove+re-add on mismatch; patches approval/tool-filter TOML keys post-add"
+    },
+    {
       "file": "z_harness_cli/adapters/omp_parity_gate.py",
       "line": 1,
       "symbol": "omp_parity_gate",
@@ -110,8 +140,15 @@
       "summary": "Single source of truth for OMP fidelity and command tiers (T009). PARITY_EVIDENCE maps command families to T008 test classes; omp_adapter_fidelity() returns 'native' when all entries resolve. Removing a T008 class immediately downgrades the corresponding family."
     },
     {
-      "file": "z_harness_cli/adapters/omp.py",
+      "file": "z_harness_cli/adapters/codex_parity_gate.py",
       "line": 1,
+      "symbol": "codex_parity_gate",
+      "kind": "module",
+      "summary": "Single source of truth for Codex fidelity and command tiers. Multi-agent families require BOTH PARITY_EVIDENCE (behavioral, runtime.tests.test_codex_parity) AND a resolvable native_subagent_dispatch runtime primitive (COMMAND_RUNTIME_PRIMITIVES) before promotion to native. Exported .codex/agents/*.toml is not primitive evidence."
+    },
+    {
+      "file": "z_harness_cli/adapters/omp.py",
+      "line": 112,
       "symbol": "OmpAdapter",
       "kind": "struct",
       "summary": "OMP host adapter (T009 complete); fidelity_tier and command tiers read from omp_parity_gate. fidelity_tier='native'; z-execute/z-consult/z-gate/z-panel are native; all others are degraded."
@@ -132,12 +169,14 @@
     }
   ],
   "depends_on": [
-    "multi-ide-exports"
+    "multi-ide-exports",
+    "release-surface"
   ],
   "consumed_by": [
     "launch-command",
     "export-command",
-    "doctor-command"
+    "doctor-command",
+    "setup-command"
   ],
   "fidelity_tiers": {
     "native": {
@@ -215,7 +254,49 @@
         "claim_boundary": "Required before preserving native Codex event frames in the runtime driver."
       }
     },
-    "promotion_rule": "support_tier summarizes probe evidence only. Command-family promotion still requires the relevant CLI fields plus parity-gate/runtime-driver evidence; app/plugin multi-agent support must not be conflated with Codex CLI support."
+    "promotion_rule": "support_tier summarizes probe evidence only. Command-family promotion still requires the relevant CLI fields plus codex_parity_gate.py PARITY_EVIDENCE AND the native_subagent_dispatch runtime primitive; app/plugin multi-agent support must not be conflated with Codex CLI support."
+  },
+  "codex_parity_gate_contract": {
+    "source": "z_harness_cli/adapters/codex_parity_gate.py",
+    "native_candidate_families": [
+      "z-execute",
+      "z-panel",
+      "z-consult",
+      "z-gate"
+    ],
+    "parity_evidence_module": "runtime.tests.test_codex_parity",
+    "parity_evidence": {
+      "z-execute": ["TestSubagentFanOutParity", "TestMultiAgentCommandPath"],
+      "z-consult": ["TestConsultantDispatchIsolation"],
+      "z-gate": ["TestAskUserGateParity"],
+      "z-panel": ["TestSubagentFanOutParity"]
+    },
+    "adapter_evidence": ["TestTelemetryParity"],
+    "export_evidence_module": "tests.drivers.test_codex_export_driver",
+    "export_evidence": ["TestCodexNativeAgentExport"],
+    "runtime_primitive": "native_subagent_dispatch",
+    "runtime_primitive_evidence": ["TestCodexNativeSubagentDispatchPrimitive"],
+    "promotion_rule": "A multi-agent family promotes to native only when BOTH its PARITY_EVIDENCE entries resolve AND the native_subagent_dispatch runtime primitive resolves (COMMAND_RUNTIME_PRIMITIVES). Non-multi-agent families with resolvable PARITY_EVIDENCE promote directly; unlisted families stay degraded. codex_adapter_fidelity()=native requires ALL native-candidate families proven plus ADAPTER_EVIDENCE; codex_export_fidelity()=native additionally requires EXPORT_EVIDENCE. As of this refresh none resolve (all evidence modules/classes absent), so codex stays flattened/partial/blocked as shipped.",
+    "explicitly_rejected_evidence": "Exported .codex/agents/*.toml files and the current interactive session's own subagent tools are NOT accepted as native_subagent_dispatch evidence."
+  },
+  "codex_mcp_hardening": {
+    "source": ["runtime/drivers/codex/mcp.py", "runtime/drivers/codex/export.py::_render_mcp_config"],
+    "landed": "2026-07-06 (commits f256decb refresh-stale, 19f141f9 auto-approve, 8af644d3 narrow-surface)",
+    "idempotency_comparison_fields": [
+      "command",
+      "args",
+      "env",
+      "enabled_tools",
+      "disabled_tools",
+      "default_tools_approval_mode"
+    ],
+    "mismatch_behavior": "codex mcp remove <server_name> then codex mcp add ... (full re-registration), not a silent skip",
+    "post_add_toml_patch": "codex mcp add has no CLI flag for default_tools_approval_mode/enabled_tools/disabled_tools; mcp.py patches those direct keys into [mcp_servers.<server_name>] surgically after add succeeds",
+    "exported_mcp_surface": {
+      "default_tools_approval_mode": "approve",
+      "enabled_tools": ["z_detect"],
+      "rationale": "Codex's /z-* command surface is native plugin skills, not MCP tool calls; MCP is intentionally narrowed to a lightweight detection helper so a skill run cannot recursively invoke z-harness command tools over MCP"
+    }
   },
   "export_pipeline": {
     "claude": {
@@ -264,7 +345,7 @@
         "<dest>/AGENTS.md",
         "<dest>/prompts/personas/<name>.md"
       ],
-      "note": "skills written as native SKILL.md under export root; custom-agent TOML written under .codex/agents; discovered by .codex-plugin/plugin.json 'skills' key; MCP config emitted for adapter registration; AGENTS.md remains fallback/reference; export artifacts are never committed"
+      "note": "skills written as native SKILL.md under export root; custom-agent TOML written under .codex/agents; discovered by .codex-plugin/plugin.json 'skills' key; MCP config narrowed to enabled_tools=['z_detect'], default_tools_approval_mode='approve'; AGENTS.md remains fallback/reference; export artifacts are never committed"
     },
     "windsurf": {
       "stage1": "runtime/drivers/windsurf/export.py::export(harness_root, dest)",
@@ -375,12 +456,13 @@
       },
       "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
       "config_injection": "AGENTS.md",
-      "mcp_note": "Global/persistent write to ~/.codex/config.toml via runtime.drivers.codex.mcp.ensure_mcp_registered(); not reversed by ephemeral cleanup (F4)",
+      "mcp_note": "Global/persistent write to ~/.codex/config.toml via runtime.drivers.codex.mcp.ensure_mcp_registered(); not reversed by ephemeral cleanup (F4). Idempotency now compares full desired state (command/args/env/enabled_tools/disabled_tools/approval_mode); mismatch triggers remove+re-add. Post-add TOML patch handles approval_mode/tool filters (no CLI flag). Exported surface narrowed to enabled_tools=['z_detect'], default_tools_approval_mode='approve'.",
       "capability_probe": {
         "result_field": "ProbeResults.codex_capabilities",
         "adapter_tier_boundary": "CodexAdapter.fidelity_tier is read from codex_parity_gate and remains flattened by default. Codex export fidelity is partial because export evidence resolves independently. Probe support_tier is evidence for later parity work and does not promote COMMAND_CAPABILITY_MATRIX by itself.",
         "surface_split": "app_plugin_multi_agent_support is distinct from cli_visible_agent_support, ask_user_gate_support, and event_frame_support."
-      }
+      },
+      "parity_gate": "z_harness_cli/adapters/codex_parity_gate.py; multi-agent families require PARITY_EVIDENCE (runtime.tests.test_codex_parity) AND native_subagent_dispatch runtime primitive (COMMAND_RUNTIME_PRIMITIVES); none resolve as shipped"
     },
     "windsurf": {
       "binary": null,
@@ -422,7 +504,7 @@
       "binary": "omp",
       "fidelity_tier": "native",
       "native_command_families": ["z-execute", "z-consult", "z-gate", "z-panel"],
-      "degraded_command_families": ["z-plan", "z-implement", "z-review", "z-test", "z-audit", "z-export", "z-update", "z-doctor", "z-status", "z-brainstorm", "z-maintain-docs"],
+      "degraded_command_families": ["z-plan", "z-implement", "z-review", "z-test", "z-audit", "z-export", "z-update", "z-doctor", "z-status", "z-brainstorm", "z-maintain-docs", "z-resume"],
       "capabilities": {
         "supports_project_mcp": false,
         "supports_user_mcp": false,
@@ -445,7 +527,7 @@
     }
   },
   "command_tiers": {
-    "note": "Multi-agent commands are degraded on high-fidelity adapter hosts and blocked on flattened adapter hosts. Export-only hosts (pi/windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry. OMP command tiers (T009): z-execute/z-consult/z-gate/z-panel are native; all others are degraded. Tiers are driven by PARITY_EVIDENCE in omp_parity_gate.py — removing a T008 class downgrades the family. Codex CLI command tiers remain blocked/degraded unless Codex capability probe fields, native runtime primitive evidence, a driver hook, and later parity evidence promote them.",
+    "note": "Multi-agent commands are degraded on high-fidelity adapter hosts and blocked on flattened adapter hosts. Export-only hosts (pi/windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry. OMP command tiers (T009): z-execute/z-consult/z-gate/z-panel are native; all others are degraded. Codex command tiers are gate-driven via codex_parity_gate.py's tier_provider: multi-agent families need PARITY_EVIDENCE AND the native_subagent_dispatch primitive; other families promote on PARITY_EVIDENCE alone; unlisted families stay degraded. KNOWN_COMMANDS includes z-resume alongside the other 15 families.",
     "multi_agent_commands": [
       "z-execute",
       "z-panel",
@@ -473,6 +555,7 @@
       "pointer": "export-only — no command tiers; not in adapter registry"
     },
     "omp_note": "OMP parity gate (T009) resolved: z-execute/z-consult/z-gate/z-panel are native (T008 evidence); all others are degraded. Adapter and export fidelity are both native. To promote a new family: add PARITY_EVIDENCE entry + T008 test class.",
+    "codex_note": "Codex parity gate is conservative by design: as shipped, none of PARITY_EVIDENCE, ADAPTER_EVIDENCE, EXPORT_EVIDENCE, or the native_subagent_dispatch runtime-primitive evidence resolve, so codex stays adapter=flattened, export=partial, multi-agent families=blocked, other families=degraded.",
     "omp_evidence_matrix": {
       "z-execute": [
         "launch/inject cleanup",
@@ -509,7 +592,7 @@
     }
   },
   "invariants": [
-    "adapter fidelity_tier is stable per host except parity-gated hosts (OMP and Codex), whose adapter/export fidelity and command tiers are resolved through their parity gates",
+    "adapter fidelity_tier is stable per host except parity-gated hosts (OMP and Codex), whose adapter/export fidelity and command tiers are resolved through their parity gates at call time (not cached)",
     "multi-agent commands (z-execute, z-panel, z-consult, z-gate) are degraded on high-tier hosts and blocked on flattened hosts",
     "flattened adapter = single-agent transliteration only; no proven runtime subagent dispatch",
     "high = native skill/persona loading via host-native mechanism; single-agent only; subagent dispatch absent",
@@ -522,25 +605,36 @@
     "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)",
     "OMP parity gate (T009) resolved: OmpAdapter.fidelity_tier, OMP ExportResult.fidelity, and COMMAND_CAPABILITY_MATRIX[\"omp\"] all read from omp_parity_gate.py; z-execute/z-consult/z-gate/z-panel are native; all others degraded.",
     "Codex capability claims are evidence-backed by ProbeResults.codex_capabilities. App/plugin multi-agent support, CLI-visible agent support, AskUser/gate support, and event-frame support are separate fields; support_tier is only a summary and does not promote command tiers by itself.",
+    "Codex multi-agent command promotion requires BOTH codex_parity_gate.py PARITY_EVIDENCE AND a resolvable native_subagent_dispatch runtime primitive (COMMAND_RUNTIME_PRIMITIVES); these are independent gates and neither alone is sufficient.",
     "Codex export fidelity is partial: native SKILL.md files, custom-agent TOML, plugin manifest, AGENTS.md fallback/reference, and MCP config are emitted, but Codex CLI command orchestration remains flattened/degraded/blocked.",
-    "Codex native subagent dispatch requires primitive evidence plus a CodexDriver.dispatch_native_subagent hook; exported custom-agent TOML is not runtime dispatch evidence.",
-    "Claude Code is the ground-truth parity target for OMP native behavior.",
+    "Codex native subagent dispatch requires primitive evidence (TestCodexNativeSubagentDispatchPrimitive) plus a CodexDriver.dispatch_native_subagent hook; exported custom-agent TOML is not runtime dispatch evidence, nor is the current interactive session's own subagent tools",
+    "Claude Code is the ground-truth parity target for OMP and Codex native behavior.",
     "Native OMP execution must not call runtime/drivers/pi/export.py, pi prompt rewrites, scripts/pi_assets, or scripts/omp-consult.sh.",
     ".omp/config.yml intentionally preserves skills.enableAgentsProject=false; native OMP discovery is explicit through OMP_PLUGIN_ROOT and the .omp/z-harness package.",
-    "pi is export-only even though its export result fidelity is high; it is not in the adapter registry and is not a native OMP stepping stone."
+    "pi is export-only even though its export result fidelity is high; it is not in the adapter registry and is not a native OMP stepping stone.",
+    "Codex MCP registration (runtime/drivers/codex/mcp.py) is idempotent against full desired state (command/args/env/enabled_tools/disabled_tools/default_tools_approval_mode); a mismatch triggers codex mcp remove then codex mcp add, never a silent no-op with stale config",
+    "codex mcp add has no CLI flag for default_tools_approval_mode/enabled_tools/disabled_tools; mcp.py must patch those TOML keys directly and surgically (insert/replace/remove only those keys) after add succeeds",
+    "The exported Codex MCP server surface is intentionally narrowed to enabled_tools=['z_detect'] with default_tools_approval_mode='approve' because Codex's /z-* commands run through native plugin skills, not MCP tool calls",
+    "registry.select() filters/orders auto-selection by release_surface.public_release_hosts() when the process default surface is prod; --host <name> bypasses this filter for any registered adapter"
   ],
   "gotchas": [
     "codex is first-class but surface-split: the shipped Codex CLI adapter is flattened, export fidelity is partial, and app/plugin multi-agent evidence is recorded separately by ProbeResults.codex_capabilities.app_plugin_multi_agent_support.",
+    "codex multi-agent promotion needs TWO independent gate resolutions (command PARITY_EVIDENCE + native_subagent_dispatch runtime primitive) — check codex_command_decision(command).reason for which one is missing, do not assume a resolved PARITY_EVIDENCE entry alone promotes the family",
     "cursor and the Codex CLI adapter both declare adapter fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not. Codex partial export fidelity and app/plugin probe evidence must not be substituted for CLI command parity.",
     "antigravity uses ANTIGRAVITY_PLUGIN_ROOT; all three other adapters inject CLAUDE_PLUGIN_ROOT",
     "codex MCP registration is global (~/.codex/config.toml) and survives session cleanup; explicit removal only via z-harness doctor --clear-mcp",
+    "codex MCP idempotency check now compares full desired state, not just key presence — a hand-edited or stale [mcp_servers.z-harness] entry triggers remove+re-add, not a silent skip",
+    "codex mcp add has no flag for default_tools_approval_mode/enabled_tools/disabled_tools; mcp.py patches those TOML keys directly post-add — do not assume codex mcp add persists them",
+    "the exported Codex MCP surface is deliberately narrow (enabled_tools=['z_detect']) — Codex does not get the full z-harness MCP tool set because its /z-* commands run through native plugin skills instead",
     "cursor needs_trust_prompt=True means inject() must not assume non-interactive; surface the prompt via PTY",
-    "canonical adapter order in registry remains claude > antigravity > cursor > codex > omp, but prod auto-selection is sorted by public_release_hosts(): claude, omp, codex",
-    "register_command_tiers() raises ValueError at import time if KNOWN_COMMANDS entry is missing — misconfigured adapters fail fast",
+    "canonical adapter order in registry remains claude > antigravity > cursor > codex > omp, but prod auto-selection is filtered/sorted by release_surface.public_release_hosts(): claude, omp, codex",
+    "register_command_tiers() raises ValueError at import time if KNOWN_COMMANDS entry is missing — misconfigured adapters fail fast; KNOWN_COMMANDS includes z-resume",
     "antigravity collision domain is workflows/rules/skills stems (with z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex persona collision checks use prompts/ stems only (AGENTS.md and .codex/agents are excluded)",
     "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them",
     "Do not treat omp-gemini/omp-codex provider entries as native OMP host support; they are consult-provider compatibility through scripts/omp-consult.sh.",
-    "OMP command tiers start blocked/degraded until command-family evidence covers the matrix; a host-wide native label is forbidden before the parity gate."
+    "OMP command tiers start blocked/degraded until command-family evidence covers the matrix; a host-wide native label is forbidden before the parity gate.",
+    "command_tier() and register_command_tiers() now support a tier_provider callable (COMMAND_CAPABILITY_PROVIDERS); COMMAND_CAPABILITY_MATRIX alone is a stale snapshot for omp/codex — always read command_tier(host, cmd), never index the matrix dict directly for gated hosts",
+    "release_surface is a separate concept (runtime/release_surface.py) that registry.select() now consults for prod auto-selection filtering — do not conflate its prod/dev visibility rules with this concept's adapter fidelity tiers"
   ],
   "memories": [],
   "pending_native_hosts": {},
@@ -604,8 +698,8 @@
     }
   },
   "drift_verification": {
-    "date": "2026-07-05",
-    "command": "source review plus gate check of z_harness_cli/adapters/registry.py, z_harness_cli/adapters/omp.py, runtime/drivers/omp/export.py, runtime/drivers/codex/probe.py, runtime/drivers/codex/export.py, and z_harness_cli/adapters/codex_parity_gate.py",
+    "date": "2026-07-09",
+    "command": "source review of z_harness_cli/adapters/base.py, registry.py, codex.py, codex_parity_gate.py, omp.py, omp_parity_gate.py, runtime/drivers/codex/probe.py, export.py, mcp.py, and runtime/release_surface.py against git log for those files since the 2026-07-05 doc snapshot",
     "observed_adapters": [
       "claude",
       "antigravity",
@@ -620,6 +714,6 @@
       "cursor",
       "omp"
     ],
-    "conclusion": "OMP parity gate (T009) resolved: OmpAdapter.fidelity_tier='native', OMP ExportResult.fidelity='native'; z-execute/z-consult/z-gate/z-panel are native; all other families degraded. Three OMP surfaces synchronized via omp_parity_gate.py. Codex gate state is adapter='flattened', export='partial', native subagent primitive=false; z-execute/z-panel/z-consult/z-gate are blocked, ordinary commands such as z-plan are degraded. Codex app/plugin multi-agent evidence, native export artifacts, and CLI command parity remain separate surfaces."
+    "conclusion": "OMP parity gate (T009) unchanged and resolved: OmpAdapter.fidelity_tier='native', OMP ExportResult.fidelity='native'; z-execute/z-consult/z-gate/z-panel native; all other families degraded. Codex parity gate is now two-tier (command PARITY_EVIDENCE + native_subagent_dispatch runtime primitive) via codex_parity_gate.py, which was underdocumented in the 2026-07-05 snapshot (no codex_parity_gate.py entry point, no COMMAND_RUNTIME_PRIMITIVES mention). base.py's register_command_tiers/command_tier gained a tier_provider mechanism (COMMAND_CAPABILITY_PROVIDERS) enabling live-gate reads, also undocumented previously. Three follow-up commits after the 2026-07-05 snapshot (f256decb, 19f141f9, 8af644d3) hardened runtime/drivers/codex/mcp.py: idempotency now compares full desired state and remove+re-adds on mismatch, patches approval_mode/tool-filter TOML keys post-add (no CLI flag exists), and the exported MCP surface is narrowed to enabled_tools=['z_detect'] with default_tools_approval_mode='approve' — none of this was reflected in the prior doc. registry.py's select() also now filters/orders auto-selection through runtime/release_surface.py's public_release_hosts() under the prod surface; that mechanism existed as of the 2026-07-05 snapshot's gotchas line but the module itself was not a covered source file or cross-ref."
   }
 }

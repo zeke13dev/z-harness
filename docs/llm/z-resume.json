@@ -1,7 +1,7 @@
 {
   "concept": "z-resume",
-  "last_updated": "2026-06-29",
-  "covers_spec": "skills/z-resume/SKILL.md",
+  "last_updated": "2026-07-09",
+  "covers_spec": "none",
   "source_files": [
     "skills/z-resume/SKILL.md",
     "docs/human/z-resume.md",
@@ -11,7 +11,7 @@
     "skills/z-report/SKILL.md",
     "skills/z-explain/SKILL.md",
     "skills/z-learn/SKILL.md",
-    "skills/z-where/SKILL.md"
+    "skills/z-stats/SKILL.md"
   ],
   "confidence": "high",
   "summary": "Read-only work-thread recovery for fuzzy or exact prior-work targets. /z-resume selects a bounded plan/run/worktree/branch/artifact/repo target, reports evidence-backed state and ambiguity, recommends safe continuations without executing them, and delegates --report to /z-report only after selection.",
@@ -39,7 +39,7 @@
     },
     {
       "file": "scripts/resume-context.py",
-      "line": 3897,
+      "line": 3942,
       "symbol": "build_context",
       "kind": "function",
       "summary": "Builds the deterministic /z-resume packet by gathering bounded evidence, ranking candidates, applying ambiguity/reportability gates, and emitting selected target context."
@@ -53,7 +53,7 @@
     },
     {
       "file": "scripts/report-context.py",
-      "line": 1719,
+      "line": 1747,
       "symbol": "main",
       "kind": "module",
       "summary": "Resolves report targets and accepts --resume-context so a selected /z-resume packet can be projected into the /z-report context bundle."
@@ -94,6 +94,13 @@
       "summary": "Only selected, exact, non-ambiguous targets may hand off to report-context/report-synth through the existing z-report machinery."
     },
     {
+      "file": "agents/resume-cluster.md",
+      "line": 1,
+      "symbol": "resume-cluster agent",
+      "kind": "module",
+      "summary": "Tool-less Haiku subagent for bounded Phase 4 cheap inference; summarizes only the supplied candidate/evidence payload."
+    },
+    {
       "file": "docs/human/z-resume.md",
       "line": 1,
       "symbol": "human concept doc",
@@ -131,11 +138,12 @@
     "Branch/worktree matching is associative evidence only; substring/basename matches alone are insufficient proof.",
     "Memories, follow-ups, cheap inference, and fuzzy user text never prove current state, landed state, completion, or branch/worktree ownership.",
     "Cross-repo candidates must carry source/repo citations, and broader discovery is capped and explicit via --repo or --all-repos.",
-    "Safe next options are advisory and copyable; /z-resume never auto-dispatches the recommended command."
+    "Safe next options are advisory and copyable; /z-resume never auto-dispatches the recommended command.",
+    "Phase 4 cheap inference is capped at MAX_SUBAGENT_DEFAULT_CALLS (2) and the resume-cluster agent is tool-less/read-only over only the supplied packet."
   ],
   "adjacent_boundaries": [
     {
-      "command": "/z-where",
+      "command": "/z-stats",
       "use_for": "Active-plan registry status and path overlaps for currently registered runs.",
       "resume_boundary": "/z-resume consumes registry evidence but also recovers bounded historical artifacts, sessions, branches, reports, and cross-repo context."
     },
@@ -167,7 +175,7 @@
     {
       "command": "/z-overnight resume",
       "use_for": "Resume a known overnight run id/state.",
-      "resume_boundary": "/z-resume can find/cite the likely overnight run but does not resume unattended orchestration."
+      "resume_boundary": "/z-resume can find the likely run id and cite state, but it does not resume unattended orchestration."
     }
   ],
   "examples": [
@@ -187,7 +195,7 @@
     "Recency filters discovery and ranking; it does not prove current truth or hide older canonical linked decisions attached to a selected candidate.",
     "Provider truncation, stale session/handoff files, malformed artifacts, dirty/divergent worktrees, and close-score competitors become warnings or ambiguity, not silent choices.",
     "Noninteractive ambiguous output must not invoke report-context.py, report-synth, /z-report, or any report renderer.",
-    "Worktree-backed selected reports must use --worktree target args; non-current-repo selections must not fall back to current repo --run/--slug resolution.",
+    "Worktree-backed selected reports must use --worktree target args; non-current-repo selections must not fall back to current-base --run or --slug resolution.",
     "SESSION_CONTEXT.md is live side evidence only when freshly linked by a valid session/handoff artifact; otherwise it is stale side evidence."
   ],
   "memories": []

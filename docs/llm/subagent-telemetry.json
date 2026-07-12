@@ -1,6 +1,7 @@
 {
   "concept": "subagent-telemetry",
-  "last_updated": "2026-06-24",
+  "summary": "Non-blocking per-subagent-dispatch cost telemetry: host detection, host-stamped event logging, and the retrospective subagent-costs read-side pricer for /z-stats Phase 6.",
+  "last_updated": "2026-07-11",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 2",
   "source_file": [
     "scripts/detect-host.sh",
@@ -42,24 +43,38 @@
     },
     {
       "file": "scripts/log-subagent.sh",
-      "line": 87,
+      "line": 107,
       "symbol": "PAYLOAD builder",
       "kind": "module",
       "summary": "Builds role/type/model/chars plus optional provider token fields."
     },
     {
+      "file": "scripts/log-subagent.sh",
+      "line": 154,
+      "symbol": "log-event.sh delegation",
+      "kind": "module",
+      "summary": "Emits the built payload via log-event.sh, which stamps host."
+    },
+    {
       "file": "scripts/estimate-tokens.py",
-      "line": 356,
+      "line": 373,
       "symbol": "_compute_event_cost",
       "kind": "fn",
       "summary": "Computes input/output tokens and cost from a subagent_call."
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 415,
+      "line": 441,
       "symbol": "subagent_costs",
       "kind": "fn",
       "summary": "Per-host, per-subagent_type aggregate from repo-wide metrics; retrospective observed-call cost surface distinct from pre-run forecasts."
+    },
+    {
+      "file": "scripts/estimate-tokens.py",
+      "line": 1493,
+      "symbol": "_format_subagent_costs_table",
+      "kind": "fn",
+      "summary": "Human-readable table formatter for the subagent-costs CLI subcommand."
     },
     {
       "file": "scripts/test_subagent_logging.sh",
@@ -70,10 +85,10 @@
     },
     {
       "file": "skills/z-stats/SKILL.md",
-      "line": 97,
-      "symbol": "Phase 3b",
+      "line": 77,
+      "symbol": "Phase 6",
       "kind": "section",
-      "summary": "User-facing subagent-costs report."
+      "summary": "User-facing subagent-costs report; only section of the rewritten SKILL.md this concept still owns."
     }
   ],
   "depends_on": [
@@ -97,7 +112,8 @@
     "subagent_call events land in repo-wide metrics at the resolved base.",
     "Drift guard pins z-execute, reviewer, consultant-primary, consultant-secondary logging sites.",
     "subagent-costs is retrospective over observed subagent_call events; it is exact only when provider_input_tokens/provider_output_tokens are present and otherwise labels chars/4 estimates.",
-    "Pre-run plan/execute forecasts from estimate-tokens.py are prospective and must not be presented as post-run subagent-costs accounting."
+    "Pre-run plan/execute forecasts from estimate-tokens.py are prospective and must not be presented as post-run subagent-costs accounting.",
+    "skills/z-stats/SKILL.md Phase 6 still shells out directly to scripts/estimate-tokens.py subagent-costs, unchanged by the 2026-07 rewrite that moved every other z-stats section onto scripts/stats.py."
   ],
   "gotchas": [
     "Z_HARNESS_HOST overrides host detection.",
@@ -105,7 +121,10 @@
     "Char-est cost rows are not equivalent to real-token rows.",
     "Consultant orchestrator dispatches should not double-log because agents self-log.",
     "Opt-out comment for implementer drift guard must be exactly # no-subagent-log: <reason>.",
-    "Do not compare /z-plan pre-run forecast totals to subagent-costs without noting that forecast execute components are wide static projections while subagent-costs reports observed calls only."
+    "Do not compare /z-plan pre-run forecast totals to subagent-costs without noting that forecast execute components are wide static projections while subagent-costs reports observed calls only.",
+    "estimate-tokens.py entry-point line numbers drift fast: re-verify anchors on every refresh rather than trusting the prior doc (this refresh found a consistent -3 line shift on all three estimate-tokens.py anchors).",
+    "skills/z-stats/SKILL.md was rewritten 266->156 lines to absorb the former /z-where command as Phase 1 and delegate progress/walltime/tokens/coordination/halts/next-command to the new scripts/stats.py (not tracked by this concept); the subagent-costs entry point moved from the old 'Phase 3b' label to 'Phase 6' and will keep renumbering as scripts/stats.py's phase count changes, so pin future refreshes to the section header text, not the phase number alone.",
+    "No persona_attempt_outcome/persona_bound/persona_random_selected event kinds belong to this concept; the persona-rotation subsystem that emitted them has been excised and is tracked (where it still is) under separate scripts/watchdog concept docs."
   ],
   "memories": []
 }

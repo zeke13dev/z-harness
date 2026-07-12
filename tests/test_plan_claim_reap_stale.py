@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -56,6 +57,30 @@ def _claims_dir(base: Path) -> Path:
 
 def _lock_path(base: Path, slug: str) -> Path:
     return _claims_dir(base) / f"{slug}.lock"
+
+
+def _pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
+
+
+def _held_lock_daemon_pid(lock_path: Path):
+    """Best-effort: read the pid field out of a (possibly-just-written) lock file.
+
+    Returns None if the file is missing/empty/unparseable -- never raises.
+    """
+    try:
+        content = lock_path.read_text(encoding="utf-8").strip()
+        if not content:
+            return None
+        return json.loads(content).get("pid")
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _write_lock_json(
@@ -183,8 +208,31 @@ class TestReapStaleHeld(unittest.TestCase):
         # Best-effort release so the daemon subprocess doesn't linger.
         _run_release(self.slug, self.base)
 
+    def _note_daemon_liveness_precondition(self, caller: str) -> None:
+        """Precondition check (attributability, not a race workaround): confirm
+        the holder daemon that _acquire_until_held's `plan-claim.sh acquire`
+        call just spawned is still alive right before the reap-stale call
+        below. That daemon is a forked, detached `bash scripts/sink-lock.sh
+        acquire` background process outside this test's or plan-claim.sh's
+        control; under heavy concurrent load it has been observed dying
+        between the acquire confirming success and this check (see LEDGER
+        T105/T118). If it already died, any assertion failure below is
+        attributable to sink-lock.sh's daemon lifetime, not reap-stale's
+        (read-only) collision/staleness logic.
+        """
+        pid = _held_lock_daemon_pid(_lock_path(self.base, self.slug))
+        if pid is not None and not _pid_alive(pid):
+            print(
+                f"NOTE: {caller} precondition: holder daemon (pid={pid}) is not "
+                f"alive ahead of the reap-stale call; any failure below is "
+                f"attributable to scripts/sink-lock.sh's daemon lifetime, not "
+                f"plan-claim.sh reap-stale.",
+                file=sys.stderr,
+            )
+
     def test_held_exits_0(self) -> None:
         _acquire_until_held(self.slug, self.base)
+        self._note_daemon_liveness_precondition("test_held_exits_0")
 
         result = _run_reap_stale(self.slug, self.base)
         self.assertEqual(
@@ -194,6 +242,7 @@ class TestReapStaleHeld(unittest.TestCase):
 
     def test_held_prints_held(self) -> None:
         _acquire_until_held(self.slug, self.base)
+        self._note_daemon_liveness_precondition("test_held_prints_held")
 
         result = _run_reap_stale(self.slug, self.base)
         self.assertEqual(result.stdout.strip(), "held",
@@ -202,6 +251,7 @@ class TestReapStaleHeld(unittest.TestCase):
     def test_held_is_readonly(self) -> None:
         """reap-stale must not release the lock; the lock file must still be held after."""
         _acquire_until_held(self.slug, self.base)
+        self._note_daemon_liveness_precondition("test_held_is_readonly")
 
         lp = _lock_path(self.base, self.slug)
         content_before = lp.read_text(encoding="utf-8") if lp.exists() else ""

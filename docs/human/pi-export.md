@@ -1,15 +1,16 @@
 # pi Export
 
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 > Covers source: runtime/drivers/pi/__init__.py, runtime/drivers/pi/export.py, scripts/pi_assets/AGENTS.preamble.md, scripts/pi_assets/CAPABILITIES.md, scripts/pi_assets/README.md, scripts/pi_assets/agents/explore.md, scripts/pi_assets/extensions/subagent/index.ts, scripts/pi_assets/extensions/subagent/agents.ts, scripts/pi_assets/extensions/subagent/VENDOR.md, scripts/lint-frontmatter.sh, Makefile
 
 ## Overview
 
 The pi export builds resources for [pi](https://pi.dev) — a coding agent harness that z-harness itself runs inside. Unlike the Cursor/Codex/agy exports, pi has no native subagent dispatch primitive. Fan-out runs through pi's **subagent extension**, which this export vendors under the selected export root, for example `temp/exports/pi/extensions/subagent/`. pi is **export-only**: there is no adapter, HostDriver, or launch/inject host. The export pipeline lives entirely in `runtime/drivers/pi/export.py`, invoked directly via `from runtime.drivers.pi.export import export`.
 
-The export tree has two classes of output:
+The export tree has three classes of output:
 - **Generated** from z-harness source (`agents/` and `skills/`; the legacy `commands` source key stays empty for compatibility): agent files (`agents/<id>.md`), prompt files (`prompts/<id>.md`), and the `AGENTS.md` index. `skills/<id>/SKILL.md` is the hand-authored command/skill source tier; pi renders those skills as prompts.
 - **Copied verbatim** from `scripts/pi_assets/`: the `explore` agent (pi-only; no z-harness source), the subagent extension (`index.ts`, `agents.ts`), the AGENTS preamble, `CAPABILITIES.md`, and `README.md`.
+- **Copied deterministic runtime scripts** (added for `/z-resume`): if the source repo has `scripts/resume-context.py`, `export()` also copies a fixed list of `/z-resume` runtime dependencies (`scripts/resume-context.py`, `scripts/artifact-scout-inventory.py`, `scripts/active-plan-registry.py`, `scripts/plan-path.sh`, `scripts/session-helpers.sh`, `scripts/config.py`, `scripts/log-event.sh`, `scripts/detect-host.sh`, `scripts/intent-schema.py`) into the export root at the same `scripts/...` relative paths, so the exported `z-resume` skill text can invoke them without a live checkout beside it. Fixture repos without `scripts/resume-context.py` are left unchanged.
 
 The explore agent is the headline fan-out agent. It is read-only, returns `path:line` conclusions, and is designed for parallel dispatch via pi's `subagent { "tasks": [...] }` syntax.
 
@@ -17,7 +18,7 @@ The explore agent is the headline fan-out agent. It is read-only, returns `path:
 
 pi export and OMP support are deliberately separate. pi remains an **export-only** compatibility target: no adapter registry entry, no HostDriver, no `--host pi`, no launch/inject cleanup, and no native session/rules/profile/model dispatch contract. OMP is a **first-class native host** (T009 complete): `OmpAdapter` with native fidelity, `OmpHostDriver` for native dispatch (T007), `.omp/z-harness/` package/discovery layout, and four native command families (z-execute, z-consult, z-gate, z-panel). All remaining OMP families are `degraded`. Claude Code is the OMP parity ground truth.
 
-The two paths must not share prompt rewrites. OMP export must not call `runtime/drivers/pi/export.py`, `_replacement_for_line`, pi prompt-defense injection, `scripts/pi_assets/`, or the vendored `extensions/subagent/` bridge. OMP consult-provider compatibility is separate again: `scripts/omp-consult.sh` uses `omp -p --no-session --no-rules --model ... <prompt>` only to adapt provider-registry stdin prompts for advisory consultant roles. OMP native command dispatch (T007) keeps rules/session semantics and is proven at Claude-Code parity for four families (T009).
+The two paths must not share prompt rewrites. OMP export must not call `runtime/drivers/pi/export.py`, `_replacement_for_line`, pi prompt-defense injection, `scripts/pi_assets/`, or the vendored `extensions/subagent/` bridge. OMP consult-provider compatibility is separate again: `scripts/omp-consult.sh` uses `omp -p --no-session --no-rules --model ... <prompt>` only to adapt provider-registry stdin prompts for advisory consultant roles. OMP native command dispatch (T007) keeps rules/session semantics and is proven at Claude-Code parity for four families (T009). `runtime/tests/test_omp_export.py` contains a forbidden-cross-use check that imports `runtime.drivers.pi.export` and patches its helpers to assert OMP export never calls them.
 
 ## Asset path resolution (MINOR-7)
 
@@ -43,16 +44,18 @@ Agents without a model tier in their frontmatter inherit pi's configured default
 
 ## Key entry points
 
-- `runtime/drivers/pi/export.py:360` — `export` — Public entry point: `export(repo_root, export_root, *, options=None) -> ExportResult`. Enumerates z-harness sources, renders agents/prompts with pi-normalized frontmatter, copies pi-only assets, writes `AGENTS.md`, validates all outputs. Returns `ExportResult(dest, files, fidelity="high", warnings)`.
+- `runtime/drivers/pi/export.py:370` — `export` — Public entry point: `export(repo_root, export_root, *, options=None) -> ExportResult`. Enumerates z-harness sources, renders agents/prompts with pi-normalized frontmatter, copies pi-only assets and deterministic `/z-resume` runtime scripts, writes `AGENTS.md`, validates all outputs. Returns `ExportResult(dest, files, fidelity="high", warnings)`.
 - `runtime/drivers/pi/__init__.py:1` — package — Re-exports `export` from `runtime.drivers.pi.export`; documents the export-only asymmetry (no adapter, no HostDriver, no launch/inject host).
-- `runtime/drivers/pi/export.py:85` — `_TOOL_MAP` — Maps Claude Code/z-harness tool names to pi tool names (`Glob` → `find`).
-- `runtime/drivers/pi/export.py:97` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
-- `runtime/drivers/pi/export.py:146` — `_replacement_for_line` — Rewrites single `Agent(subagent_type="X")` lines to `subagent { "agent": "X" }` hints, `Skill("z-foo")` lines to skill-run hints, and unsupported `AskUserQuestion()`/`TaskCreate()`/`SubagentCreate()`/`EnterPlanMode()`/`ExitPlanMode()` call lines to inline-handling hints. Also handles `AskUserQuestion` prose references via `_ASKUSER_PROSE_RE`.
-- `runtime/drivers/pi/export.py:193` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser.
-- `runtime/drivers/pi/export.py:223` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools.
-- `runtime/drivers/pi/export.py:295` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser). Silently skips if PyYAML is not available.
+- `runtime/drivers/pi/export.py:86` — `_TOOL_MAP` — Maps Claude Code/z-harness tool names to pi tool names (`Glob` → `find`).
+- `runtime/drivers/pi/export.py:98` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
+- `runtime/drivers/pi/export.py:151` — `_replacement_for_line` — Rewrites single `Agent(subagent_type="X")` lines to `subagent { "agent": "X" }` hints, `Skill("z-foo")` lines to skill-run hints, and unsupported `AskUserQuestion()`/`TaskCreate()`/`SubagentCreate()`/`EnterPlanMode()`/`ExitPlanMode()` call lines to inline-handling hints. Also handles `AskUserQuestion` prose references via `_ASKUSER_PROSE_RE`.
+- `runtime/drivers/pi/export.py:203` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser.
+- `runtime/drivers/pi/export.py:233` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools.
+- `runtime/drivers/pi/export.py:267` — `_render_prompt` — Renders a command/skill as a pi prompt `.md`; injects prompt defense after the heading as a fallback if no sentinel marker is found.
+- `runtime/drivers/pi/export.py:305` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser). Silently skips if PyYAML is not available.
+- `runtime/drivers/_export_utils.py:633` — `export_resume_runtime_scripts` — Copies the deterministic `/z-resume` runtime script set into an export root's `scripts/...` paths, gated on the source repo having `scripts/resume-context.py`; used by `export()` alongside the pi-only asset copy step. Shared with other host export drivers (not pi-specific).
 - `scripts/lint-frontmatter.sh:1` — `lint-frontmatter.sh` — Standalone lint script. Scans `agents/`, `skills/`, `personas/`, `scripts/pi_assets/`, and any legacy/back-compat command files for `.md` files with YAML frontmatter and validates each with a strict YAML 1.2 parser. Requires PyYAML; skips gracefully if unavailable.
-- `Makefile:74` — `lint-frontmatter` target — `make lint-frontmatter` invokes `scripts/lint-frontmatter.sh`. Wired into CI at `.github/workflows/tests.yml:49`.
+- `Makefile:74` — `lint-frontmatter` target — `make lint-frontmatter` invokes `scripts/lint-frontmatter.sh`. Wired into CI at `.github/workflows/tests.yml:55`.
 - `scripts/pi_assets/AGENTS.preamble.md:1` — `AGENTS.preamble.md` — Fan-out rule preamble appended to `AGENTS.md`; encodes "doc-fetcher first, explore for gaps" discipline.
 - `scripts/pi_assets/agents/explore.md:1` — `explore.md` — pi-only fan-out recon agent definition with YAML frontmatter.
 - `scripts/pi_assets/extensions/subagent/index.ts:1` — `index.ts` — pi subagent extension entry point; registers the `subagent` tool and handles agent discovery from `~/.pi/agent/agents/*.md`.
@@ -62,8 +65,8 @@ Agents without a model tier in their frontmatter inherit pi's configured default
 - `multi-ide-exports` — pi is a separate export target from Cursor/Codex/agy. It has its own driver (`runtime/drivers/pi/export.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc. pi is export-only: no adapter, no `--host pi`, not a launch/inject host.
 - `skills` — `export()` enumerates `skills/*/SKILL.md` as pi prompt files. the legacy `commands` source key remains only as an empty compatibility field.
 - `agents` — `export()` enumerates all z-harness agent definitions and renders them as pi agent files with normalized frontmatter. The `explore` agent is pi-only and lives in `scripts/pi_assets/`.
-- `export-utils` — `export.py` imports `ExportResult`, `_parse_frontmatter`, `enumerate_sources`, `validate_capabilities` from `runtime/drivers/_export_utils.py`. `enumerate_sources` returns `commands: []` when the legacy legacy command source directory is absent, while `skills/` drives prompt generation in the current tree.
-- `test-export-golden` — golden snapshot tests drive `runtime.drivers.pi.export` directly via dynamic import in `runtime/tests/test_export_golden.py`.
+- `export-utils` — `export.py` imports `ExportResult`, `_parse_frontmatter`, `enumerate_sources`, `validate_capabilities`, and `export_resume_runtime_scripts` from `runtime/drivers/_export_utils.py`. `enumerate_sources` returns `commands: []` when the legacy command source directory is absent, while `skills/` drives prompt generation in the current tree. `export_resume_runtime_scripts` is a driver-agnostic helper shared with other host exports (added for `/z-resume`), not pi-specific logic. There is no `docs/llm/export-utils.json` concept doc yet.
+- pi export test coverage now lives in `runtime/tests/test_export_utils.py` (`TestPiLegacyAgentRewrite` covers `_rewrite_body`/`Agent()`/`Skill()` rewrite edge cases; `TestPiLegacyAssetDocs` cross-checks `scripts/pi_assets/README.md` and `CAPABILITIES.md` wording) and `runtime/tests/test_omp_export.py` (forbidden-cross-use guard). The previously documented `runtime/tests/test_export_golden.py` was deleted (2026-06-18) and has no direct successor; there is no dedicated "test-export-golden" concept doc anymore.
 - `capabilities-matrix` — marks pi as export-only and OMP as a first-class native host (T009); Claude Code is the OMP ground-truth parity target; pi is not a stepping stone to OMP native fidelity.
 - `.omp/config.yml` — belongs to OMP sessions, not pi export. Its `skills.enableAgentsProject: false` setting prevents OMP from auto-loading this repo's large root `AGENTS.md`; OMP package discovery must use an explicit package root instead.
 
@@ -80,7 +83,7 @@ Additionally, `scripts/lint-frontmatter.sh` provides source-tree-level lint befo
 
 ## CI wiring
 
-`make lint-frontmatter` is wired into CI at `.github/workflows/tests.yml:49`. Every PR is gated on valid YAML frontmatter. Golden snapshot tests for pi (`test_pi_golden`) run via `runtime/tests/test_export_golden.py`.
+`make lint-frontmatter` is wired into CI at `.github/workflows/tests.yml:55`. Every PR is gated on valid YAML frontmatter.
 
 ## Edge cases / gotchas
 
@@ -93,6 +96,8 @@ Additionally, `scripts/lint-frontmatter.sh` provides source-tree-level lint befo
 - Agents are discovered from `~/.pi/agent/agents/*.md` — this is NOT a pi package resource type. Even though z-harness installs as a pi package, agents must be symlinked into the discovery directory separately.
 - Do not infer OMP behavior from pi export behavior. pi's line rewrites and vendored subagent extension are compatibility mechanisms for pi only; OMP command dispatch has its own frozen argv/prompt/output/event/session/profile/rules/model contract and is now native (T007/T009).
 - The subagent extension must be refreshed after pi upgrades; see `extensions/subagent/VENDOR.md`.
+- `export()` now also copies deterministic `/z-resume` runtime scripts (`export_resume_runtime_scripts`, added 2026-06-29) when the source repo has `scripts/resume-context.py`; a fixture repo without that file gets none of them, which is intentional (keeps generic exporter tests minimal).
+- The repo no longer ships an `exports/pi/` directory as a committed artifact (export output now goes to scratch roots such as `temp/exports/pi/`). `runtime/tests/test_export_utils.py::TestPiLegacyAssetDocs` still asserts against `exports/pi/README.md` and `exports/pi/CAPABILITIES.md`; on this checkout those 3 assertions currently fail with `FileNotFoundError` because that path does not exist. This looks like pre-existing test/tree drift unrelated to this doc refresh — flag for a maintainer, do not assume it is fixed.
 
 ## Memories
 

@@ -34,7 +34,7 @@ TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase
   "$(printf '{"dimension":"%s","target":"%s"}' "<dim>" "<target>")")"
 ```
 
-1. If `rubric_path` is non-empty, Read it. The rubric is your authoritative checklist for this dimension; cover every checklist item in your scrutiny.
+1. If `rubric_path` is non-empty, Read it. The rubric is your authoritative checklist for this dimension; cover every checklist item in your scrutiny. If the target includes any `skills/*/SKILL.md` or `agents/*.md` path, also Read `SKILL-STYLE.md` (repo root) — the skill/agent-authoring contract — and enforce it alongside the rubric, citing the violated section number in findings.
 2. Read the target files. For directory targets, walk the structure with Glob/Grep first; then Read the high-signal files.
 3. For each `relevant_docs` JSON: read it. Note any invariant the target *should* uphold.
 4. Apply the dimension lens (rubric + generic checklist below). For each finding:

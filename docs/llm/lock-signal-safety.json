@@ -1,0 +1,20 @@
+{
+  "concept": "lock-signal-safety",
+  "summary": "Signal-safety discipline for file-lock critical sections in daemon/shell code: never take a lock inside a signal handler; block or defer signals across the critical section before installing handlers. Established after a real self-deadlock race in scripts/sink-lock.sh (found under load stress, T118 of skill-overhaul-phase1: 25+ iterations at 46-70 load average, 0/150 hits post-fix).",
+  "last_updated": "2026-07-11",
+  "confidence": "high",
+  "source_file": "scripts/sink-lock.sh",
+  "memories": [
+    {
+      "type": "gotcha",
+      "date": "2026-07-11",
+      "source": "incident:20260712T012135Z-review",
+      "text": "flock() called within signal handlers self-deadlocks via re-entrance: signal delivers inside critical section, handler opens second fd, blocks on own process. Fix: block signals (pthread_sigmask/trap deferral) around all lock critical sections before handlers are installed.",
+      "tags": [
+        "race-condition",
+        "signal-safety",
+        "locking"
+      ]
+    }
+  ]
+}

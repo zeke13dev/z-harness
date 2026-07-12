@@ -1,7 +1,7 @@
 ---
 name: z-suggest-memory
-disable-model-invocation: false
-description: Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extracts into docs/human/<slug>.md.
+disable-model-invocation: true
+description: "User-invoked authoring skill for the docs/llm/ memory layer. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extracts into docs/human/<slug>.md."
 argument-hint: "[--concept <slug>] [--concept-hints <slug>,<slug>] [--source <prefix:ref>] [--edit <slug> <index>] [--delete <slug> <index>] [--dry-run] [--no-refresh-human] [--from-candidate-json <path|-] [--kind routing-preference --question-id <id> --value <v> --strength <weak|strong|very_strong> --scope <global|project> [--reason <text>]]"
 runtime: c1
 driver_features_required: []
@@ -56,8 +56,6 @@ When `--kind routing-preference` is present, the skill writes a structured routi
 ```
 
 The `reason` and `project_root` fields are omitted when not applicable. MEMORIES-FLAT.md is regenerated after the write. This mode is used by the elevation proposer flow when the user accepts a proposal as a memory:strength entry.
-
-Read and execute `skills/z-suggest-memory/SKILL.md` in full, passing `$ARGUMENTS` through verbatim.
 
 ---
 

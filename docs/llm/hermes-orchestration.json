@@ -1,8 +1,9 @@
 {
   "concept": "hermes-orchestration",
-  "last_updated": "2026-06-24",
+  "summary": "Dormant-by-default Hermes parallel execution layer: generates workstream DAGs, runs conflict-safe workstreams in isolated git worktrees, serializes merges, and can schedule conflict-free plans under sorted plan-claim locks when workflow.hermes_enabled is explicitly true.",
+  "last_updated": "2026-07-09",
   "covers_spec": "hermes-integration-v1",
-  "source_files": [
+  "source_file": [
     "scripts/hermes-execute.py",
     "scripts/hermes/config.py",
     "scripts/hermes/cross_plan.py",
@@ -14,7 +15,6 @@
     "docs/human/hermes-integration-v1.md"
   ],
   "confidence": "high",
-  "summary": "Dormant-by-default Hermes parallel execution layer: generates workstream DAGs, runs conflict-safe workstreams in isolated git worktrees, serializes merges, and can schedule conflict-free plans under sorted plan-claim locks when workflow.hermes_enabled is explicitly true.",
   "entry_points": [
     {
       "file": "scripts/hermes-execute.py",
@@ -74,6 +74,13 @@
     },
     {
       "file": "scripts/generate-workstreams.py",
+      "line": 250,
+      "symbol": "run_5rule_algorithm",
+      "kind": "fn",
+      "summary": "5-rule DAG-to-workstream derivation; raises CycleError on a dependency cycle (see gotchas)."
+    },
+    {
+      "file": "scripts/generate-workstreams.py",
       "line": 383,
       "symbol": "assign_ws_depths",
       "kind": "fn",
@@ -87,6 +94,20 @@
       "summary": "Extracts task **Files:** scope; any missing scope makes manifest scope_unknown."
     },
     {
+      "file": "scripts/generate-workstreams.py",
+      "line": 766,
+      "symbol": "build_from_flat",
+      "kind": "fn",
+      "summary": "Builds flat /z-plan workstreams from TASKS.md; lets CycleError propagate uncaught (no partial_tree fallback)."
+    },
+    {
+      "file": "scripts/generate-workstreams.py",
+      "line": 870,
+      "symbol": "main",
+      "kind": "fn",
+      "summary": "CLI entry; on CycleError prints to stderr and exits 2 without writing workstreams.json."
+    },
+    {
       "file": "scripts/hermes/merge.py",
       "line": 28,
       "symbol": "merge_workstream",
@@ -95,7 +116,14 @@
     },
     {
       "file": "scripts/hermes/config.py",
-      "line": 90,
+      "line": 54,
+      "symbol": "DiscordSoConfig",
+      "kind": "struct",
+      "summary": "Multi-project so-gateway scoping (allowed_user_ids/channel_ids/hosts) plus project_aliases routing table."
+    },
+    {
+      "file": "scripts/hermes/config.py",
+      "line": 121,
       "symbol": "load_config",
       "kind": "fn",
       "summary": "Loads hermes-config.yaml; Discord credentials may be env-overridden."
@@ -147,7 +175,9 @@
     "Most HERMES_* env vars were removed; use file config.",
     "File conflict graph ignores non-file shared state.",
     "scope_unknown intentionally over-serializes.",
-    "GIT_OPTIONAL_LOCKS=0 is used to reduce git contention."
+    "GIT_OPTIONAL_LOCKS=0 is used to reduce git contention.",
+    "generate-workstreams.py now hard-fails on a TASKS.md dependency cycle (CycleError, exit 2, no workstreams.json written) instead of the older partial_tree:true empty-manifest fallback; callers must treat nonzero exit as 'no manifest', not 'empty manifest'.",
+    "scripts/hermes/config.py's discord.so block (DiscordSoConfig/DiscordProjectAlias) is consumed by the external Hermes gateway (~/.hermes/hermes-agent), not by hermes-execute.py; this repo only parses/validates it."
   ],
   "memories": []
 }

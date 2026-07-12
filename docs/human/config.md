@@ -126,13 +126,6 @@ All preference env vars and their config.toml equivalents:
 | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | `axioms.auto_extract_post_run` | `[axioms]` | bool | `true` |
 | `Z_HARNESS_BRAINSTORM_PERSONAS` | `brainstorm.personas` | `[brainstorm]` | bool | `true` |
 | `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` | `brainstorm.wide_overflow_model` | `[brainstorm]` | string | `haiku` |
-| `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | `personas.critique_panel` | `[personas]` | bool | `true` |
-| `Z_HARNESS_PERSONAS_AUDIT` | `personas.audit` | `[personas]` | bool | `true` |
-| `Z_HARNESS_PERSONAS_REVIEW_EVAL` | `personas.review_eval` | `[personas]` | bool | `true` |
-| `Z_HARNESS_PERSONAS_CONSULT_EVAL` | `personas.consult_eval` | `[personas]` | bool | `false` |
-| `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | `personas.implementer_retry` | `[personas]` | string | `same` |
-| `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` | `experiment.persona_rotation` | `[experiment]` | bool | `true` |
-| `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` | `experiment.control_every_n` | `[experiment]` | int | `5` |
 | `Z_HARNESS_COST_TOKEN_BUDGET` | `cost.token_budget` | `[cost]` | int\|null | `null` |
 
 > Tip: `config.py inspect-all` shows every knob with its current source (`defaults`, `global`, `repo`, or `env:<VAR>`). Check it to verify your migration.
@@ -145,12 +138,12 @@ All preference env vars and their config.toml equivalents:
 |-----|------|---------|--------|-------------|
 | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
 | `notify.discord_webhook_url` | string | `""` | any Discord webhook URL | Discord webhook URL for notification delivery. Empty string (default) disables Discord notifications entirely. When set and `notify.level` permits, `should-notify --channel discord` returns `yes`. The webhook URL is a secret and must not be committed — `.gitignore` already protects `.z-harness/` where config lives. |
-| `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
+| `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches the default light-flow behavior. `never` skips doc-fetcher. **Applies only to light flows (e.g. `/z-plan --quick`). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 | `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; under an unattended hard cost gate (`Z_HARNESS_NO_ASK=halt`), the gate halts with `cost_budget_missing`. |
 | `runtime.env_strict` | bool | `false` | `true` \| `false` | When `true`, detecting any preference-class `Z_HARNESS_*` env var in the raw environment becomes a **hard error** (exit 2) instead of a warning. Set this in `config.toml` (NOT as a raw env var) to enforce the migration in CI. Default `false` (grace period — warning only). |
 
-For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[changelog]`, `[models]`, `[model_classes]`, `[model_routing]`, and `[export]` knobs, see the sections below.
+For `[brainstorm]`, `[workflow]`, `[followup]`, `[axioms]`, `[changelog]`, `[models]`, `[model_classes]`, `[model_routing]`, and `[export]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -163,13 +156,6 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 | `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
 | `brainstorm.wide_overflow_model` | `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` |
-| `personas.critique_panel` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` |
-| `personas.audit` | `Z_HARNESS_PERSONAS_AUDIT` |
-| `personas.review_eval` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` |
-| `personas.consult_eval` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` |
-| `personas.implementer_retry` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` |
-| `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
-| `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
 | `axioms.enabled` | `Z_HARNESS_AXIOMS_ENABLED` |
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
@@ -414,7 +400,7 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.implement_all_proceed` | string | `ask` | `ask` \| `auto_resume` \| `halt` | Controls the halt-resolution gate in `/z-execute`. `ask` prompts. `auto_resume` skips the prompt. `halt` stops unconditionally. |
 | `workflow.review_all_proceed` | string | `ask` | `ask` \| `proceed` \| `halt` | Controls the Phase 3.7 proceed gate in `/z-review-all`. `ask` prompts. `proceed` skips the prompt. `halt` stops unconditionally. |
 | `workflow.plan_decisions_approval` | string | `ask` | `ask` \| `approve` \| `halt` | Controls the Phase 2.5 decisions-doc approval gate in `/z-plan`. `ask` prompts. `approve` skips the prompt. `halt` stops unconditionally. |
-| `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-uplift, z-plan-split, z-plan). `ask` prompts. `auto_proceed` skips the AskUser prompt after a helper-approved estimate. For hard gates, `pre-run-cost-gate.sh` delegates to `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard`; in interactive mode (`Z_HARNESS_NO_ASK` not `halt`) the helper returns `ask`, while unattended mode applies `workflow.pre_run_cost_gate`/allowlist resolution first and then `cost.token_budget` if still unresolved. |
+| `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-plan-split, z-plan). `ask` prompts. `auto_proceed` skips the AskUser prompt after a helper-approved estimate. For hard gates, `pre-run-cost-gate.sh` delegates to `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard`; in interactive mode (`Z_HARNESS_NO_ASK` not `halt`) the helper returns `ask`, while unattended mode applies `workflow.pre_run_cost_gate`/allowlist resolution first and then `cost.token_budget` if still unresolved. |
 | `workflow.planning_mode` | string | `intent` | `intent` \| `full` | Default planner paradigm for `/z-plan`. `intent` = Adaptive INTENT mode: thin frozen INTENT.md contract + emergent BFS task-tree. `full` = legacy SDD mode: SPEC/PLAN/TASKS up-front. Env: `Z_HARNESS_WORKFLOW_PLANNING_MODE`. |
 | `workflow.intent_level` | string | `auto` | `auto` \| `quick` \| `standard` \| `deep` | Forced INTENT level. `auto` = the scope-classifier picks the level. `quick` / `standard` / `deep` force that level unconditionally. Env: `Z_HARNESS_WORKFLOW_INTENT_LEVEL`. |
 | `workflow.intent_parallel_levels` | bool | `true` | `true` \| `false` | **The real within-level concurrency lever** for `/z-execute` INTENT mode (not `runtime.max_parallel*` / `HERMES_MAX_PARALLEL`, which are vestigial — see the Loader API alias-table note above). Default-on means "attempt same-level INTENT BFS parallelism only when the `/z-execute` safety preconditions pass": every same-level sibling has precise parseable `**Files:**` scope, no sibling has `scope_unknown=true`, fan-out is bounded or partitioned, and review uses per-task diff isolation or serialized review capture. Missing/unparseable scope, unknown scope, file overlap, or unsafe review capture serializes the affected level/task. Set `false` to opt out and run each INTENT-BFS level strictly one task at a time. No effect in legacy (non-INTENT) mode. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
@@ -507,41 +493,6 @@ The `[brainstorm]` section contains knobs specific to `/z-brainstorm` behavior. 
 | `brainstorm.personas` | bool | `true` | `Z_HARNESS_BRAINSTORM_PERSONAS` | Enable persona injection for ideators in `/z-brainstorm`. When ON, up to 3 distinct `ideator` personas are drawn and positionally prepended. When OFF the dispatch is byte-identical to the pre-feature vendor-only brainstorm. |
 | `brainstorm.wide_overflow_model` | string | `"haiku"` | `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` | Model used for overflow ideators (waves 2+) in wide-mode `/z-brainstorm` runs (N > 3). Accepted values: `"haiku"` (default — uses Haiku for all overflow ideators), `"cheap-mixed"` (reserved — accepted by the validator but acts as a no-op until the per-vendor cheap-model mechanism is verified; see SPEC D1/M2), or any explicit non-empty model string (e.g. `"claude-haiku-4-5"`) to pin a specific model. A prompt-level override always wins over this config value. |
 
-## The knobs ([personas] section)
-
-The `[personas]` section controls per-surface persona dispatch across all z-harness commands. Each boolean knob enables or disables persona injection at one class of dispatch site; disabling a knob is byte-identical to pre-feature behavior at that site.
-
-| Key | Type | Default | Env var | Description |
-|-----|------|---------|---------|-------------|
-| `personas.critique_panel` | bool | `true` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct `consultant` personas are drawn and positionally prepended. |
-| `personas.audit` | bool | `true` | `Z_HARNESS_PERSONAS_AUDIT` | Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct `audit_persona` is drawn per dimension (correctness / perf / cleanliness / design). |
-| `personas.review_eval` | bool | `true` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` | Enable the advisory persona reviewer at code-review gates — z-execute, z-fix, z-do (CONVERGENT). When ON, one `reviewer`-role persona is dispatched advisory-only alongside the authoritative neutral codex gate. |
-| `personas.consult_eval` | bool | `false` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` | Enable the advisory persona consult arm at convergent evaluation sites — z-audit bundled consult (CONVERGENT). **Default OFF** — this is the most expensive and lowest-signal advisory arm. When ON, one additional `consultant`-persona advisory arm is dispatched alongside the neutral consult; its output is logged advisory-only. |
-| `personas.implementer_retry` | string | `"same"` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | Controls how the implementer persona is handled across retries. `same` (default) — reuse the cycle-1 persona for all retries of the same task. `new` — fresh draw excluding the prior persona on each retry. No effect when `experiment.persona_rotation = false`. |
-
-**Key design constraint:** There is NO `personas.debug` knob — it was removed as dead code. Do not document or implement it.
-
-**TOML example** (`.z-harness/config.toml`):
-
-```toml
-[brainstorm]
-personas = true
-wide_overflow_model = "haiku"  # "haiku" | "cheap-mixed" | explicit model string
-
-[personas]
-critique_panel = true
-audit = true
-review_eval = true
-consult_eval = false          # default OFF — most expensive/lowest-signal advisory arm
-implementer_retry = "same"    # "same" | "new"
-```
-
-**Invariants:**
-- All boolean knobs accept `true` or `false` only. Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
-- `personas.implementer_retry` accepts only `"same"` or `"new"`. Any other value is a hard validation failure.
-- `personas.consult_eval` defaults OFF. At convergent sites the neutral arm always runs; the persona advisory arm adds overhead with the lowest measured signal gain.
-- The neutral-authority invariant applies at all CONVERGENT sites regardless of knob state: the neutral arm is always the decision of record.
-
 ## The knobs ([axioms] section)
 
 The `[axioms]` TOML section controls the axiom extraction pipeline and how axioms participate in question resolution.
@@ -552,23 +503,6 @@ The `[axioms]` TOML section controls the axiom extraction pipeline and how axiom
 | `axioms.kernel_budget_chars` | int | `6000` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` | Maximum characters of axiom text included in the context kernel passed to implementers/consultants. Positive integer. |
 | `axioms.extract_min_recurrence` | int | `3` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` | Minimum recurrence count before a behavioral pattern is auto-extracted as an axiom candidate. Positive integer. |
 | `axioms.auto_extract_post_run` | bool | `true` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | When `true`, runs the axiom extraction pipeline automatically at the end of each `/z-*` run. Set to `false` to disable automatic extraction (manual extraction still possible). |
-
-## The knobs ([experiment] section)
-
-The `[experiment]` section contains feature-flag knobs that are **on by default**. These govern the persona-rotation data-collection experiment. Disabling them reverts the commands to their pre-experiment behavior exactly — no events, no state files, no prompt changes.
-
-| Key | Type | Default | Env var | Description |
-|-----|------|---------|---------|-------------|
-| `experiment.persona_rotation` | bool | `true` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` | Master on/off switch for all persona-rotation behavior in `/z-execute`, `/z-plan`, and `/z-debug`. Set to `false` to pause data collection and restore pre-experiment behavior. |
-| `experiment.control_every_n` | int | `5` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` | Forced-control cadence. Every Nth implementer attempt (counted repo-wide, persisted in `.z-harness/.persona-control-counter`) uses `boring-anchor` instead of a random draw. Default 5 means 1-in-5 attempts is a control sample. |
-
-**Kill-switch** — to pause the experiment entirely:
-
-```bash
-export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
-# or persistently:
-scripts/config.sh set experiment.persona_rotation false --scope=project
-```
 
 ## The knobs ([changelog] section)
 
@@ -756,20 +690,16 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-explore, z-execute, z-review-all, z-overnight, z-debug, z-audit, z-brainstorm, z-attend) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions (including the current terrain workflow, where deep terrain mapping is `/z-explore --depth=deep`); call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site; call `resolve-halt-category` for halt-category tagging in chain-runner.sh
-- `skills` (z-suggest-memory, z-explore, z-debug, z-brainstorm, z-do, z-plan, z-research; `z-map` only as a legacy compatibility wrapper that routes to `/z-explore --depth=deep`) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-amend, z-research, z-explore, z-execute, z-review-all, z-overnight, z-debug, z-audit, z-brainstorm, z-attend) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions (including the current terrain workflow, where deep terrain mapping is `/z-explore --depth=deep`); call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas` at the ideator-dispatch site; call `resolve-halt-category` for halt-category tagging in chain-runner.sh
+- `skills` (z-suggest-memory, z-explore, z-debug, z-brainstorm, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
 - `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
-- `cost-estimation` — `cost.token_budget` is read by `check-no-ask --range-high N --severity hard` as the budget ceiling; `workflow.pre_run_cost_gate` gates the cost-gate question for z-research/z-uplift/z-plan-split/z-plan
+- `cost-estimation` — `cost.token_budget` is read by `check-no-ask --range-high N --severity hard` as the budget ceiling; `workflow.pre_run_cost_gate` gates the cost-gate question for z-research/z-plan-split/z-plan
 - `amendment-brief` — `scripts/amend-gate-decision.py` reads `workflow.audit_to_amend` resolver output (result+source) to determine whether to auto-split, force-ask, or halt; `scripts/amendment-brief.py` renders the prose brief for approach concerns; both `/z-audit-plan` Phase 5 and `/z-review-all` Phase 6.6 use this path
 
 ## Edge cases / gotchas
 
-- `personas.consult_eval` defaults to `false` (OFF) — it is the most expensive and lowest-signal advisory arm; turning it on adds one extra subagent call at every convergent eval site
-- There is NO `personas.debug` knob — it was removed as dead code. Do not attempt to configure it; it will be silently ignored or may trigger a validation error on future schema revisions
-- `brainstorm.personas` remains in `[brainstorm]` (not `[personas]`) by design; do NOT move it
-- `personas.implementer_retry` only has effect when `experiment.persona_rotation = true`; when rotation is off, `implementer_retry` is a no-op regardless of its value
 - `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
 - `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
 - `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
@@ -783,7 +713,7 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 - Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error
 - `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` surfaces them under env-only but does NOT treat them as TOML keys
 - `cost.token_budget = null` (the default) means no budget is configured; `check-no-ask` with `--severity hard` under `NO_ASK=halt` will return `halt` with `rule_id: cost_budget_missing` when unset
-- `workflow.pre_run_cost_gate` governs the z-research/z-uplift/z-plan-split/z-plan pre-run gate; it is a registered question_id and participates in the overnight allowlist system
+- `workflow.pre_run_cost_gate` governs the z-research/z-plan-split/z-plan pre-run gate; it is a registered question_id and participates in the overnight allowlist system
 - `check-no-ask --severity soft` always returns `auto_proceed` regardless of policy — soft-severity gates are never blocking
 - `models.*` keys accept any string including empty (empty = use provider default); cross-checked against `providers.json` at resolve time NOT at config-load time — invalid model strings are caught only when the role is dispatched
 - `export.hosts` validated against a closed set at config-load time; unknown names exit 2 on repo/env layer and soft-warn on global layer; list must be non-empty; env transport is a JSON-encoded array string
@@ -792,43 +722,10 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 
 ## Examples
 
-**Repo-local override with all persona knobs** (`.z-harness/config.toml`):
-
-```toml
-schema_version = 1
-
-[brainstorm]
-personas = true
-
-[personas]
-critique_panel = true
-audit = true
-review_eval = true
-consult_eval = false          # default OFF — most expensive advisory arm; enable to collect data
-implementer_retry = "same"    # "same" | "new"
-
-[experiment]
-persona_rotation = true
-control_every_n = 5
-```
-
-**Env override to disable the most expensive advisory arm:**
-
-```bash
-export Z_HARNESS_PERSONAS_CONSULT_EVAL=false   # already the default
-export Z_HARNESS_PERSONAS_REVIEW_EVAL=true
-export Z_HARNESS_PERSONAS_CRITIQUE_PANEL=true
-```
-
-**Env override for CI — disable persona injection entirely:**
+**Disable ideator persona injection in `/z-brainstorm`:**
 
 ```bash
 export Z_HARNESS_BRAINSTORM_PERSONAS=false
-export Z_HARNESS_PERSONAS_CRITIQUE_PANEL=false
-export Z_HARNESS_PERSONAS_AUDIT=false
-export Z_HARNESS_PERSONAS_REVIEW_EVAL=false
-export Z_HARNESS_PERSONAS_CONSULT_EVAL=false
-export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
 ```
 
 **Workflow preferences** (`.z-harness/config.toml` at git root):

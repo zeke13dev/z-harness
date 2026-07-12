@@ -210,50 +210,6 @@ class TestExportPayload(unittest.TestCase):
     def setUp(self) -> None:
         self.adapter = CodexAdapter()
 
-    def test_export_warns_when_personas_missing(self):
-        """export_payload() returns a warning when personas/ dir does not exist.
-
-        With the T007 delegation, the runtime export (cmds/agents/skills) runs
-        first.  This test mocks both the runtime export driver AND patches
-        __file__ to a fake harness with no personas/ directory.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "out"
-            dest.mkdir()
-            fake_harness = Path(tmp) / "fake_harness"
-            fake_harness.mkdir()
-
-            import z_harness_cli.adapters.codex as _mod
-            from runtime.drivers._export_utils import ExportResult as RE
-
-            # Mock the runtime export driver to return an empty successful result
-            # so we can focus on the personas-missing warning path.
-            mock_export = MagicMock(
-                return_value=RE(dest=dest, files=[], fidelity="flattened", warnings=[])
-            )
-            mock_codex_export_mod = MagicMock()
-            mock_codex_export_mod.export = mock_export
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(fake_harness / "z_harness_cli" / "adapters" / "codex.py"),
-            ), patch.dict(
-                "sys.modules",
-                {
-                    "runtime.drivers.codex.export": mock_codex_export_mod,
-                },
-            ):
-                result = self.adapter.export_payload(dest)
-
-            from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
-
-            self.assertEqual(result.fidelity, codex_export_fidelity())
-            self.assertTrue(
-                any("personas/" in w for w in result.warnings),
-                f"Expected warning about missing personas/, got: {result.warnings}",
-            )
-
     def test_export_fidelity_is_gate_driven(self):
         """export_payload() reports the gate-driven default fidelity."""
         from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
@@ -263,50 +219,6 @@ class TestExportPayload(unittest.TestCase):
             dest.mkdir()
             result = self.adapter.export_payload(dest)
         self.assertEqual(result.fidelity, codex_export_fidelity())
-
-    def test_export_to_temp_dir_with_mock_persona(self):
-        """Round-trip: persona exported to temp dir lands under prompts/personas/."""
-        with tempfile.TemporaryDirectory() as tmp_root:
-            dest = Path(tmp_root) / "dest"
-            dest.mkdir()
-
-            def _fake_export_persona(persona_file, target_root):
-                out = Path(target_root) / "prompts" / "personas" / "test.md"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(f"# {MAGIC_MARKER}\nfake persona\n", encoding="utf-8")
-                return out.resolve()
-
-            fake_harness = Path(tmp_root) / "harness"
-            personas_dir = fake_harness / "personas"
-            personas_dir.mkdir(parents=True)
-            persona_file = personas_dir / "default.md"
-            persona_file.write_text("---\nname: default\n---\nHello.\n", encoding="utf-8")
-
-            import z_harness_cli.adapters.codex as _mod
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(fake_harness / "z_harness_cli" / "adapters" / "codex.py"),
-            ):
-                with patch.dict(
-                    "sys.modules",
-                    {
-                        "runtime": MagicMock(),
-                        "runtime.drivers": MagicMock(),
-                        "runtime.drivers.codex": MagicMock(),
-                        "runtime.drivers.codex.persona_export": MagicMock(
-                            export_persona=_fake_export_persona
-                        ),
-                    },
-                ):
-                    adapter = CodexAdapter()
-                    result = adapter.export_payload(dest)
-
-            from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
-
-            self.assertEqual(result.fidelity, codex_export_fidelity())
-            self.assertEqual(result.dest, dest)
 
 
 # ---------------------------------------------------------------------------

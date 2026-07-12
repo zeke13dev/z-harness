@@ -1,7 +1,7 @@
 # Providers Registry
 
 > Last updated: 2026-07-09
-> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, skills/z-providers-discover/SKILL.md, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json
+> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json
 
 ## Overview
 
@@ -23,7 +23,7 @@ As of the host-aware-model-tiers plan (T007), this repo's default role bindings 
 - `scripts/resolve-provider.py:227` — `merge_with_shadow()` — per-key merge of global and repo providers/roles/aliases; emits de-duplicated `provider_shadowed` telemetry.
 - `scripts/resolve-provider.py:458` — `compose_argv()` — renders `{model}` in `model_arg_template`; legacy providers with null template return `args_template` unchanged.
 - `scripts/discover-providers.py:58` — `discover()` — probes PATH for known CLIs and returns a proposed v1 registry; it never writes files.
-- `skills/z-providers-discover/SKILL.md:1` — user-facing discovery command wrapper for generating provider suggestions.
+- `scripts/discover-providers.py:1` — provider discovery helper for generating provider suggestions (invoked from the `/z-setup` wizard).
 - `runtime/compat.py:15` — Python runtime wrapper around `resolve-provider.py`.
 - `runtime/contract/provider.schema.json:1` — Draft 7 schema for `.z-harness/providers.json`, accepting versions 1 and 2 and optional runtime-contract fields.
 - `scripts/log-providers.sh:34` — handles the `none` sentinel before JSON parsing and emits provider-resolution summary telemetry.

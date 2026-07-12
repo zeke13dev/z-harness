@@ -1,6 +1,7 @@
 {
   "concept": "setup",
-  "last_updated": "2026-06-24",
+  "summary": "z-harness configuration cockpit: public z-harness setup CLI (harness detection via release_surface + posture apply) plus the in-harness /z-setup skill/scripts/setup.py (inspect, wizard, apply, explain, status) which is the sole writer of config.py-managed state.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/setup.py",
@@ -8,7 +9,7 @@
     "skills/z-setup/SKILL.md",
     "docs/human/SETUP.md"
   ],
-  "confidence": "high",
+  "confidence": "medium",
   "entry_points": [
     {
       "file": "scripts/setup.py",
@@ -135,6 +136,34 @@
       "symbol": "/z-setup",
       "kind": "skill",
       "summary": "Skill surface: parses inspect/wizard/apply/explain/status forms, delegates to scripts/setup.py, gates apply with AskUserQuestion, and emits setup_skill_start/end."
+    },
+    {
+      "file": "z_harness_cli/__main__.py",
+      "line": 53,
+      "symbol": "setup_cmd",
+      "kind": "fn",
+      "summary": "Typer registration for `z-harness setup`; declares --target/--host, --install, --force, --posture, --dry-run, --yes"
+    },
+    {
+      "file": "z_harness_cli/commands/setup.py",
+      "line": 158,
+      "symbol": "run",
+      "kind": "fn",
+      "summary": "Public first-run setup: detects hosts, prints provider CLI status, optionally applies posture, optionally installs plugin target"
+    },
+    {
+      "file": "z_harness_cli/commands/setup.py",
+      "line": 55,
+      "symbol": "_detect_hosts",
+      "kind": "fn",
+      "summary": "Release-surface-aware host detection; filters to public_release_hosts in prod surface unless target explicitly selected"
+    },
+    {
+      "file": "z_harness_cli/commands/setup.py",
+      "line": 43,
+      "symbol": "_normalize_targets",
+      "kind": "fn",
+      "summary": "Resolves --target all / comma-separated list against release_surface.setup_target_ids(); exits 2 on unknown target"
     }
   ],
   "depends_on": [
@@ -155,11 +184,12 @@
     "Re-run is idempotent: diff-and-confirm always shown before any write; silent overwrite is forbidden",
     "apply --dry-run exits 0 after printing diff with no writes",
     "Wizard --scope values are matched lowercase; a capitalized scope name fails with exit code 2",
-    "_install_kernel_pointer is idempotent: no-op when block matches canonical; user-confirmed overwrite when block differs; collapses multiple marker blocks to one"
+    "_install_kernel_pointer is idempotent: no-op when block matches canonical; user-confirmed overwrite when block differs; collapses multiple marker blocks to one",
+    "z_harness_cli/commands/setup.py:run() only invokes scripts/setup.py apply when --posture is passed; otherwise it is read-only (detection + plan printing)"
   ],
   "gotchas": [
     "_inspect_all_json delegates to config.py inspect-all via subprocess; if config.py unavailable, returns None and subcommands fail gracefully",
-    "Wizard providers and docs sections are suggest-only: detect gaps and print tip, do NOT invoke /z-providers-discover or /z-init-docs",
+    "Wizard docs section is suggest-only: detect gaps and print tip, do NOT invoke /z-init-docs; the providers section runs scripts/discover-providers.py for role-binding discovery",
     "Memories wizard section is read-only display; use /z-suggest-memory --kind routing-preference to add or edit",
     "POSTURE_PRESETS env vars are emitted as shell snippet to stdout or --env-file; they are never written to any config file",
     "apply --yes skips confirmation prompt; use only where user consent is established upstream",
@@ -168,7 +198,9 @@
     "_detect_posture is heuristic: partial preset match returns 'custom', not the preset name; not authoritative",
     "_wizard_axioms kernel-pointer targets ~/.claude/CLAUDE.md (global user file); does NOT touch per-repo CLAUDE.md",
     "Axioms wizard scope surfaces Z_HARNESS_AXIOMS_ENABLED, Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS, Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE, Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN — these are NOT in the core ENV_ONLY_KNOBS list in config.py",
-    "Wizard now has 8 scopes: notifications, workflow, overnight, providers, personas, docs, memories, axioms"
+    "Wizard now has 8 scopes: notifications, workflow, overnight, providers, personas, docs, memories, axioms",
+    "z_harness_cli/commands/setup.py now gates harness detection through z_harness_cli/release_surface.py: prod surface shows only public_release_hosts by default; pi is always export-only (no local binary probe) and pi/cursor only surface when explicitly named in --target or the surface is non-prod",
+    "z_harness_cli/release_surface.py is a new dependency of the public setup CLI (since ~2026-07-05) with no dedicated docs/llm/*.json concept entry as of this refresh; confidence on that sub-surface is medium, not high"
   ],
   "env_vocabulary": [
     "Z_HARNESS_NO_ASK",

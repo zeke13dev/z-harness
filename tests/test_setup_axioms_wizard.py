@@ -38,14 +38,14 @@ def _import_setup():
 
 
 class TestWizardSections(unittest.TestCase):
-    """_WIZARD_SECTIONS has exactly 8 entries and includes "axioms"."""
+    """_WIZARD_SECTIONS has exactly 7 entries and includes "axioms"."""
 
     def setUp(self):
         self.setup = _import_setup()
 
     def test_wizard_sections_count(self):
         sections = self.setup._WIZARD_SECTIONS
-        self.assertEqual(len(sections), 8, msg=f"Expected 8 sections, got {len(sections)}: {[s[0] for s in sections]}")
+        self.assertEqual(len(sections), 7, msg=f"Expected 7 sections, got {len(sections)}: {[s[0] for s in sections]}")
 
     def test_axioms_in_wizard_sections(self):
         names = [s[0] for s in self.setup._WIZARD_SECTIONS]

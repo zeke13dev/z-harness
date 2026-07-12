@@ -417,7 +417,7 @@ def resolve(role: str, merged: dict) -> dict:
             provider_name="",
             attempted_model="",
             auth_backend="unknown",
-            reason="role is unbound — add a [roles.<command/default>.<role>].runtime binding or run /z-providers-discover",
+            reason="role is unbound — add a [roles.<command/default>.<role>].runtime binding or run `python3 scripts/discover-providers.py`",
         )
 
     # The roles mapping in providers.json is the legacy fallback path.
@@ -433,7 +433,7 @@ def resolve(role: str, merged: dict) -> dict:
             auth_backend="unknown",
             reason=(
                 f"provider={provider_name!r} referenced in roles but not defined "
-                "in providers map — run /z-providers-discover"
+                "in providers map — run `python3 scripts/discover-providers.py`"
             ),
         )
 
@@ -840,7 +840,7 @@ def _resolve_config_provider_selection(
             auth_backend="unknown",
             reason=(
                 f"{config_ref} references {selection} not found in providers.json "
-                "— run /z-providers-discover"
+                "— run `python3 scripts/discover-providers.py`"
             ),
         )
 

@@ -23,7 +23,7 @@ $ARGUMENTS
 `$ARGUMENTS` should name one of:
 - `<slug>` → use the most recent run under `$Z_HARNESS_PLAN_DIR/archive/`
 - `$Z_HARNESS_PLAN_DIR/<run-id>` → exact run
-- `adhoc/<run-id>` → a `/z-do` run
+- `adhoc/<run-id>` → a legacy ad-hoc run
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the run-selection question via their native channel. Silent omission is forbidden. -->
 - (empty) → list the 10 most recent runs across all slugs (covering both new layout `<base>/plans/*/archive/*` and legacy flat `<base>/*/archive/*` including adhoc):
   ```bash
@@ -53,7 +53,7 @@ Read (all from main thread — these are tight):
 - The run's primary artifact, if present:
   - full plan: `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md`
   - light plan: `$Z_HARNESS_PLAN_DIR/FIX.md`
-  - z-do: `$RUN_DIR/approach.md` + `$RUN_DIR/premise.md`
+  - legacy ad-hoc: `$RUN_DIR/approach.md` + `$RUN_DIR/premise.md`
   - audit: `$Z_HARNESS_PLAN_DIR/REPORT.md`
   - debug: `$Z_HARNESS_PLAN_DIR/DEBUG.md ## Problem` and `DEBUG.md ## Post-mortem` if present
 - Codex review transcripts (under `$RUN_DIR/transcripts/`) if present — read at most 2, the most recent.

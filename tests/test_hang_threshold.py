@@ -48,17 +48,6 @@ class TestHangThreshold(unittest.TestCase):
         finally:
             os.unlink(mp)
 
-    def test_persona_keyed_by_role_and_tier(self):
-        evs = [{"kind": "persona_attempt_outcome", "role": "implementer",
-                "complexity_tier": "medium", "wall_ms": 5000} for _ in range(6)]
-        mp = _metrics(evs)
-        try:
-            out = _run(["dump", "--metrics", mp], env={"HANG_MIN_SAMPLE": "5"})
-            table = json.loads(out.stdout)
-            self.assertIn("agent:implementer/medium", table)
-        finally:
-            os.unlink(mp)
-
     def test_dispatch_end_keyed_by_kind_or_model(self):
         # dispatch_end lacks role/tier; keys by kind, or <kind>:<model> if present.
         evs = [{"kind": "dispatch_end", "wall_ms": 4000} for _ in range(6)]

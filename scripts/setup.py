@@ -103,48 +103,6 @@ def _find_providers_json() -> tuple[dict | None, str]:
     return None, ""
 
 
-def _find_personas_dirs() -> list[str]:
-    """Return existing persona directories (global and repo)."""
-    dirs: list[str] = []
-
-    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    global_personas = os.path.join(xdg, "z-harness", "personas")
-    if os.path.isdir(global_personas):
-        dirs.append(global_personas)
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
-        )
-        git_root = result.stdout.strip()
-        repo_personas = os.path.join(git_root, ".z-harness", "personas")
-        if os.path.isdir(repo_personas):
-            dirs.append(repo_personas)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    return dirs
-
-
-def _collect_personas(persona_dirs: list[str]) -> list[tuple[str, str]]:
-    """
-    Return list of (persona_name, source_path) from all persona directories.
-    Persona name is the filename without extension.
-    """
-    personas: list[tuple[str, str]] = []
-    for d in persona_dirs:
-        try:
-            for fname in sorted(os.listdir(d)):
-                fpath = os.path.join(d, fname)
-                if os.path.isfile(fpath):
-                    name, _ext = os.path.splitext(fname)
-                    personas.append((name, fpath))
-        except OSError:
-            pass
-    return personas
-
-
 def _find_index_json() -> tuple[dict | None, str]:
     """
     Locate docs/llm/INDEX.json relative to the harness repo root.
@@ -391,7 +349,6 @@ _SCOPE_SECTIONS = {
     "workflow": "Workflow",
     "overnight": "Overnight",
     "providers": "Providers",
-    "personas": "Personas",
     "docs": "Docs",
     "memories": "Memories",
     "axioms": "Axioms",
@@ -403,7 +360,6 @@ _SCOPE_TOML_PREFIXES: dict[str, list[str]] = {
     "workflow": ["workflow."],
     "overnight": [],  # overnight keys are env-only
     "providers": [],
-    "personas": [],
     "docs": ["docs."],
     "memories": [],
     "axioms": ["axioms."],
@@ -420,7 +376,6 @@ _SCOPE_ENV_KNOBS: dict[str, list[str]] = {
         "Z_HARNESS_PAUSE_AT_PCT",
     ],
     "providers": ["Z_HARNESS_REPO_PROVIDERS"],
-    "personas": [],
     "docs": [],
     "memories": [],
     "axioms": [
@@ -439,8 +394,8 @@ def _print_section_header(title: str) -> None:
 def cmd_inspect(args: argparse.Namespace) -> int:
     """
     Emit a concern-grouped inspect view of all z-harness configuration.
-    Calls `config.py inspect-all --json`, then augments with providers.json,
-    personas, and INDEX.json.
+    Calls `config.py inspect-all --json`, then augments with providers.json
+    and INDEX.json.
     Always exits 0.
     """
     if args.as_json:
@@ -491,11 +446,9 @@ def _cmd_inspect_json(args: argparse.Namespace) -> int:
             "strength": meta.get("strength", "none"),
         }
 
-    # When no scope filter (or non-key scopes), also include providers/personas/docs/memories
+    # When no scope filter (or non-key scopes), also include providers/docs/memories
     if scope is None:
         providers_data, providers_path = _find_providers_json()
-        persona_dirs = _find_personas_dirs()
-        personas = _collect_personas(persona_dirs)
         index_data, index_path = _find_index_json()
         mem_count = _count_routing_preferences()
 
@@ -504,12 +457,6 @@ def _cmd_inspect_json(args: argparse.Namespace) -> int:
             "source": providers_path if providers_path else "none",
             "persistence_class": "provider_file",
             "strength": "hard" if providers_data is not None else "none",
-        }
-        output["__personas__"] = {
-            "value": [{"name": n, "path": p} for n, p in personas],
-            "source": str(persona_dirs) if persona_dirs else "none",
-            "persistence_class": "persona_file",
-            "strength": "hard" if personas else "none",
         }
         output["__docs__"] = {
             "value": {
@@ -534,15 +481,6 @@ def _cmd_inspect_json(args: argparse.Namespace) -> int:
             "source": providers_path if providers_path else "none",
             "persistence_class": "provider_file",
             "strength": "hard" if providers_data is not None else "none",
-        }
-    elif scope.lower() == "personas":
-        persona_dirs = _find_personas_dirs()
-        personas = _collect_personas(persona_dirs)
-        output["__personas__"] = {
-            "value": [{"name": n, "path": p} for n, p in personas],
-            "source": str(persona_dirs) if persona_dirs else "none",
-            "persistence_class": "persona_file",
-            "strength": "hard" if personas else "none",
         }
     elif scope.lower() == "docs":
         index_data, index_path = _find_index_json()
@@ -652,21 +590,15 @@ def _cmd_inspect_grouped(args: argparse.Namespace) -> int:
 
     # Load auxiliary data only when needed
     providers_data = providers_path = None
-    persona_dirs: list[str] = []
-    personas: list[tuple[str, str]] = []
     index_data = index_path = None
     mem_count = 0
 
     need_providers = _show_section("providers")
-    need_personas = _show_section("personas")
     need_docs = _show_section("docs")
     need_memories = _show_section("memories")
 
     if need_providers:
         providers_data, providers_path = _find_providers_json()
-    if need_personas:
-        persona_dirs = _find_personas_dirs()
-        personas = _collect_personas(persona_dirs)
     if need_docs:
         index_data, index_path = _find_index_json()
     if need_memories:
@@ -749,19 +681,7 @@ def _cmd_inspect_grouped(args: argparse.Namespace) -> int:
                     print(f"  {role} = (not bound)  (from {src_label})")
         else:
             for role in provider_roles:
-                print(f"  {role} = (not bound)  (absent — run /z-providers-discover)")
-
-    # -------------------------------------------------------------------------
-    # Section 5: Personas
-    # -------------------------------------------------------------------------
-    if need_personas:
-        _print_section_header("Personas")
-
-        if personas:
-            for name, path in personas:
-                print(f"  {name}  (from {path})")
-        else:
-            print("  (no personas bound — edit ~/.config/z-harness/personas/ or .z-harness/personas/)")
+                print(f"  {role} = (not bound)  (absent — run `python3 scripts/discover-providers.py` or the /z-setup wizard's provider-discovery step)")
 
     # -------------------------------------------------------------------------
     # Section 6: Docs
@@ -982,38 +902,13 @@ def _wizard_providers(inspect_data: dict) -> dict:
                     print(f"  {role} = {roles[role]}  (from {providers_path})")
                 else:
                     print(f"  {role} = (not bound)  (from {providers_path})")
-            print("  Providers gap detected: run `/z-providers-discover` (global) or"
-                  " `/z-providers-discover --repo` (repo).")
+            print("  Providers gap detected: run `python3 scripts/discover-providers.py`"
+                  " or the /z-setup wizard's provider-discovery step.")
     else:
         for role in provider_roles:
             print(f"  {role} = (not bound)  (absent)")
-        print("  Providers gap detected: run `/z-providers-discover` (global) or"
-              " `/z-providers-discover --repo` (repo).")
-
-    return {"toml": {}, "env": {}}
-
-
-def _wizard_personas(inspect_data: dict) -> dict:
-    """Wizard section: Personas — read-only display of role.persona bindings."""
-    _print_section_header("Personas")
-    providers_data, _providers_path = _find_providers_json()
-
-    personas_found = False
-    if providers_data is not None:
-        roles = providers_data.get("roles", {})
-        for role_name, role_val in roles.items():
-            persona = None
-            if isinstance(role_val, dict):
-                persona = role_val.get("persona")
-            if persona:
-                print(f"  {role_name}: {persona}")
-                personas_found = True
-
-    if not personas_found:
-        print("  no personas bound")
-
-    print("  Tip: Persona setup is read-only in v1. Edit `~/.config/z-harness/providers.json`"
-          " directly, or run `/z-personas` if available.")
+        print("  Providers gap detected: run `python3 scripts/discover-providers.py`"
+              " or the /z-setup wizard's provider-discovery step.")
 
     return {"toml": {}, "env": {}}
 
@@ -1515,7 +1410,6 @@ _WIZARD_SECTIONS: list[tuple[str, object]] = [
     ("workflow", _wizard_workflow),
     ("overnight", _wizard_overnight),
     ("providers", _wizard_providers),
-    ("personas", _wizard_personas),
     ("docs", _wizard_docs),
     ("memories", _wizard_memories),
     ("axioms", _wizard_axioms),
@@ -1833,7 +1727,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_inspect.add_argument(
         "--scope",
-        choices=["notifications", "workflow", "overnight", "providers", "personas", "docs", "memories", "axioms"],
+        choices=["notifications", "workflow", "overnight", "providers", "docs", "memories", "axioms"],
         default=None,
         help="Filter output to one concern section.",
     )
@@ -1846,7 +1740,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_wizard.add_argument(
         "--scope",
-        choices=["all", "notifications", "workflow", "overnight", "providers", "personas", "docs", "memories", "axioms"],
+        choices=["all", "notifications", "workflow", "overnight", "providers", "docs", "memories", "axioms"],
         default="all",
         help="Run only the named section (default: all).",
     )

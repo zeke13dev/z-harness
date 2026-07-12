@@ -1,6 +1,7 @@
 {
   "concept": "agents",
-  "last_updated": "2026-06-19",
+  "summary": "Specialized subagent prompt files under agents/: each is spawned fresh per invocation, executes an isolated worker role (implementation, review, planning-route advice, doc sync, mechanical remote/bisect/lookup work, cross-LLM consult), and returns a parseable contract that the surrounding /z-* commands parse and act on.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
@@ -16,7 +17,6 @@
     "agents/external-lookup.md",
     "agents/ideator-clusterer.md",
     "agents/implementer.md",
-    "agents/intent-classifier.md",
     "agents/mr-reviewer.md",
     "agents/plan-style-reviewer.md",
     "agents/planning-router.md",
@@ -32,7 +32,6 @@
     "agents/scope-reconciler-brainstorm.md",
     "agents/self-reviewer.md",
     "agents/spec-precheck.md",
-    "agents/task-tree-generator.md",
     "agents/tier1-doc-updater.md"
   ],
   "confidence": "high",
@@ -63,7 +62,7 @@
       "line": 1,
       "symbol": "cluster-planner",
       "kind": "module",
-      "summary": "/z-plan-split leaf planner; writes cluster SPEC/PLAN/TASKS, escalates risky decisions."
+      "summary": "/z-plan-split leaf planner; writes cluster INTENT.md + MANIFEST.json (file-scope manifest); no longer TASKS.md/complexity stamping."
     },
     {
       "file": "agents/complexity-classifier.md",
@@ -77,21 +76,21 @@
       "line": 1,
       "symbol": "consultant-primary",
       "kind": "module",
-      "summary": "Primary provider proxy; expected_contract: freeform; supports 12 modes including generate-hypotheses-round1/round2-adversarial."
+      "summary": "Primary provider proxy; expected_contract: freeform; plan-review is mode-aware (INTENT.md+TASKS.md vs SPEC.md+PLAN.md+TASKS.md); light-fix now serves /z-fix and /z-debug."
     },
     {
       "file": "agents/consultant-secondary.md",
       "line": 1,
       "symbol": "consultant-secondary",
       "kind": "module",
-      "summary": "Secondary provider proxy; expected_contract: freeform; same 12-mode surface as primary, distinct provider role."
+      "summary": "Secondary provider proxy; same mode-aware 12-mode surface as primary, distinct provider role."
     },
     {
       "file": "agents/context-curator.md",
       "line": 1,
       "symbol": "context-curator",
       "kind": "module",
-      "summary": "Haiku subagent that folds events.jsonl delta + git diff + TASKS.md + prior SESSION.md into bounded SESSION.md handoff at /z-execute batch breakpoint."
+      "summary": "Haiku subagent folding events+diff+TASKS+prior SESSION.md into bounded SESSION.md at durable /z-execute settle points (single-task batch, parallel batch, or INTENT BFS level boundary); never touches live /z-handoff SESSION_CONTEXT.md."
     },
     {
       "file": "agents/doc-fetcher.md",
@@ -105,7 +104,7 @@
       "line": 1,
       "symbol": "doc-updater",
       "kind": "module",
-      "summary": "Refreshes one concept doc pair; preserves memories[] verbatim; dry-run default; dedup_tags support."
+      "summary": "Refreshes one concept doc pair; requires LLM-tier `summary` field for INDEX.json; preserves memories[] verbatim; never edits INDEX.json directly; dry-run default; dedup_tags support."
     },
     {
       "file": "agents/external-lookup.md",
@@ -126,14 +125,7 @@
       "line": 1,
       "symbol": "implementer",
       "kind": "module",
-      "summary": "Implements one task block; supports --tasks path override, cross_task_notes, tests_md_path; produces RATIONALE/TRIED/DEVIATIONS contract fields for Tier 2 design rationale; mandatory self-check with 7 items including TESTS.md coverage."
-    },
-    {
-      "file": "agents/intent-classifier.md",
-      "line": 1,
-      "symbol": "intent-classifier",
-      "kind": "module",
-      "summary": "Cheap Haiku planning-depth classifier; returns quick|standard|deep level for INTENT.md richness; advisory only; dispatched by /z-plan when planning_mode=intent and intent_level=auto."
+      "summary": "Implements one task block; frontmatter model gpt-5.5:low is overridden by native model-routing tiers (low/medium/high/retry); reads optional intent_flags_path/execution_strategy_path/workstreams_path; hard guardrail-block stop policy; RATIONALE/TRIED/DEVIATIONS contract."
     },
     {
       "file": "agents/mr-reviewer.md",
@@ -154,7 +146,7 @@
       "line": 1,
       "symbol": "planning-router",
       "kind": "module",
-      "summary": "Haiku advisory router; primary routes include /z-map (terrain) and /z-research (synthesis); needs_research deprecated alias."
+      "summary": "Haiku advisory router; primary routes now /z-plan, /z-plan-split, /z-brainstorm, /z-sharpen (/z-plan-light, the legacy terrain-mapping wrapper, and /z-research dropped from primary target set); adds exact-vs-historical artifact matching, active-registry/worktree overlap signals, and post-artifact recommendation gate."
     },
     {
       "file": "agents/pre-reviewer.md",
@@ -164,46 +156,46 @@
       "summary": "Cheap Haiku first-pass pre-reviewer; opt-in (Z_HARNESS_PRE_REVIEW=1); runs up to 3 in parallel; produces preliminary blockers/majors for real reviewers."
     },
     {
-      "file": "agents/research-judge.md",
-      "line": 1,
-      "symbol": "research-judge",
-      "kind": "module",
-      "summary": "Opus final-judge synthesizer for /z-research; 10-section RESEARCH.md; forbidden from new design recommendations; read-only."
-    },
-    {
       "file": "agents/remote-runner.md",
       "line": 1,
       "symbol": "remote-runner",
       "kind": "module",
-      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox; atomic mkdir-lock+.base-ready; step-7 NEVER-delete guard for base/."
+      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox; optional sandbox_key/level for coalesced BFS-level-boundary dispatch; mandatory memory-PSI preflight gate before any confined build."
+    },
+    {
+      "file": "agents/research-judge.md",
+      "line": 1,
+      "symbol": "research-judge",
+      "kind": "module",
+      "summary": "Opus final-judge synthesizer for /z-research; 10-section RESEARCH.md; evidence-gap suggestions now point to /z-explore --depth=deep (mechanical, not a design rec); forbidden from new design recommendations; read-only."
     },
     {
       "file": "agents/resolver.md",
       "line": 1,
       "symbol": "resolver",
       "kind": "module",
-      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink."
+      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink; defer-to-sink is generic (no question currently mapped to it since /z-implement-next was deleted)."
     },
     {
       "file": "agents/review-agent.md",
       "line": 1,
       "symbol": "review-agent",
       "kind": "module",
-      "summary": "Haiku post-run memory candidate generator; debug_md_path primary for debug runs; slug anti-patterns enforced."
+      "summary": "Haiku post-run memory candidate generator for /z-execute, /z-review-all, /z-debug; debug_md_path primary for debug runs; slug anti-patterns enforced."
     },
     {
       "file": "agents/reviewer.md",
       "line": 1,
       "symbol": "reviewer",
       "kind": "module",
-      "summary": "Provider proxy for task correctness/spec review; validates implementer RATIONALE/TRIED/DEVIATIONS against diff; expected_contract: review-verdict; FOLLOWUPS: fenced JSON for minors/nits."
+      "summary": "Provider proxy for task correctness/spec review; INTENT mode now also reads optional intent_flags_path/execution_strategy_path/workstreams_path and must blocker-flag ignored concern flags or undeclared intent-direction changes; expected_contract: review-verdict."
     },
     {
       "file": "agents/scope-extractor.md",
       "line": 1,
       "symbol": "scope-extractor",
       "kind": "module",
-      "summary": "Haiku plan-scope extractor; emits JSON array of file changes with explicit|inferred|broad|unknown confidence; seeds active-plan registry."
+      "summary": "Haiku plan-scope extractor for /z-execute and /z-plan; emits JSON array of file changes with explicit|inferred|broad|unknown confidence; seeds active-plan registry."
     },
     {
       "file": "agents/scope-probe.md",
@@ -238,27 +230,19 @@
       "line": 1,
       "symbol": "spec-precheck",
       "kind": "module",
-      "summary": "Haiku preflight verifier for SPEC references; uses relevant_docs LLM JSONs as second source of truth."
-    },
-    {
-      "file": "agents/task-tree-generator.md",
-      "line": 1,
-      "symbol": "task-tree-generator",
-      "kind": "module",
-      "summary": "Sonnet BFS-level task generator for Adaptive INTENT engine; reads frozen INTENT.md + LEDGER.md; emits one independent sibling-task batch per level; writes canonical TASKS.md format parsed by session-helpers.sh; default level cap 6; emits termination sentinel on cap/budget guard."
+      "summary": "Haiku preflight verifier for SPEC references, dispatched per task by /z-execute; uses relevant_docs LLM JSONs as second source of truth."
     },
     {
       "file": "agents/tier1-doc-updater.md",
       "line": 1,
       "symbol": "tier1-doc-updater",
       "kind": "module",
-      "summary": "Flash subagent for Tier 1 per-task mechanical doc sync; diff-only surgical updates to AUTO-START/AUTO-END fields; stages to tier1-staged/; reconcile via reconcile-tier1-staged.py."
+      "summary": "Flash subagent for Tier 1 per-task mechanical doc sync; diff-only surgical updates to AUTO-START/AUTO-END fields; DRIFT: no live dispatcher currently calls subagent_type=\"tier1-doc-updater\" anywhere in skills/ (dispatch lost during z-implement-all->z-execute restructuring)."
     }
   ],
   "depends_on": [
     "scripts",
     "lookup-contract",
-    "personas-and-roles",
     "adaptive-intent"
   ],
   "consumed_by": [
@@ -272,13 +256,23 @@
     "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
     "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
     "Proxy agents emit consult_start before provider calls so liveness checks can detect hangs.",
-    "consultant-primary and consultant-secondary declare expected_contract: freeform; binding a persona with contract: review-verdict or contract: strict-json to either role fails resolve-persona.py validate.",
-    "reviewer and self-reviewer declare expected_contract: review-verdict; binding a persona with contract: freeform to either role fails resolve-persona.py validate.",
+    "consultant-primary and consultant-secondary declare expected_contract: freeform; reviewer and self-reviewer declare expected_contract: review-verdict.",
     "Personas that omit the contract field are treated as 'any' and pass all role contract checks.",
+    "consultant-primary/secondary plan-review mode is mode-aware: intent mode reads INTENT.md+TASKS.md+decisions; full mode reads SPEC.md+PLAN.md+TASKS.md+decisions; the caller supplies planning_mode and concrete artifact paths.",
+    "consultant-primary/secondary light-fix mode now serves /z-fix and /z-debug Phase 6 only; /z-plan-light was deleted from the codebase.",
     "doc-updater must preserve existing memories[] verbatim and never author memories.",
+    "doc-updater must never edit docs/llm/INDEX.json directly; it returns concept JSON (including a required top-level `summary` field) for /z-maintain-docs to apply.",
     "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
     "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
-    "planning-router reason code needs_research is a deprecated alias for needs_terrain_map (routes to /z-map); callers should emit needs_terrain_map instead.",
+    "planning-router primary route targets are /z-plan, /z-plan-split, /z-brainstorm, and /z-sharpen; /z-plan-light, the legacy terrain-mapping wrapper, and /z-research are no longer primary route targets (deleted, or reachable only by direct user invocation).",
+    "planning-router reason code needs_research is a deprecated alias that now returns STATUS: ask_user with needs_terrain_grounding on the prod surface; it does not route to a terrain-mapping command.",
+    "planning-router treats an exact finished plan (artifact_exact_slug_match && artifact_finished_plan_match, or legacy has_existing_plan without contradictory artifact signals) as the only state that unlocks /z-amend or /z-audit-plan; historical-similar candidates are warning-only (existing_artifact_similar) and never unlock those contextual exits.",
+    "planning-router treats INTENT.md + canonical TASKS.md (parseable task headings/status markers) as a finished plan-family artifact set even when SPEC.md/PLAN.md are absent (artifact_plan_mode: intent, canonical_tasks_present: true).",
+    "planning-router: an exact finished plan with neither plan_amend_intent nor plan_validation_intent returns STATUS: ask_user (existing_artifact_exact, ambiguous_route) rather than silently starting a new plan over a finished slug.",
+    "planning-router: non-empty active_registry_overlap (and no post-artifact/exact-finished-plan rule already routed) returns STATUS: ask_user with active_plan_overlap; worktree_overlap alone is warning-only and must not by itself force ask_user or a route decision.",
+    "planning-router: partial or truncated artifact/worktree inventory (artifact_inventory_partial/truncated) lowers confidence to at most medium (or low when the recommendation relies on absence of matches/overlaps) rather than treating missing evidence as a clean no-match.",
+    "planning-router route-chain loop detection is topic-scoped: two prior entries for the same topic, or a repeated from_command+to_command+overlapping-reason-codes pair for the same topic, returns STATUS: ask_user with route_loop_risk instead of re-entering /z-sharpen, /z-brainstorm, /z-plan, or /z-plan-split.",
+    "planning-router post_artifact_check recommendations (/z-plan-split for too_many_tasks, /z-sharpen for question_heavy_artifacts, /z-brainstorm for artifact_unsettled_approach) are surfaced only through the caller's route gate and are never auto-dispatched.",
     "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
     "plan-style-reviewer reviews design-quality of plan artifacts, not correctness; never finds logic/correctness/race-condition bugs.",
     "plan-style-reviewer never writes PLAN_STYLE_AUDIT.md; orchestrator does.",
@@ -287,8 +281,12 @@
     "remote-runner delegates sandbox lifecycle to scripts/remote-sandbox-sync.sh.",
     "remote-sandbox-sync.sh validates SLUG and TASK_ID: rejects values containing '/', '..', single-quotes, empty string; TASK_ID cannot equal the literal string 'base'.",
     "remote-sandbox-sync.sh uses atomic mkdir for .base.lock; the lock winner seeds <slug>/base/ and writes .base-ready marker containing local HEAD SHA; concurrent losers poll for the marker up to 600 s.",
-    "remote-runner step 7 NEVER deletes <slug>/base/; only the per-task <slug>/<task-id>/ directory is removed on success.",
+    "remote-runner step 7 NEVER deletes <slug>/base/; only the per-task (or, when sandbox_key was passed, per-level) overlay directory is removed on success.",
+    "remote-runner: when the caller passes sandbox_key (coalesced BFS-level-boundary dispatch), it keys only the per-task/per-level overlay path; the shared warm base stays keyed by <slug> alone.",
+    "remote-runner MUST run the memory-pressure (PSI) preflight probe before any needs-sandbox build/test; if the box never clears headroom/thrash thresholds after the polling budget, it returns STATUS: deferred (reason box_pressure) instead of running the build. Read-only queries/log tails skip this gate.",
     "cluster-planner refuses nested plan-split outputs when an ancestor MANIFEST.md exists.",
+    "cluster-planner writes INTENT.md (cluster-level frozen contract, four sections) + MANIFEST.json (flat JSON array of likely file paths) in place of the legacy SPEC.md/PLAN.md/TASKS.md trio; it no longer dispatches complexity-classifier.",
+    "cluster-planner's Phase 6 return uses FILES_COUNT (length of FILES_TOUCHED, derived from MANIFEST.json) in place of the legacy TASKS_COUNT; an empty file scope returns STATUS: spec_problem.",
     "review-agent never writes; orchestrator owns all writes via /z-suggest-memory.",
     "review-agent returns exactly one fenced JSON block; any other form is treated as malformed.",
     "review-agent parent_command=debug: debug_md_path is primary artifact; spec_path is supplementary.",
@@ -299,7 +297,11 @@
     "implementer's RATIONALE field is required on every return; TRIED and DEVIATIONS are optional.",
     "implementer's TRIED entries are self-reported and unverifiable by reviewers beyond code consistency.",
     "implementer's DEVIATIONS are validated by the reviewer against the diff.",
+    "implementer's effective model is resolved by the orchestrator's native model-routing layer (low|medium|high|retry tiers driven by the task's Complexity stamp or a retry escalation), not by the agent's own frontmatter model (gpt-5.5:low is a static fallback label only); implementer includes subagent_model_source/route/route_kind/override_applied/override_support verbatim in its telemetry.",
+    "implementer treats a PreToolUse guardrail block (e.g. block-shared-tree-edit.sh) as a stop signal, never an obstacle to route around; it must not retry the same write via a Bash file-write workaround, and must return status unable_to_complete with reason guardrail_blocked.",
+    "implementer's optional intent_flags_path/execution_strategy_path/workstreams_path inputs are guardrails and attention guidance only; they may narrow implementation choices but must never expand scope beyond the frozen INTENT.",
     "spec-precheck and reviewer both consume relevant_docs LLM JSONs as a second source of truth alongside SPEC.",
+    "reviewer's optional intent_flags_path/execution_strategy_path/workstreams_path inputs (INTENT mode) are read after INTENT+LEDGER and before the durable tier; reviewer must report a blocker if the diff ignores a flagged concern/decision, expands beyond INTENT, or picks a new product/intent direction without an explicit decision_needed halt.",
     "scope-probe is advisory only; the orchestrator owns the final dispatch decision.",
     "scope-probe never invents axis names; only names from the caller-supplied axis_taxonomy or the special value 'none' on refusal are valid returns.",
     "scope-probe archive file is written before the live file (archive-first invariant); if archive write fails, Phase 0 aborts.",
@@ -312,6 +314,7 @@
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing.",
+    "research-judge's Evidence-gaps section suggests targeted /z-explore --depth=deep investigation topics (mechanical, derived from constraint class); the dispatch_decision.map field name is retained only for legacy terrain-wrapper compatibility.",
     "reviewer **FOLLOWUPS:** block is optional; when present it MUST appear after ### Major and MUST contain exactly one fenced json array.",
     "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped.",
     "reviewer validates implementer RATIONALE for plausibility, DEVIATIONS against diff, and TRIED for code consistency.",
@@ -322,6 +325,7 @@
     "resolver defer-to-sink: orchestrator must NOT prompt the user; must call scripts/sink-add.sh and log followup_deferred_from_resolver; must fall back to ask if sink-add.sh exits non-zero.",
     "resolver defer-to-sink is a result-domain value only; it does not appear in VALIDATORS or QUESTION_IDS[id][choices].",
     "resolver defer-to-sink is never applied by the overnight gate (_apply_overnight_overrides); it is a config-layer result only.",
+    "resolver: no registered question currently maps to defer-to-sink (the /z-implement-next workflow.spec_retro_discovery example was removed when /z-implement-next was deleted); the result class stays available for a future question_id.",
     "scope-extractor output is consumed exclusively by scripts/active-plan-registry.py update-scope; the agent emits only valid JSON to stdout.",
     "scope-extractor never emits absolute paths; all path values in its output are repo-relative.",
     "axiom-extractor proposes only; it never writes the axiom store (candidates/, approved/, rejected/) and never approves a candidate.",
@@ -329,20 +333,12 @@
     "tier1-doc-updater NEVER writes to docs/human/ or docs/llm/ directly; all output goes to $Z_HARNESS_PLAN_DIR/tier1-staged/.",
     "tier1-doc-updater only modifies content within AUTO-START/AUTO-END delimited sections in human docs.",
     "pre-reviewer is opt-in only, gated by Z_HARNESS_PRE_REVIEW=1; produces preliminary findings; never blocks.",
-    "context-curator is mechanical only; folds telemetry into SESSION.md; never edits production code.",
+    "context-curator is mechanical only; folds telemetry into SESSION.md; never edits production code or the live /z-handoff SESSION_CONTEXT.md.",
+    "context-curator runs only at durable /z-execute settle points (completed single-task batch, completed parallel batch, or an INTENT BFS level boundary once LEDGER/done-set state is flushed), keyed off the caller-supplied completed_task_ids list rather than a single last-gate task id alone.",
     "ideator-clusterer is read-only; it returns structured text for the orchestrator to incorporate into the Phase 3 briefing; it never writes files.",
     "ideator-clusterer must name every ideator ID from the input list either as a cluster representative or in the Collapsed framings section; silent omission is a spec violation.",
     "ideator-clusterer K=1 (all framings converged) is a valid outcome; the agent must not artificially inflate K.",
-    "ideator-clusterer cross-cluster consensus section is mandatory even when empty (report 'None detected.').",
-    "intent-classifier is advisory only; the orchestrator announces the pick and lets the user override inline.",
-    "intent-classifier returns LEVEL: standard when the task prompt is empty or malformed so the orchestrator can proceed.",
-    "intent-classifier makes at most 3 file reads before defaulting to standard when signals are unclear.",
-    "task-tree-generator emits only tasks that advance criteria listed in unmet_criteria; it does not invent acceptance criteria.",
-    "task-tree-generator: all tasks in one level batch MUST be independent (no intra-level dependencies); **Depends on:** is always a literal dash.",
-    "task-tree-generator: canonical heading format ## T<NNN> - <title> `[ ]` is machine-parsed by session-helpers.sh; any deviation silently breaks task-status detection.",
-    "task-tree-generator: when level >= level_cap or budget_tokens_remaining < 30000, it emits a single termination sentinel task and returns STATUS: termination_guard.",
-    "task-tree-generator NEVER writes INTENT.md or LEDGER.md; it writes only to tasks_output_path.",
-    "task-tree-generator: default level cap is 6 (levels 0-5 may produce normal batches; level 6 triggers termination)."
+    "ideator-clusterer cross-cluster consensus section is mandatory even when empty (report 'None detected.')."
   ],
   "gotchas": [
     "reviewer and self-reviewer emit **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here. Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
@@ -353,8 +349,12 @@
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",
-    "planning-router needs_research reason code is a deprecated alias for needs_terrain_map -- callers should migrate to needs_terrain_map.",
+    "planning-router needs_research reason code is a deprecated alias only -- on the prod surface it now returns STATUS: ask_user with needs_terrain_grounding, it does NOT route to any terrain-mapping command (deep terrain discovery is /z-explore --depth=deep).",
+    "planning-router: /z-plan-light was deleted from the codebase entirely; planning-router's primary route list, decision rules, and reason codes no longer reference it.",
+    "planning-router historical_similar artifact matches (artifact_match_basis containing historical_similar, or a non-empty artifact_similar_candidates array) never satisfy has_existing_plan -- they are duplicate-work warnings (existing_artifact_similar) surfaced alongside whatever the primary-route rules decide, not a route unlock for /z-amend or /z-audit-plan.",
+    "planning-router worktree_overlap is warning-only: it must be included in a compatible result and may lower confidence, but a standalone worktree overlap must never by itself return ask_user or write a route decision (that's reserved for active_registry_overlap).",
     "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
+    "doc-updater's LLM-tier JSON now requires a concept-level `summary` field (distinct from per-entry-point summaries) -- /z-maintain-docs uses it to refresh docs/llm/INDEX.json metadata; doc-updater itself must never touch INDEX.json.",
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
     "remote-runner refuses naked binary restarts; must use qtctl up <paper-manifest>, not direct binary invocation.",
@@ -362,6 +362,8 @@
     "TASK_ID cannot be the literal string 'base'; remote-sandbox-sync.sh exits 2 on that value to prevent collisions with the shared warm-base directory.",
     "If remote-sandbox-sync.sh dies between .base.lock acquisition and release, the lock persists and all future seeding invocations timeout after 600 s. Recovery: ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'.",
     "On seed rsync failure, remote-sandbox-sync.sh cleans up the partial <slug>/base/ dir before releasing the lock so losers do not unblock onto a corrupt base.",
+    "remote-runner's memory-pressure PSI gate exists because systemd-oomd kills by user-slice memory PRESSURE, not per-unit caps or load: on 2026-06-20 a confined build pushed user@1000 PSI past the 50% threshold and oomd killed qt-trading.service at LOW load (3.2). A load-only gate misses this; the gate polls avail_mb/loadavg/PSI twice 10s apart, up to 15 attempts (~15 min), and defers (STATUS: deferred, reason box_pressure) rather than piling onto a pressured box. Thresholds: Z_HARNESS_REMOTE_MIN_AVAIL_MB (default 6000), Z_HARNESS_REMOTE_MAX_LOAD (default 14).",
+    "remote-runner's sandbox_key (e.g. <slug>/level-<N>) is used only for coalesced BFS-level-boundary dispatch under /z-execute's INTENT scheduler; the shared warm base at <slug>/base/ stays keyed by <slug> alone regardless of sandbox_key.",
     "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
     "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true.",
     "plan-style-reviewer: dismissed_signatures.json suppresses previously dismissed findings via Jaccard >= 0.6 match.",
@@ -378,6 +380,11 @@
     "implementer's RATIONALE is required on every return; TRIED and DEVIATIONS are optional.",
     "implementer's TRIED entries are self-reported and unverifiable by reviewers; reviewers can only check code consistency (e.g., if TRIED claims tokio::spawn was attempted but code still imports tokio).",
     "implementer's TESTS.md coverage check (self-check item 6): a test that compiles and passes but doesn't fail on deliberate invariant violation is trivial and must be strengthened.",
+    "implementer's retry path no longer hardcodes Agent(model=\"opus\"): the orchestrator selects a `retry` routing tier through the native model-routing layer; the in-prompt header still says RETRY v<N>.",
+    "implementer's frontmatter model (gpt-5.5:low) is a static default label -- do not treat it as the actual model that will run; the routed effective model is passed as subagent_model plus routing-provenance fields (subagent_model_source/route/route_kind/override_applied/override_support), which implementer must echo verbatim into its telemetry.",
+    "implementer's guardrail-block policy is strict: a PreToolUse block (most commonly block-shared-tree-edit.sh) must never be routed around via a Bash file-write workaround (python3 -c open(...,'w'), heredocs, tee, sed -i, > path, cp/mv into the path); implementer must return status unable_to_complete with reason guardrail_blocked and quote the hook's stderr.",
+    "cluster-planner no longer dispatches complexity-classifier (that Phase 5 complexity-stamping step was removed along with per-cluster TASKS.md); task enumeration and complexity stamping are deferred to BFS time under /z-execute.",
+    "cluster-planner's FILES_TOUCHED is now derived directly from the MANIFEST.json array (not a union of task **Files:** lines); the main thread's reconciliation Phase 4 re-reads MANIFEST.json and cross-checks -- mismatch triggers cluster_files_inconsistent and the cluster is marked failed.",
     "scope-probe caps walked candidates at 4 to keep context cheap; walking more than 4 is a violation.",
     "scope-probe makes at most one doc-fetcher call (step 4); chaining doc-fetcher calls is a violation.",
     "scope-probe output must have exactly one fenced JSON block; line-prefix headers (STATUS, MODE, AXIS, etc.) must appear before the fence, never inside it.",
@@ -391,27 +398,24 @@
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
-    "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate.",
-    "expected_contract mismatch: binding a persona with contract: freeform to reviewer or self-reviewer role fails resolve-persona.py validate.",
+    "expected_contract roles: consultant_primary and consultant_secondary require contract: freeform; reviewer and self-reviewer require contract: review-verdict.",
     "Personas that omit the contract field pass all role contract checks -- contract is optional in persona definitions.",
-    "scope-extractor: brace-expanded paths like skills/{z-plan,z-fix}/SKILL.md are expanded to explicit entries; paths with * or ? are emitted as broad confidence.",
+    "scope-extractor: brace-expanded paths like commands/{z-plan,z-fix}.md are expanded to explicit entries (the old z-plan-light example is gone since that command was deleted); paths with * or ? are emitted as broad confidence.",
     "axiom-extractor: --historical mode is CPU/token-heavy; only invoke when the caller explicitly passed mode: historical.",
     "tier1-doc-updater reads diff only; never reads full source files beyond what's needed to find target in doc.",
     "tier1-doc-updater stages to $Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/; reconciliation script handles final merge.",
     "tier1-doc-updater: concept doc missing AUTO-START markers -> logged in NOTES, concept skipped.",
+    "DRIFT: tier1-doc-updater currently has NO live dispatcher anywhere in skills/ or commands/ -- `subagent_type=\"tier1-doc-updater\"` does not appear in the repo outside its own agent-definition file. It was originally dispatched from the legacy commands/z-implement-all.md step 7a.5 (added alongside the agent itself) but the dispatch call was already gone before the z-implement-all->z-execute rename commit (2731f1d) landed, i.e. it was silently dropped during an earlier z-execute restructuring pass, not intentionally removed in any single commit. The docs/human/tier1-doc-updater.md concept doc still asserts active per-task dispatch and is equally stale on this point.",
     "pre-reviewer never blocks; real reviewers get final say. Pre-reviewer findings are advisory only.",
     "pre-reviewer runs up to 3 in parallel; gated by Z_HARNESS_PRE_REVIEW=1 env var.",
-    "context-curator: outputs bounded SESSION.md; mechanical only; dispatched at /z-execute batch breakpoint.",
+    "context-curator: outputs bounded SESSION.md; mechanical only; runs at durable /z-execute settle points (single-task batch, parallel batch, INTENT BFS level boundary), not merely a fixed batch breakpoint; SESSION.md is durable curated context and is explicitly NOT the live /z-handoff SESSION_CONTEXT.md (mid-session current work and immediate next action belong there, not in SESSION.md).",
+    "context-curator: done_count now prefers scripts/session-helpers.sh task_status_counts over a raw '[x]' grep, so inline-heading and list-checkbox status parsing agree with the checkpoint gate.",
     "ideator-clusterer is only dispatched when WIDE_N > 3 (wide mode). For WIDE_N <= 3, the orchestrator presents raw framings directly. If ideator-clusterer fails or returns K=0, the orchestrator falls back to presenting N raw framings.",
     "ideator-clusterer operates on the divergence axis (N peer framings, same topic); it is distinct from scope-reconciler-brainstorm which operates on the chunk axis (sub-topics in scope).",
     "ideator-clusterer must reproduce representative member framing blocks verbatim; paraphrasing introduces bias.",
-    "intent-classifier is dispatched only when planning_mode=intent and intent_level=auto; if intent_level is a non-auto value, the orchestrator uses it directly without calling this agent.",
-    "intent-classifier makes at most 3 file reads (stops after 3 if still unclear and defaults to standard). Checking for public surface exports (index.ts, lib.rs, __init__.py, etc.) is a soft signal toward deep.",
-    "task-tree-generator canonical heading format: backtick-enclosed [ ] status marker must be present and exactly [ ] (pending). Wrong bracket content or missing backtick will cause session-helpers.sh to silently fail task-status detection.",
-    "task-tree-generator writes only to tasks_output_path; it must not create or modify INTENT.md, LEDGER.md, or any other file.",
-    "task-tree-generator: if budget_tokens_remaining is < 50000, prefer a batch of <=3 high-confidence tasks. If < 30000, emit a termination sentinel regardless of level count.",
-    "task-tree-generator termination batch contains exactly one sentinel task; no normal task blocks are emitted alongside it.",
-    "task-tree-generator task_id_start lets the orchestrator number tasks continuously across levels (e.g. if levels 0+1 used T001-T008, pass task_id_start=9 for level 2)."
+    "consultant-primary/consultant-secondary plan-review mode input shape changed: callers now pass planning_mode plus concrete artifact paths (INTENT.md+TASKS.md for intent mode, or SPEC.md+PLAN.md+TASKS.md for full mode) instead of a fixed SPEC.md+PLAN.md pair.",
+    "reviewer's new optional intent_flags_path/execution_strategy_path/workstreams_path inputs are read only in INTENT mode, after INTENT+LEDGER and before the durable tier (kernel/invariants/style); they are absent in legacy mode.",
+    "The 'intent-classifier' and 'task-tree-generator' agents (BFS-level task generation and planning-depth classification for the Adaptive INTENT engine) still exist under agents/ but are now documented exclusively in the adaptive-intent concept, not here -- avoid duplicating their contracts in this file."
   ],
   "memories": []
 }

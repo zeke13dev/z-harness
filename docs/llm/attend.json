@@ -1,8 +1,9 @@
 {
   "concept": "attend",
-  "last_updated": "2026-06-24",
+  "summary": "Attended middle-gear chain runner: auto-answers mechanical gates, surfaces decision/risk/shortcut/archiving gates inline, and yields with protocol-1.1 handoff predicates at plan and implement-all boundaries.",
+  "last_updated": "2026-07-09",
   "covers_spec": "skills/z-attend/SKILL.md",
-  "source_files": [
+  "source_file": [
     "skills/z-attend/SKILL.md",
     "scripts/chain-runner.sh",
     "scripts/config.py",
@@ -12,77 +13,90 @@
     "docs/schemas/handoff.schema.json"
   ],
   "confidence": "high",
-  "summary": "Attended middle-gear chain runner: auto-answers mechanical gates, surfaces decision/risk/shortcut/archiving gates inline, and yields with protocol-1.1 handoff predicates at plan and implement-all boundaries.",
   "entry_points": [
     {
       "file": "skills/z-attend/SKILL.md",
-      "line": 56,
-      "symbol": "fail-safe category rule",
+      "line": 55,
+      "symbol": "fail-safe category rule (HARD INVARIANT 1)",
       "kind": "module",
       "summary": "Unknown/untagged gates resolve to ask; mechanical auto-proceed requires explicit category metadata."
     },
     {
       "file": "skills/z-attend/SKILL.md",
-      "line": 90,
-      "symbol": "attend-state path",
-      "kind": "module",
-      "summary": "Run-scoped state file is $BASE/archive/$RUN_ID/attend-state.json."
-    },
-    {
-      "file": "skills/z-attend/SKILL.md",
-      "line": 132,
-      "symbol": "attend_resume extraction",
+      "line": 137,
+      "symbol": "attend_resume predicate extraction",
       "kind": "module",
       "summary": "Resume refuses handoff.json without protocol-1.1 attend_resume predicate."
     },
     {
       "file": "skills/z-attend/SKILL.md",
       "line": 157,
-      "symbol": "HEAD mismatch guard",
+      "symbol": "HEAD mismatch guard (R1)",
       "kind": "module",
       "summary": "Expected head mismatch emits attend_resume_halt and hard-halts unless user accepts new base."
     },
     {
       "file": "skills/z-attend/SKILL.md",
-      "line": 290,
+      "line": 286,
+      "symbol": "attend-state path",
+      "kind": "module",
+      "summary": "Run-scoped state file is $BASE/archive/$RUN_ID/attend-state.json, never overnight-state.json."
+    },
+    {
+      "file": "skills/z-attend/SKILL.md",
+      "line": 295,
       "symbol": "preflight gate lint",
       "kind": "module",
-      "summary": "Runs lint-halt-categories before first chain step; advisory only."
+      "summary": "Runs lint-halt-categories --check-chain before first step; advisory only, chain still proceeds."
+    },
+    {
+      "file": "skills/z-attend/SKILL.md",
+      "line": 468,
+      "symbol": "risk-outcome halt (Step 2.7)",
+      "kind": "module",
+      "summary": "Reviewer blocker or audit reject emits attend_risk_halt; asks fix-retry/abort/continue-anyway."
     },
     {
       "file": "scripts/chain-runner.sh",
-      "line": 27,
-      "symbol": "steps",
-      "kind": "script",
-      "summary": "Emits preset steps as name:yield_after lines."
+      "line": 94,
+      "symbol": "cmd_steps",
+      "kind": "fn",
+      "summary": "Emits preset steps as name:yield_after lines; sole authority for chain composition."
     },
     {
       "file": "scripts/chain-runner.sh",
-      "line": 86,
+      "line": 87,
       "symbol": "_yield_after",
       "kind": "fn",
       "summary": "Only plan and implement-all boundaries yield by declaration."
     },
     {
+      "file": "scripts/chain-runner.sh",
+      "line": 283,
+      "symbol": "cmd_new_run_id",
+      "kind": "fn",
+      "summary": "C14 archive set-difference identifying a step's sub-run, excluding *-overnight-*."
+    },
+    {
       "file": "scripts/config.py",
-      "line": 317,
+      "line": 519,
       "symbol": "HALT_CATEGORY_ENUM",
       "kind": "const",
       "summary": "Canonical category enum: decision, risk, shortcut, archiving, mechanical_proceed."
     },
     {
       "file": "scripts/config.py",
-      "line": 1707,
+      "line": 2014,
       "symbol": "cmd_resolve_halt_category",
       "kind": "fn",
       "summary": "Prints registered category or ask for unknown/untagged question IDs."
     },
     {
       "file": "scripts/write-handoff.sh",
-      "line": 178,
+      "line": 259,
       "symbol": "protocol 1.1 attend_resume writer",
       "kind": "script",
-      "summary": "When Z_HARNESS_ATTEND_RESUME=1, validates five env vars and embeds attend_resume."
+      "summary": "When Z_HARNESS_ATTEND_RESUME=1, validates five env vars are non-empty and embeds attend_resume."
     },
     {
       "file": "docs/schemas/handoff.schema.json",
@@ -105,17 +119,20 @@
   "invariants": [
     "Unknown or untagged gate category resolves to ask, never mechanical_proceed.",
     "Only explicitly mechanical gates are auto-answered.",
-    "Boundary yield currently declared for plan and implement-all.",
-    "Protocol-1.1 attend handoff requires all five attend_resume fields.",
-    "HEAD and phase/cursor mismatches are hard resume halts.",
-    "State writes go through chain-runner locking/atomic write path."
+    "Boundary yield currently declared for plan and implement-all only.",
+    "Protocol-1.1 attend handoff requires all five attend_resume fields non-empty.",
+    "HEAD and phase/cursor mismatches are hard resume halts (R1/R2).",
+    "State writes go through chain-runner locking/atomic write path.",
+    "A step-outcome risk signal (reviewer blocker or audit reject) never silently advances the chain (Step 2.7)."
   ],
   "gotchas": [
-    "No Z_HARNESS_NO_ASK=halt in attend mode.",
-    "Resume validates handoff.json, not SESSION.md.",
+    "No Z_HARNESS_NO_ASK=halt in attend mode; gates surface inline, unlike /z-overnight.",
+    "Resume validates handoff.json's attend_resume predicate, not SESSION.md.",
     "State file is attend-state.json, not overnight-state.json.",
-    "Preflight lint is advisory.",
-    "surface-shortcut.sh exit 1 is the intentional surface-ask signal."
+    "Preflight lint (--check-chain) is advisory, not blocking.",
+    "surface-shortcut.sh exit 1 is the intentional surface-ask signal; 0 is no-op; 2 is infra fallback-to-ask.",
+    "quick-build preset has no review-all step (2 steps only: plan, implement-all).",
+    "research-build preset includes a test step (research, plan, test, implement-all, review-all)."
   ],
   "presets": {
     "attend-full": [
@@ -133,12 +150,12 @@
     ],
     "quick-build": [
       "plan",
-      "implement-all",
-      "review-all"
+      "implement-all"
     ],
     "research-build": [
       "research",
       "plan",
+      "test",
       "implement-all",
       "review-all"
     ]
@@ -170,6 +187,7 @@
     "attend_step_error",
     "attend_gate_auto",
     "attend_gate_asked",
+    "attend_risk_halt",
     "chain_yield",
     "attend_resumed",
     "attend_resume_halt",

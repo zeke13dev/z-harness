@@ -33,17 +33,10 @@ capability on a future version bump) and is handled by the doctor command.
 
 Export layout
 -------------
-Delegates to ``runtime/drivers/codex/persona_export.py::export_persona()``
-for persona files, which writes::
-
-    <dest>/prompts/personas/<name>.md
-
-The top-level AGENTS.md for an injected session is a lightweight stub
-that points to the exported persona prompt layout.  The runtime driver writes
-native ``skills/<id>/SKILL.md``, ``.codex/agents/<id>.toml``,
+Delegates to ``runtime/drivers/codex/export.py::export()``.  The runtime driver
+writes native ``skills/<id>/SKILL.md``, ``.codex/agents/<id>.toml``,
 ``.codex-plugin/plugin.json``, ``AGENTS.md`` fallback/reference, and
-``mcp_config.json``.  ``CodexAdapter.export_payload`` then adds persona prompts
-via ``runtime/drivers/codex/persona_export.py``.
+``mcp_config.json``.
 
 Capabilities
 ------------
@@ -138,7 +131,7 @@ z-harness plugin root: `{plugin_root}`
 
 ## Agent roles
 
-Personas and prompt files are exported under `prompts/personas/`.
+Skills, agents, and prompt files are exported by the codex runtime driver.
 Run `z-harness export --host codex` to populate the full prompt library.
 """.format
 
@@ -257,26 +250,19 @@ class CodexAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export skills, agents, plugin metadata, MCP config, and personas.
+        """Export skills, agents, plugin metadata, and MCP config.
 
         Delegates to ``runtime/drivers/codex/export.py::export()`` for
         skills, native custom-agent TOML, plugin metadata, ``AGENTS.md``
-        fallback/reference, and MCP config.  It then runs the existing persona
-        loop via ``runtime/drivers/codex/persona_export.py::export_persona()``
-        for each persona file found in the ``personas/builtin/`` directory.
+        fallback/reference, and MCP config.
 
-        Both results are merged into a single ExportResult.  Fidelity is read
-        from ``codex_parity_gate`` so adapter/export claims cannot diverge.
+        Fidelity is read from ``codex_parity_gate`` so adapter/export claims
+        cannot diverge.
 
         Non-empty warnings from the runtime export (validation errors) are
         preserved and re-raised as ``RuntimeError`` so callers that expect the
         legacy hard-gate behaviour see a failure signal rather than a silent
         downgrade.
-
-        Collision assert (MINOR-6): persona names must not overlap with
-        prompt ids in the ``prompts/`` namespace.  Current runtime export writes
-        persona prompts under ``prompts/personas/``; the check is retained for
-        compatibility with any future flat prompt ids.
 
         The written layout is::
 
@@ -285,34 +271,27 @@ class CodexAdapter:
             <dest>/.codex-plugin/plugin.json     — Codex plugin manifest
             <dest>/AGENTS.md                     — fallback/reference
             <dest>/mcp_config.json               — MCP registration config
-            <dest>/prompts/personas/<name>.md    — personas
 
         Returns
         -------
         ExportResult
-            fidelity is gate-driven; files lists all written files under dest;
-            warnings are aggregated from both stages.
+            fidelity is gate-driven; files lists all written files under dest.
 
         Raises
         ------
         RuntimeError
-            If the runtime export produces validation warnings (legacy hard-gate)
-            or if persona names collide with prompt ids.
+            If the runtime export produces validation warnings (legacy hard-gate).
         """
         dest = Path(dest)
 
         # Locate the harness repo root.
         harness_root = Path(__file__).parent.parent.parent.resolve()
-        # Shipped personas live in personas/builtin/ (the canonical builtin layer
-        # per resolve-persona.py); personas/ itself holds only README.md. Globbing
-        # personas/ directly matches zero persona files and exports no personas.
-        personas_dir = harness_root / "personas" / "builtin"
 
         all_files: list[Path] = []
         all_warnings: list[str] = []
 
         # ------------------------------------------------------------------
-        # Stage 1: runtime export — skills, agents, plugin metadata, MCP config
+        # Runtime export — skills, agents, plugin metadata, MCP config
         # ------------------------------------------------------------------
         try:
             from runtime.drivers.codex.export import export as codex_export
@@ -322,7 +301,6 @@ class CodexAdapter:
             )
             codex_export = None  # type: ignore[assignment]
 
-        runtime_ids: set[str] = set()
         if codex_export is not None:
             rt_result = codex_export(harness_root, dest)
             all_files.extend(rt_result.files)
@@ -333,47 +311,6 @@ class CodexAdapter:
                     f"codex runtime export produced validation errors:\n"
                     + "\n".join(f"  {w}" for w in rt_result.warnings)
                 )
-            # Collect exported prompt file stems to check for persona-name
-            # collisions if a future Codex export adds flat prompt files.
-            for f in rt_result.files:
-                p = Path(f)
-                # Only prompt files under prompts/ (not AGENTS.md) are in scope.
-                if p.parent.name == "prompts":
-                    runtime_ids.add(p.stem)
-
-        # ------------------------------------------------------------------
-        # Stage 2: persona export loop
-        # ------------------------------------------------------------------
-        if not personas_dir.is_dir():
-            all_warnings.append("personas/builtin/ directory not found; persona export skipped")
-        else:
-            # Lazy import so the adapter can load without the full runtime
-            # package in environments where only z_harness_cli is installed.
-            try:
-                from runtime.drivers.codex.persona_export import export_persona
-            except ImportError as exc:
-                all_warnings.append(
-                    f"runtime.drivers.codex.persona_export not importable: {exc}"
-                )
-                export_persona = None  # type: ignore[assignment]
-
-            if export_persona is not None:
-                for persona_file in sorted(personas_dir.glob("*.md")):
-                    persona_name = persona_file.stem
-                    # Collision check: persona names must not overlap with
-                    # flat prompt ids in prompts/ (MINOR-6).
-                    if persona_name in runtime_ids:
-                        raise RuntimeError(
-                            f"codex export collision: persona name {persona_name!r} "
-                            f"conflicts with an existing command/agent/skill id in "
-                            f"prompts/. Rename the persona or the conflicting source "
-                            f"file."
-                        )
-                    try:
-                        out_path = export_persona(persona_file, dest)
-                        all_files.append(out_path)
-                    except (ValueError, OSError) as exc:
-                        all_warnings.append(f"Skipped {persona_file.name}: {exc}")
 
         return ExportResult(
             dest=dest,

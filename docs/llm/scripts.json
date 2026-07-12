@@ -1,6 +1,7 @@
 {
   "concept": "scripts",
-  "last_updated": "2026-06-19",
+  "summary": "Operational utility scripts: structured telemetry (log-event.sh/log-phase.sh), layered TOML config + model routing (config.py/config.sh), the lockless active-plan registry with F1-F5 cross-session lease/wait/claim primitives (active-plan-registry.py), the git-safety PreToolUse hook (block-dangerous-git.sh), memory/dismissal maintenance scripts, remote sandbox sync, and persona-rotation analysis.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/block-dangerous-git.sh",
@@ -40,7 +41,7 @@
       "line": 1,
       "symbol": "log-event.sh",
       "kind": "module",
-      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set); resolve-run-dir subcommand for read-only path lookup."
+      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set); resolve-run-dir subcommand for read-only path lookup; when HERMES_MARKER_FILE is set, also fires emit-hermes-marker.sh (status, or heartbeat for context_pressure kind) as a best-effort trailing step."
     },
     {
       "file": "scripts/log-phase.sh",
@@ -75,18 +76,18 @@
       "line": 1,
       "symbol": "run-memory-review.sh",
       "kind": "module",
-      "summary": "Gate script for memory-review agent; <RUN> <parent_command>; 4-state terminal taxonomy; stdout contract on ready: STATUS: ready, diff path, SPEC path (or empty), TAGS path, optional DEBUG.md path; final line AXIOM_READY <diff-path> when axioms.auto_extract_post_run != 'false'."
+      "summary": "Gate script for memory-review agent, called by /z-execute, /z-review-all, and /z-debug; <RUN> <parent_command>; 4-state terminal taxonomy; stdout contract on ready: STATUS: ready, diff path, SPEC path (or empty), TAGS path, optional DEBUG.md path; final line AXIOM_READY <diff-path> when axioms.auto_extract_post_run != 'false'."
     },
     {
       "file": "scripts/extract-dismissals.py",
-      "line": 480,
+      "line": 520,
       "symbol": "main",
       "kind": "fn",
       "summary": "CLI: extracts dismissed finding signatures from consecutive archive run pairs; --global and --filename flags; outputs {signatures,n_runs_scanned}."
     },
     {
       "file": "scripts/extract-dismissals.py",
-      "line": 384,
+      "line": 414,
       "symbol": "extract_dismissals_from_runs",
       "kind": "fn",
       "summary": "Pairwise algorithm: R_i snapshot vs R_{i+1}.previous-* user-edited copy to find dismissed findings."
@@ -96,11 +97,11 @@
       "line": 1,
       "symbol": "remote-sandbox-sync.sh",
       "kind": "module",
-      "summary": "Rsync local tree to two-level remote layout under sandbox/: <slug>/base/ (seeded once, atomic mkdir lock) + <slug>/<task-id>/ overlay via --link-dest; REMOTE_HOME resolved via SSH printf; SLUG/TASK_ID validated; sandbox/ sub-dir prevents stray rsync from polluting container root."
+      "summary": "Rsync local tree to two-level remote layout under sandbox/: <slug>/base/ (seeded once, atomic mkdir lock) + <slug>/<task-id>/ overlay via --link-dest; optional --sandbox-key <slug>/<subpath> overrides the overlay path (used by coalesced per-BFS-level REMOTE_VERIFY dispatch, e.g. <slug>/level-<N>) while the shared warm base stays keyed by SLUG alone; REMOTE_HOME resolved via SSH printf; SLUG/TASK_ID/SANDBOX_KEY validated against path-traversal; sandbox/ sub-dir prevents stray rsync from polluting container root; Z_HARNESS_WORKTREE_ROOT overrides the default git-rev-parse-show-toplevel source root."
     },
     {
       "file": "scripts/remote-sandbox-sync.sh",
-      "line": 130,
+      "line": 176,
       "symbol": "seed_base",
       "kind": "fn",
       "summary": "Acquires remote lock via mkdir, seeds shared base via rsync, writes .base-ready marker with HEAD SHA, releases lock; losers poll up to 600s."
@@ -110,56 +111,63 @@
       "line": 1,
       "symbol": "config.py",
       "kind": "module",
-      "summary": "Layered TOML config loader; subcommands: get, get-batch, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, resolve-halt-category, check-no-ask, set, migrate, inspect-all; QUESTION_IDS registry + RESULT_MAP + [followup] section; startup guards at module load."
+      "summary": "Layered TOML config loader; subcommands: get, get-batch, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, resolve-halt-category, check-no-ask, set, migrate, inspect-all; QUESTION_IDS registry + RESULT_MAP + [followup] section + model_classes/model_routing dynamic-key sections; startup guards at module load."
     },
     {
       "file": "scripts/config.py",
-      "line": 204,
+      "line": 193,
+      "symbol": "model_classes / model_routing DEFAULTS",
+      "kind": "const",
+      "summary": "New DEFAULTS sections: model_classes.{cheap,standard,deep}.{model,thinking,reasoning} (local model-class routing) and model_routing.native_agents.default / model_routing.implementer.{low,medium,high,retry} (implementer tier→model labels, e.g. sonnet/opus/gpt-5.5)."
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 891,
       "symbol": "_run_startup_guards",
       "kind": "fn",
-      "summary": "Module-load guard: asserts QUESTION_IDS keys exist in VALIDATORS, have skill_default, RESULT_MAP choices are valid; exits 2 on violation."
+      "summary": "Module-load guard: asserts QUESTION_IDS keys exist in VALIDATORS, have skill_default, have a halt_category in HALT_CATEGORY_ENUM (guard 2b), and RESULT_MAP choices are valid; exits 2 on violation."
     },
     {
       "file": "scripts/config.py",
-      "line": 811,
+      "line": 2009,
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "Prints sorted JSON array of registered question IDs from QUESTION_IDS registry."
     },
     {
       "file": "scripts/config.py",
-      "line": 1334,
+      "line": 1742,
       "symbol": "cmd_get_batch",
       "kind": "fn",
       "summary": "Resolves multiple config keys in a single process; prints JSON object {key:val,...}; unknown keys null+warn to stderr; meta keys excluded; always exits 0 (best-effort)."
     },
     {
       "file": "scripts/config.py",
-      "line": 1598,
+      "line": 2014,
       "symbol": "cmd_resolve_halt_category",
       "kind": "fn",
       "summary": "Prints halt_category tag for given question_id; fail-safe default 'ask' for unknown/untagged qids; bare string output (not JSON); exits 2 with no arguments."
     },
     {
       "file": "scripts/config.py",
-      "line": 1513,
+      "line": 3075,
       "symbol": "cmd_resolve_question",
       "kind": "fn",
       "summary": "Returns JSON resolver envelope {result,default,source,rule_id,strength,reason,sources}; result in {ask,skip,prefill,halt,defer-to-sink}; consults 4-layer config then routing-preference memories; honors Z_HARNESS_ASK_ALL, Z_HARNESS_NO_ASK, Z_HARNESS_EXPLAIN_RESOLUTION; exits 5 when both conflicting env vars set."
     },
     {
       "file": "scripts/config.py",
-      "line": 1636,
+      "line": 3364,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
       "summary": "Returns JSON {result:halt|proceed, question_id, rule_id}; fail-closed gate for overnight mode; unregistered qids always halt with unknown_ask_blocked event."
     },
     {
       "file": "scripts/config.py",
-      "line": 1842,
+      "line": 3633,
       "symbol": "cmd_set",
       "kind": "fn",
-      "summary": "Atomic read-modify-write of config key in global or project TOML; validates key+value before writing; exit 2 on validation, 4 on I/O."
+      "summary": "Atomic read-modify-write of config key in global or project TOML; validates key+value before writing; model_classes/model_routing keys route through dynamic-key validators (_dynamic_model_config_validator); exit 2 on validation, 4 on I/O."
     },
     {
       "file": "scripts/config.sh",
@@ -173,63 +181,84 @@
       "line": 1,
       "symbol": "active-plan-registry.py",
       "kind": "module",
-      "summary": "Lockless per-run active-plan registry; 8 subcommands (session-id, register, heartbeat, update-scope, list, overlaps, reap, deregister); all writes atomic via tmpfile+os.replace; no global lock; resolves active_plans_dir via plan-path.sh; Z_HARNESS_REGISTRY_ENABLED=0 silences all coordination writes."
+      "summary": "Lockless per-run active-plan registry; 11 subcommands (session-id, register, heartbeat, update-scope, list, deregister, overlaps, reap, claim, release, wait-for); all writes atomic via tmpfile+os.replace; no global lock; resolves active_plans_dir via plan-path.sh; Z_HARNESS_REGISTRY_ENABLED=0 silences all coordination writes. claim/release/wait-for implement the cross-session lease/wait subsystem (F1-F5): wait/lease gates only the waiter's own run, takes no lock, never writes a peer's record except the reaper's stale-marking exception, and every wait has a finite budget + loud timeout."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 389,
+      "line": 656,
       "symbol": "cmd_session_id",
       "kind": "fn",
       "summary": "Prints stable session-id token: echoes Z_HARNESS_SESSION_ID if set; otherwise derives <ppid>-<start_epoch> (Linux /proc) or <ppid>-<epoch> (macOS pure-Python fallback, no subprocess). Always exits 0."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 408,
+      "line": 675,
       "symbol": "cmd_register",
       "kind": "fn",
-      "summary": "Writes schema-v1 record atomically; validates run-id as safe basename (^[A-Za-z0-9._-]+$, no leading dash, no '..'); LOUD failure exit 3; emits plan_registered."
+      "summary": "Writes schema-v1 record atomically; validates run-id as safe basename (^[A-Za-z0-9._-]+$, no leading dash, no '..'); accepts optional --watchdog-pid (advisory field); LOUD failure exit 3; emits plan_registered."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 455,
+      "line": 723,
       "symbol": "cmd_heartbeat",
       "kind": "fn",
-      "summary": "Updates last_heartbeat/phase/current_task/status; NON-FATAL (always 0); absent record emits registry_error(reason:missing_record) — does NOT fabricate zombie records."
+      "summary": "Updates last_heartbeat/phase/current_task/status (+ optional --watchdog-pid); NON-FATAL (always 0); absent record emits registry_error(reason:missing_record) — does NOT fabricate zombie records."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 511,
+      "line": 782,
       "symbol": "cmd_update_scope",
       "kind": "fn",
       "summary": "Merges scope array [{path,confidence,reason}] into record; NON-FATAL; self-logs registry_error on internal error."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 562,
-      "symbol": "cmd_list",
+      "line": 877,
+      "symbol": "cmd_deregister",
       "kind": "fn",
-      "summary": "Scans <active>/*.json; skips torn/partial files silently; --json outputs JSON array; always exits 0."
+      "summary": "Atomically unlinks the run's record (FileNotFoundError on unlink is benign); reads the .watchdog.pid file for the run's slug plan dir and SIGTERM->grace->SIGKILLs the watchdog sweep (best-effort, NON-FATAL); emits plan_deregistered."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 700,
+      "line": 940,
+      "symbol": "cmd_claim",
+      "kind": "fn",
+      "summary": "Best-effort path-lease claim; stages requested paths, re-reads all peer records (F2 check-after-claim), resolves contention by run_id lexicographic tiebreak (only senior peers — lower run_id — can force a concession), persists the won set into held_paths. Prints {claimed:[...], conceded:[{path,holder_run_id}]}; always exits 0."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1119,
+      "symbol": "cmd_release",
+      "kind": "fn",
+      "summary": "Best-effort release of held_paths (named subset via --paths or --all); refreshes last_heartbeat; emits lease_released{run_id,paths}; NON-FATAL, always exits 0."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1228,
+      "symbol": "cmd_wait_for",
+      "kind": "fn",
+      "summary": "Parks the caller's run behind one or more senior peers (--on) until their records clear (gone/complete/aborted/stale) or the budget expires; auto mode (runtime.auto_wait) uses runtime.auto_wait_budget_secs, explicit mode uses Z_HARNESS_WAIT_TIMEOUT_SECS; polls at Z_HARNESS_WAIT_POLL_SECS; waiting_on is cleared on every exit path via try/finally (EH-005). Exit 0=cleared/nothing_to_wait_on, 2=usage error, 10=budget expired (LOUD), 130=SIGINT/SIGTERM."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1642,
       "symbol": "cmd_overlaps",
       "kind": "fn",
       "summary": "Computes path intersection vs all live peer records; exit 0=no overlap, 10=advisory, 20=blocking (strict+explicit×explicit exact path match); same run-id or session-id skipped; stale peers included but non-blocking; emits scope_overlap_detected or active_plan_scan_complete."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 889,
+      "line": 1883,
       "symbol": "cmd_reap",
       "kind": "fn",
-      "summary": "Conservative reaper: (a) delete on dead-local-pid, (b) delete on age>2×stale_threshold, (c) mark status:stale on age>1×stale_threshold for remote/unknown hosts; FileNotFoundError on unlink is benign; NON-FATAL overall; emits plan_reaped / plan_marked_stale."
+      "summary": "Conservative reaper: (a) delete on dead-local-pid, (b) delete on age>2×stale_threshold, (c) mark status:stale on age>1×stale_threshold for remote/unknown hosts; FileNotFoundError on unlink is benign; this is the one allowed cross-record write (marking a peer stale); NON-FATAL overall; emits plan_reaped / plan_marked_stale."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 1065,
+      "line": 2177,
       "symbol": "main",
       "kind": "fn",
-      "summary": "Argument parser dispatch; checks Z_HARNESS_REGISTRY_ENABLED=0 before executing mutating subcommands; overlaps returns 0 when disabled."
+      "summary": "Argument parser dispatch (11 subcommands); checks Z_HARNESS_REGISTRY_ENABLED=0 before executing mutating subcommands; overlaps returns 0 when disabled."
     },
     {
       "file": "scripts/persona-stats.py",
@@ -267,88 +296,11 @@
       "summary": "[rotation] Event kind string 'persona_attempt_outcome' — the terminal event joined against draw events."
     },
     {
-      "file": "scripts/run-status.sh",
-      "line": 1,
-      "symbol": "run-status.sh",
-      "kind": "module",
-      "summary": "Classifies terminal state of a run as clean|halted|errored|unknown; subcommands: classify <run-id-or-path> [--command <name>], last-event <run-id-or-path>; sources plan-path.sh."
-    },
-    {
-      "file": "scripts/run-status.sh",
-      "line": 198,
-      "symbol": "classify_by_kind",
-      "kind": "fn",
-      "summary": "Matches event kind against clean allowlist, halt allowlist, and *_error/fatal pattern; returns one of four terminal states."
-    },
-    {
-      "file": "scripts/run-status.sh",
-      "line": 250,
-      "symbol": "cmd_classify",
-      "kind": "fn",
-      "summary": "Subcommand entry; implement-all special case: requires last event=implement_end|compaction_pause AND all TASKS.md checkboxes [x]|[~] for clean."
-    },
-    {
-      "file": "scripts/normalize-task-state.sh",
-      "line": 1,
-      "symbol": "normalize-task-state.sh",
-      "kind": "module",
-      "summary": "Resets - [~] in-progress markers to - [ ] in <plan-dir>/TASKS.md; atomic via .tmp.$$ rename; always exits 0; --self-test mode with 4 assertions."
-    },
-    {
-      "file": "scripts/lint-askuser.sh",
-      "line": 1,
-      "symbol": "lint-askuser.sh",
-      "kind": "module",
-      "summary": "Audits AskUserQuestion callsites in commands/ and skills/; tags REGISTERED (file also has resolve-question or check-no-ask) or UNREGISTERED; --strict exits 1 on unregistered."
-    },
-    {
-      "file": "scripts/overnight-preflight.sh",
-      "line": 1,
-      "symbol": "overnight-preflight.sh",
-      "kind": "module",
-      "summary": "Phase-0 preflight for /z-overnight; check-collisions --chain <steps> --base <dir>: exits 0 if safe, emits slug_collision_halt event and exits 1 on collision; --self-test runs 8 assertions."
-    },
-    {
-      "file": "scripts/overnight-preflight.sh",
-      "line": 233,
-      "symbol": "cmd_check_collisions",
-      "kind": "fn",
-      "summary": "v1 rule (SPEC C13): collision when first chain step is plan|research AND <base>/PLAN.md exists; cds to REPO_ROOT before calling log-event.sh."
-    },
-    {
-      "file": "scripts/morning-report.py",
-      "line": 427,
-      "symbol": "cmd_generate",
-      "kind": "fn",
-      "summary": "Locates latest overnight run dir, loads overnight-state.json + events.jsonl, calls generate_report, writes MORNING_REPORT.md atomically; exits 1 on I/O or parse error."
-    },
-    {
-      "file": "scripts/morning-report.py",
-      "line": 376,
-      "symbol": "generate_report",
-      "kind": "fn",
-      "summary": "Assembles five sections: chain summary (HEAD SHA mismatch banner), phase results table, unilateral decisions table, test outcomes, recommended next (branches on halt reason)."
-    },
-    {
-      "file": "scripts/morning-report.py",
-      "line": 518,
-      "symbol": "cmd_self_test",
-      "kind": "fn",
-      "summary": "Golden-file comparison against fixtures in z-harness/overnight-run/tests/morning-report-fixtures/; runs root fixture + subdirs with MORNING_REPORT.md.golden."
-    },
-    {
-      "file": "scripts/preflight.sh",
-      "line": 1,
-      "symbol": "preflight.sh",
-      "kind": "module",
-      "summary": "Local pre-commit/pre-PR harness; runs lint-askuser.sh --strict; maps exit 1 to advisory warning, propagates exit 2+ as hard failures."
-    },
-    {
       "file": "scripts/test_config.py",
       "line": 1,
       "symbol": "test_config.py",
       "kind": "module",
-      "summary": "End-to-end smoke tests for config.py; 18+ test classes with hermetic XDG_CONFIG_HOME temp dirs; covers defaults, env overrides, repo-local precedence, schema errors, ensure-defaults, export-env dedup, resolve-question, overnight overrides, check-no-ask, list-question-ids, 3-level nesting (roles.*), migrate, _KEY_RE."
+      "summary": "End-to-end smoke tests for config.py; 25+ test classes with hermetic XDG_CONFIG_HOME temp dirs; covers defaults, env overrides, repo-local precedence, schema errors, ensure-defaults, export-env dedup, resolve-question, overnight overrides, check-no-ask, list-question-ids, 3-level nesting (roles.*), migrate, _KEY_RE, and the new model_classes/model_routing dynamic-key validation (release T: codex prod support + model routing)."
     },
     {
       "file": "scripts/test_log_phase.sh",
@@ -356,158 +308,18 @@
       "symbol": "test_log_phase.sh",
       "kind": "module",
       "summary": "Bash regression harness for log-phase.sh; 4 TEST groups, 21 assertions; hermetic via Z_HARNESS_PLANS_DIR+Z_HARNESS_SLUG temp dirs; covers overflow, normal path, negative wall_ms, 26h false-positive."
-    },
-    {
-      "file": "scripts/sink-lock.sh",
-      "line": 1,
-      "symbol": "sink-lock.sh",
-      "kind": "module",
-      "summary": "Generic per-entry fcntl.flock + heartbeat + stale-takeover primitive; subcommands: acquire, heartbeat, release, check-stale [--ttl-seconds=N]; exit 0=acquired,1=contention,2=stale-takeover,3=corrupt."
-    },
-    {
-      "file": "scripts/sink-lock.sh",
-      "line": 149,
-      "symbol": "cmd_acquire",
-      "kind": "fn",
-      "summary": "Forks background daemon that takes LOCK_EX|LOCK_NB on .flock sentinel; daemon holds flock for lock's lifetime and records its own PID (os.getpid()) in JSON. Stale-takeover (exit 2) if PID dead or heartbeat > TTL; contention (exit 1) if live daemon holds flock. Stale-takeover only when we hold OS flock and find stale JSON."
-    },
-    {
-      "file": "scripts/sink-add.sh",
-      "line": 1,
-      "symbol": "sink-add.sh",
-      "kind": "module",
-      "summary": "Writer primitive for follow-up sink; parses --sink, --priority, --name, --recommended-command, --source-artifact, --cited-paths, optional flags; delegates to sink-add-helpers.py. Exit 0=success,2=validation,3=dedup-skip,4=depth-exceeded,5=lock-timeout,6=diffuse-cited-paths."
-    },
-    {
-      "file": "scripts/sink-add-helpers.py",
-      "line": 479,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Full writer pipeline: depth check → validate → compute hashes → pre-lock dedup → build entry → acquire global lock → TOCTOU dedup recheck → write prompt-page → append entry_created → rebuild view → optional Notion push → emit followup_created."
-    },
-    {
-      "file": "scripts/sink-add-helpers.py",
-      "line": 136,
-      "symbol": "content_hash",
-      "kind": "fn",
-      "summary": "SHA-256 of name+NUL+recommended_command+NUL+source_artifact; dedup key; computed before and rechecked after global lock acquisition."
-    },
-    {
-      "file": "scripts/sink-claim.sh",
-      "line": 1,
-      "symbol": "sink-claim.sh",
-      "kind": "module",
-      "summary": "Atomic open→running claim; flags: --entry, --run, --sink-root, --allow-stale; prints claim ticket JSON on exit 0. Exit 0=success,2=validation,3=not-claimable,4=staleness-drift,5=lock-timeout,7=depth-1-refusal."
-    },
-    {
-      "file": "scripts/sink-claim-helpers.py",
-      "line": 255,
-      "symbol": "do_claim",
-      "kind": "fn",
-      "summary": "Full claim sequence: per-entry lock first (mandatory) → stale-takeover recovery → depth-1 refusal → status==open check → staleness check → global lock second → append status_changed open→running → rebuild view → release global lock. Per-entry lock stays held by caller."
-    },
-    {
-      "file": "scripts/sink-status-set.sh",
-      "line": 1,
-      "symbol": "sink-status-set.sh",
-      "kind": "module",
-      "summary": "Generic status transition primitive; flags: --entry, --to, --by, --sink-root, optional --evidence, --reason, --completion-mode, --via-claim-ticket. Exit 0=success,2=validation,3=illegal-transition,4=evidence-rejected,5=lock-timeout,6=completion-mode-conflict."
-    },
-    {
-      "file": "scripts/sink-status-set-impl.py",
-      "line": 474,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Drives seven-state machine (open/running/verify/done/failed/blocked/dismissed); validates transition via ALLOWED_TRANSITIONS; verifies/re-acquires per-entry lock; acquires global lock; runs audit+auto-close checks; enforces completion_mode mutex; appends status_changed; rebuilds view."
-    },
-    {
-      "file": "scripts/sink-view-rebuild.sh",
-      "line": 1,
-      "symbol": "sink-view-rebuild.sh",
-      "kind": "module",
-      "summary": "Must be called with global lock held; verifies lock via JSON content OR OS flock; delegates to sink-view-reducer.py. Exit 4 if called without lock held."
-    },
-    {
-      "file": "scripts/sink-view-reducer.py",
-      "line": 138,
-      "symbol": "reduce_journal",
-      "kind": "fn",
-      "summary": "Reads index.jsonl line-by-line; applies entry_created, status_changed, evidence_attached, dismissed, closed events; unknown kinds warned+skipped; never crash."
-    },
-    {
-      "file": "scripts/sink-view-reducer.py",
-      "line": 168,
-      "symbol": "write_view",
-      "kind": "fn",
-      "summary": "Writes index.view.json atomically via tmpfile+rename in same directory; JSON pretty-printed with indent=2, sort_keys=True."
-    },
-    {
-      "file": "scripts/sink-audit-validate.py",
-      "line": 54,
-      "symbol": "validate",
-      "kind": "fn",
-      "summary": "11-point check on audit_evidence.json vs entry JSON: file exists, schema_version==1, required fields, entry_id match, z_review_all_verdict==PASS, test_exit_code==0, cumulative_diff present, cited_paths exist, recommended_command unchanged, capture_head unchanged, reviewer_notes non-empty."
-    },
-    {
-      "file": "scripts/sink-audit-validate.py",
-      "line": 310,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "CLI: argv[1]=evidence path, argv[2]=entry JSON path, argv[3]=optional repo_root; prints {passed,rejected_check,reason} JSON; exits 0 on pass, 1 on fail."
-    },
-    {
-      "file": "scripts/sink-auto-close-check.py",
-      "line": 357,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Auto-close ceiling check: reads allowlist/denylist from config, parses diff stat, checks auto_close_eligible+completion_mode+test_exit; pass=noop OR docs_only; outputs {passed,reason,mode} JSON; exits 0 on pass, 1 on fail."
-    },
-    {
-      "file": "scripts/notion-push.py",
-      "line": 493,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "One-way idempotent Notion push; token from Z_HARNESS_NOTION_TOKEN env or secrets.toml; queries for existing page by z_harness_entry_id; creates or skips; retries 3x with backoff [1,4,16]s. Exit 0=success,4=retry-exhausted,5=idempotency-mismatch,6=auth-missing,7=config-missing."
-    },
-    {
-      "file": "scripts/followup-reconcile-notion.sh",
-      "line": 1,
-      "symbol": "followup-reconcile-notion.sh",
-      "kind": "module",
-      "summary": "Thin shell wrapper: exec python3 followup-reconcile-notion-impl.py \"$@\"; accepts --project-sink-root, --global-sink-root, --dry-run."
-    },
-    {
-      "file": "scripts/followup-reconcile-notion-impl.py",
-      "line": 291,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Sweeps project+global sinks; re-invokes notion-push.py for each notion_sync_pending entry; on success appends notion_synced+notion_sync_cleared events; outputs {swept_count,succeeded,failed,conflicts} JSON; exits 0 always."
-    },
-    {
-      "file": "scripts/parse-followups-block.py",
-      "line": 228,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Tolerant parser: reads reviewer output from --reviewer-output or stdin; finds **FOLLOWUPS:** + ```json fence; validates required fields per entry; per-entry errors log+skip; outputs JSON list (may be []); logs followup_block_parse_failed on parse failure; exits 0 on empty result."
-    },
-    {
-      "file": "scripts/validate-followup-schemas.sh",
-      "line": 1,
-      "symbol": "validate-followup-schemas.sh",
-      "kind": "module",
-      "summary": "JSON Schema test runner (draft-2020-12); 3 followup-entry fixtures + 2 audit-evidence fixtures + mutex test + enum literal tests via Python jsonschema; exits 0 on all pass, 1 on any fail."
     }
   ],
   "depends_on": [],
   "consumed_by": [
-    "agents",
     "commands",
     "review-agent",
     "remote-runner",
     "config",
     "overnight-run",
     "active-plan-registry",
-    "axioms"
+    "axioms",
+    "hermes-orchestration"
   ],
   "invariants": [
     "All scripts require python3 for JSON handling, timing fallbacks, and document generation.",
@@ -515,6 +327,7 @@
     "log-event.sh resolves artifact base via z_harness_base() from plan-path.sh (5-tier fallback); Z_HARNESS_BASE_DIR overrides all tiers.",
     "log-event.sh and log-phase.sh honor Z_HARNESS_SLUG for slug-namespaced vs. legacy flat plan layout.",
     "log-event.sh mid-flight legacy detection is skipped entirely when Z_HARNESS_BASE_DIR is set to preserve the model.patch invariant.",
+    "log-event.sh emits a best-effort Hermes marker via emit-hermes-marker.sh whenever HERMES_MARKER_FILE is set; emit-hermes-marker.sh itself is a strict no-op when that env var is unset, so the check in log-event.sh is a fast-path, not the sole gate.",
     "log-phase.sh check_wall_ms emits telemetry_anomaly and suppresses *_end event when wall_ms > 604_800_000ms (overflow) or wall_ms < 0 (clock skew); exits 0 in both anomaly cases.",
     "log-phase.sh begin mode writes T0 to $TMPDIR/z-harness-phase/<key>.start so wall_ms survives across separate Bash tool-call boundaries; finish is fail-open (no stamp = emit nothing, not wall_ms:0).",
     "regenerate-memories-flat.py writes MEMORIES-FLAT.md atomically via os.replace on a PID+random-suffixed temp file.",
@@ -525,7 +338,7 @@
     "extract-dismissals.py outputs JSON {signatures, n_runs_scanned} to stdout; exit 0 even when no dismissals found.",
     "extract-dismissals.py --global applies the pairwise algorithm within each slug independently, not across slugs.",
     "The env var for the plan base dir is Z_HARNESS_PLAN_DIR (singular, not PLANS_DIR).",
-    "config.py _run_startup_guards() runs at module load and exits 2 on any QUESTION_IDS/VALIDATORS/RESULT_MAP inconsistency.",
+    "config.py _run_startup_guards() runs at module load and exits 2 on any QUESTION_IDS/VALIDATORS/RESULT_MAP/HALT_CATEGORY_ENUM inconsistency (four guards, including guard 2b: every question_id must have a halt_category in HALT_CATEGORY_ENUM).",
     "config.py resolve-question returns a JSON envelope with result in {ask, skip, prefill, halt, defer-to-sink} (resolver result-domain); RESULT_MAP handles option-to-result translation.",
     "config.py resolve-question stdout is reserved for the JSON envelope; all diagnostics route to stderr.",
     "config.py resolve-question exits 5 when Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are both set.",
@@ -534,6 +347,7 @@
     "config.py export-env emits config_resolved event at most once per Z_HARNESS_RUN via O_EXCL stamp file in TMPDIR.",
     "config.py get-batch always exits 0 (best-effort); unknown keys return null with stderr warning; meta keys are excluded.",
     "config.py resolve-halt-category outputs a bare tag string (not JSON); fail-safe default 'ask' for unknown or untagged qids; exits 2 with no arguments.",
+    "config.py model_classes.<name>.{model,thinking,reasoning} and model_routing.{native_agents.default, implementer.low|medium|high|retry} are dynamic-key sections: keys are validated structurally (canonical lowercase/underscore segments, no nested tables) via _dynamic_model_config_validator rather than a fixed VALIDATORS entry per class name; a custom model class must define 'model' before optional thinking/reasoning metadata, else exit 2 (project) or WARNING+skip (global).",
     "block-dangerous-git.sh exit contract: exit 0 = allow, exit 2 = block (with human-readable reason on stderr); never exits 1.",
     "block-dangerous-git.sh never crashes on empty stdin, malformed JSON, or non-Bash tool calls — all fail safe (exit 0).",
     "block-dangerous-git.sh classifies commands against canonical forms (global options stripped, chained segments split) so evasion via -C/-c/--git-dir/env-var-prefix is not possible.",
@@ -543,53 +357,22 @@
     "block-dangerous-git.sh +-refspec push detection requires the refspec to start with + AND have at least one character after the + (bare + is not a refspec).",
     "Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1 writes exactly one audit entry per invocation to <base>/git-guardrails-audit.log; the override is one-shot, not a permanent disable.",
     "active-plan-registry.py lockless invariant: lockless design is safe ONLY because overlap is advisory; no code may make overlap a hard gate without replacing lockless delete with compare-and-delete or a registry lock.",
+    "active-plan-registry.py wait/lease cross-cutting invariant (F1-F5): wait/lease gates only the waiter's OWN run; it takes no lock; it never writes a peer's record except the reaper's single-writer stale-marking exception; every wait has a finite budget + loud timeout; overlap is never a hard gate; the holder is never preempted.",
     "active-plan-registry.py register exits 3 on failure (LOUD); all other subcommands exit 0 even on internal error (NON-FATAL), self-logging via registry_error events.",
     "active-plan-registry.py heartbeat does NOT fabricate a record when target <run-id>.json is absent; emits registry_error(reason:missing_record) and returns 0.",
     "active-plan-registry.py all writes use tmpfile+os.replace (atomic); no global lock is taken.",
     "active-plan-registry.py overlaps blocking exit 20 requires both --strict (or Z_HARNESS_STRICT_OVERLAP=1) AND explicit×explicit exact path match with a non-stale peer.",
     "active-plan-registry.py reap case (a): dead-local-pid → delete; case (b): age > 2×stale_threshold → delete; case (c): age > 1×stale_threshold AND remote/unknown host → mark status:stale (no delete).",
-    "active-plan-registry.py Z_HARNESS_REGISTRY_ENABLED=0: all mutating subcommands (register, heartbeat, update-scope, overlaps, reap, deregister) become silent no-ops; list and session-id are always permitted.",
+    "active-plan-registry.py Z_HARNESS_REGISTRY_ENABLED=0: all mutating subcommands (register, heartbeat, update-scope, overlaps, reap, deregister, claim, release, wait-for) become silent no-ops; list and session-id are always permitted.",
     "active-plan-registry.py run-id must match ^[A-Za-z0-9._-]+$, not start with '-', and contain no '..' or '/'.",
     "active-plan-registry.py session-id: on macOS uses pure-Python <ppid>-<epoch> (no subprocess) to avoid CoreFoundation fork-safety crash.",
-    "remote-sandbox-sync.sh two-level layout: base/ seeded once per slug with atomic remote mkdir lock; per-task overlay uses --link-dest for hard-linked unchanged files; all slug trees nested under sandbox/ sub-dir.",
+    "active-plan-registry.py claim resolves contention by run_id lexicographic tiebreak: a claim only concedes to a SENIOR peer (lower run_id) holding the same path; junior peers never force a concession. A tiebreak loser's persisted held_paths must not contain the conceded path.",
+    "active-plan-registry.py wait-for clears the waiting_on field on every exit path via try/finally (EH-005), so no paused zombie record can leak even on SIGINT/SIGTERM (exit 130) or budget timeout (exit 10).",
+    "active-plan-registry.py deregister reads the run's slug's .watchdog.pid file and SIGTERM->grace->SIGKILLs the watchdog sweep process; this is best-effort and wrapped so a kill failure never breaks deregister (NON-FATAL).",
+    "remote-sandbox-sync.sh two-level layout: base/ seeded once per slug with atomic remote mkdir lock; per-task overlay uses --link-dest for hard-linked unchanged files; all slug trees nested under sandbox/ sub-dir; --sandbox-key <slug>/<subpath> overrides only the overlay suffix (the warm base stays keyed by SLUG alone).",
     "remote-sandbox-sync.sh resolves REMOTE_HOME via ssh printf (tilde expansion unreliable in --link-dest).",
-    "remote-sandbox-sync.sh TASK_ID rejects the literal value 'base' and all path-traversal patterns.",
-    "run-status.sh always exits 0; terminal state is communicated as a printed string on stdout.",
-    "run-status.sh classify with --command implement-all requires both a clean last-event kind AND all TASKS.md checkboxes [x]|[~] before returning clean.",
-    "normalize-task-state.sh always exits 0 (best-effort); no events emitted.",
-    "normalize-task-state.sh only rewrites the - [~] prefix; - [ ] and - [x] markers are never modified.",
-    "overnight-preflight.sh check-collisions exits 0 when the chain's first step is not plan or research, regardless of artifacts.",
-    "overnight-preflight.sh cds to REPO_ROOT before calling log-event.sh to ensure canonical path resolution regardless of caller cwd.",
-    "morning-report.py writes MORNING_REPORT.md atomically via tempfile + os.rename; exits 1 on missing overnight-state.json.",
-    "morning-report.py finds the latest run by lexical sort of directories containing '-overnight-' in the archive dir.",
-    "lint-askuser.sh classification is file-level: all AskUserQuestion callsites in a file tagged REGISTERED if the file also contains resolve-question or check-no-ask anywhere.",
-    "preflight.sh maps lint-askuser.sh exit 1 to advisory warning; exit 2+ propagates as hard failure.",
-    "sink-lock.sh uses a separate .flock sentinel file (same path + '.flock') to hold the OS-level fcntl.flock exclusive lock.",
-    "sink-lock.sh stale-takeover fires when PID is dead OR last_heartbeat age >= TTL (either condition alone is sufficient).",
-    "sink-lock.sh holder PID is the background daemon's own os.getpid(), NOT os.getppid() (the shell caller).",
-    "sink-add-helpers.py dedup check runs twice: before the global lock (cheap path) and again under the lock (TOCTOU-safe).",
-    "sink-add-helpers.py cited_paths > 16 switches from individual file_blob_hashes to a dir tree hash; ancestor depth < 2 from repo root is rejected with exit 6.",
-    "sink-add-helpers.py MAX_DEPTH=1: Z_HARNESS_FOLLOWUP_CALLER_DEPTH > 1 is rejected with exit 4 (depth-exceeded).",
-    "sink-claim-helpers.py mandatory lock-ordering: per-entry lock FIRST, global lock SECOND. Inverting this order risks deadlock.",
-    "sink-claim-helpers.py depth-1 entries are refused with exit 7; they are considered inert and must not be claimed by consumers.",
-    "sink-status-set-impl.py ALLOWED_TRANSITIONS defines the complete state machine; all unlisted (from, to) pairs are illegal and exit 3.",
-    "sink-status-set-impl.py completion_mode is a mutex: only one of human_confirmed, audit_confirmed, auto_closed_low_risk may be set per entry.",
-    "sink-view-rebuild.sh must be called with global lock already held by caller; exits 4 if lock is free.",
-    "sink-view-reducer.py is forward-compatible: unknown event kinds and unknown fields within known events are silently skipped; the script never crashes on unexpected input.",
-    "sink-view-reducer.py writes index.view.json atomically via tmpfile+rename in the same sink-root directory.",
-    "sink-audit-validate.py 11 checks run in order and short-circuit on the first failure; rejected_check in output JSON is the 1-based check number that failed.",
-    "sink-auto-close-check.py denylist takes precedence over allowlist; a path matching both is treated as denied.",
-    "notion-push.py idempotency: queries Notion for existing page by z_harness_entry_id property before creating; exit 5 on mismatch.",
-    "notion-push.py token resolution order: Z_HARNESS_NOTION_TOKEN env var first, then secrets.toml.",
-    "followup-reconcile-notion-impl.py always exits 0 (best-effort sweep; not a transaction).",
-    "parse-followups-block.py always exits 0 on empty result (even after parse failure); only exits 1 on fatal I/O error.",
-    "validate-followup-schemas.sh exits 2 (before assertions) if Python jsonschema library or schema/fixture files are missing.",
-    "[rotation] persona-stats.py is always read-only — never modifies metrics.jsonl or any state file.",
-    "[rotation] persona-stats.py baseline resolution order within each (role,complexity_tier) stratum: no-persona first, boring-anchor second, None (no delta) if neither exists.",
-    "[rotation] persona-stats.py quarantines fallback_empty_pool: reports in separate section, never folds into any persona's stats or either baseline.",
-    "[rotation] persona-stats.py filters incomplete attempts (draw event without matching persona_attempt_outcome) — excluded from all statistics.",
-    "[rotation] persona-stats.py --since filter excludes events with missing or unparseable ts field (conservative).",
-    "[rotation] persona-stats.py excludes run=='unknown-run' events by default; --include-unknown-run re-includes them."
+    "remote-sandbox-sync.sh TASK_ID rejects the literal value 'base' and all path-traversal patterns; --sandbox-key must be exactly '<segment>/<segment>' and its subpath may not be 'base' either.",
+    "run-status.sh, normalize-task-state.sh, overnight-preflight.sh, and morning-report.py have moved to the overnight-run concept doc (docs/llm/overnight-run.json); the follow-up sink family (sink-*.sh/.py, notion-push.py, followup-reconcile-notion*, parse-followups-block.py, validate-followup-schemas.sh) has moved to the followup-sink concept doc (docs/llm/followup-sink.json). This concept doc no longer covers those files."
   ],
   "gotchas": [
     "block-dangerous-git.sh is fail-closed: if git branch -r --contains errors (detached HEAD, no remote, git error), it blocks the rewrite verb rather than allowing it through.",
@@ -598,47 +381,38 @@
     "block-dangerous-git.sh accepts empty or non-JSON stdin gracefully (fails safe by allowing). Non-Bash tool calls pass through immediately.",
     "Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1 is a one-shot escape hatch (one invocation); it is not a permanent disable. Each override appends one audit entry.",
     "log-event.sh routes base-path resolution through z_harness_base() (plan-path.sh); when Z_HARNESS_BASE_DIR is set, mid-flight legacy detection is skipped entirely to preserve the model.patch invariant.",
+    "log-event.sh Hermes marker emission maps event kind context_pressure to marker kind heartbeat and everything else to status; the marker task field is SLUG (falling back to RUN, then the literal 'orchestration'). Failures are swallowed (>/dev/null 2>&1 || true) so a broken marker path never breaks the primary event write.",
     "log-phase.sh check_wall_ms threshold 604_800_000ms catches seconds-vs-ms overflow (1500x headroom); wall_ms_negative covers NTP jumps / clock skew.",
     "macOS BSD date lacks %3N support; log-phase.sh falls back to python3 time.time()*1000.",
     "log-event.sh silently wraps non-JSON payloads as {\"raw\": ...} instead of failing.",
     "log-phase.sh begin/finish: shell variables die across Bash tool-call boundaries causing wall_ms:0; begin/finish use $TMPDIR files to persist T0. finish is fail-open: missing stamp = silent no-op, not a bogus wall_ms:0 event.",
-    "config.py startup guards check: every QUESTION_IDS key exists in VALIDATORS; every entry has non-null skill_default; every RESULT_MAP (question_id, choice) references known question_id and valid choice.",
+    "config.py startup guards check: every QUESTION_IDS key exists in VALIDATORS; every entry has non-null skill_default; every entry has a halt_category in HALT_CATEGORY_ENUM; every RESULT_MAP (question_id, choice) references known question_id and valid choice.",
     "config.py resolve-question: Z_HARNESS_ASK_ALL=1 short-circuits to result=ask regardless of config/memory; Z_HARNESS_EXPLAIN_RESOLUTION=1 enables verbose stderr explain output.",
     "config.py resolve-question: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt set simultaneously exits 5.",
     "config.py resolve-question: workflow.spec_retro_discovery can return defer-to-sink when set to defer_to_sink_p2; callers must handle this result by invoking sink-add.sh instead of prompting.",
     "config.py check-no-ask: unregistered question_id always halts (fail-closed) and emits unknown_ask_blocked event when Z_HARNESS_NO_ASK=halt.",
     "config.py get-batch: always exits 0 (best-effort); callers should fall back to per-key defaults for null values. Meta keys (e.g. roles.*) are excluded silently.",
     "config.py resolve-halt-category: outputs bare string not JSON; fail-safe 'ask' for unknown qids; chain-runner uses this to classify gate categories without needing the full resolver envelope.",
+    "config.py model_classes/model_routing are new (2026-07-05, codex prod release) — model_routing.native_agents.default is empty-string by default so native agents keep their checked-in frontmatter model; only agents with an explicit model_routing.native_agents.<agent> override deviate. model_routing.implementer.* reproduces the pre-existing /z-execute implementer tier→model labels (low/medium=sonnet, high/retry=opus) as configurable routes (e.g. gpt-5.5 under omp).",
     "active-plan-registry.py sets OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES at import time to prevent CoreFoundation fork-safety crashes (macOS only: bash-invoked Python with existing CF-initialized parent).",
     "active-plan-registry.py session-id: Linux uses /proc/<ppid>/stat + /proc/stat for stable <ppid>-<start_epoch>; macOS uses pure-Python <ppid>-<int(time.time())> (no subprocess). Callers should export Z_HARNESS_SESSION_ID once at run start.",
     "active-plan-registry.py heartbeat: absent record emits registry_error(reason:missing_record) and returns 0 (no-op). Does NOT fabricate zombie records — empty slug/session pollutes overlap detection.",
     "active-plan-registry.py overlaps: exit 4 when active_plans_dir cannot be resolved (not a clean 0/10/20 exit). Stale peers (status:stale OR heartbeat > stale_threshold) are non-blocking even in strict mode.",
-    "active-plan-registry.py reap: FileNotFoundError on unlink is always benign (two reapers racing on the same record). All OSErrors during reap are suppressed (non-fatal).",
-    "active-plan-registry.py: callers MUST check exit code 3 from register — it is the only LOUD failure. All other subcommands are non-fatal by design.",
+    "active-plan-registry.py reap: FileNotFoundError on unlink is always benign (two reapers racing on the same record). All OSErrors during reap are suppressed (non-fatal). reap is the one deliberate exception to the single-writer invariant — marking a PEER's record status:stale.",
+    "active-plan-registry.py: callers MUST check exit code 3 from register — it is the only LOUD failure among the mutating subcommands. wait-for is the other subcommand with LOUD non-zero exits (2 usage, 10 timeout, 130 signal); all other subcommands are non-fatal by design.",
+    "active-plan-registry.py claim/release/wait-for (F1-F5 lease subsystem) are implemented and unit-tested but, as of this refresh, no shipped skill under skills/ invokes claim, release, or wait-for — only session-id/register/heartbeat/update-scope/list/overlaps/reap/deregister are wired into live commands. Treat the lease trio as available-but-not-yet-consumed infrastructure.",
+    "active-plan-registry.py wait-for reads runtime.auto_wait (bool) and runtime.auto_wait_budget_secs from config.py to choose auto vs explicit-timeout mode; explicit mode falls back to Z_HARNESS_WAIT_TIMEOUT_SECS / Z_HARNESS_WAIT_POLL_SECS env vars. Z_HARNESS_WAIT_REQUIRE_MERGE is read but reserved (deferred branch-ancestor check) — an age-stale target with status still 'running' already counts as cleared regardless of this flag.",
     "run-memory-review.sh AXIOM_READY: only emitted on the STATUS: ready path, not on skip paths. Axiom extraction checks axioms.auto_extract_post_run via config.py get; unavailable config defaults to 'true' (enabled).",
     "[rotation] persona-stats.py baseline: no-persona is the primary null baseline (true null prefix); boring-anchor is the secondary control. BOTH appear as their own rows in every section — neither is quarantined or hidden from reporting.",
     "[rotation] persona-stats.py --since filter: events with missing or unparseable ts excluded (conservative) — not included with or without the flag.",
     "[rotation] persona-stats.py run=='unknown-run' exclusion: these are ad-hoc test/dev draws with no real run/task/attempt context; excluded by default.",
-    "run-memory-review.sh 4-state terminal taxonomy: skipped_broken_context (missing_args, no_plan_dir, tags_missing), not_applicable (empty_diff, all_tasks_skipped, debug_md_missing); ready and dispatched are orchestrator-owned.",
-    "run-memory-review.sh disables pipefail around git diff | head -n 5000 to tolerate SIGPIPE.",
     "version.sh degrades gracefully if plugin root is not a git repo, returning non-git sentinel values.",
     "extract-dismissals.py drops findings lacking a title field; does NOT fall back to T-MR-NNN ids (renumbered each run).",
     "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
     "remote-sandbox-sync.sh seed_base: failed rsync cleans up partial base dir before releasing lock.",
     "remote-sandbox-sync.sh all slug trees now nested under sandbox/ sub-dir of the container root; a misdirected rsync can no longer pollute alongside real slug dirs.",
-    "run-status.sh classify --command implement-all: a TASKS.md with zero checkboxes is treated as incomplete.",
-    "run-status.sh last-event reads the last 20 lines of events.jsonl, iterating in reverse to find the latest valid JSON line.",
-    "morning-report.py emits CRITICAL HEAD SHA mismatch banner when head_sha_mismatch_at_resume event found in events.jsonl.",
-    "lint-askuser.sh --strict makes the script advisory-fail for CI; the default (no --strict) always exits 0 regardless of findings.",
-    "sink-lock.sh acquire: when LOCK_EX|LOCK_NB fails (BlockingIOError), exit 1 immediately — no stale-takeover possible without the OS lock.",
-    "sink-add-helpers.py recommended-command validation uses two checks: shlex.split for parseability + _unquoted_metachar for unquoted shell metacharacters.",
-    "sink-claim-helpers.py staleness check: commit-distance window defaults to 50 (read from config followup.staleness_commit_window); --allow-stale bypasses but logs drift.",
-    "sink-status-set-impl.py: 'done' terminal state can still transition to 'dismissed'; 'dismissed' has no outgoing edges and exits 3 on any attempted transition.",
-    "sink-view-rebuild.sh two-check approach: JSON content check (primary) OR OS flock sentinel check (legacy compat); either passing is sufficient.",
-    "sink-audit-validate.py check numbers (1-11) are stable and used by callers to identify which check failed; do not renumber.",
-    "sink-auto-close-check.py ** glob matching follows gitignore semantics; denylist takes strict precedence over allowlist.",
-    "notion-push.py Retry-After header in Notion rate-limit responses is parsed and honored; falls back to next BACKOFF_SCHEDULE value if absent.",
-    "validate-followup-schemas.sh requires pip3 install jsonschema; exits 2 if library or fixture files missing before assertions run."
+    "remote-sandbox-sync.sh Z_HARNESS_WORKTREE_ROOT: when the orchestrator's cwd is the main checkout but edits land in a linked worktree, the default git rev-parse --show-toplevel resolves the main tree and ships stale files; set Z_HARNESS_WORKTREE_ROOT to the worktree's absolute path to override (hard-errors, exit 2, if the path does not exist). The resolved source root is always printed to stderr as 'syncing local root: <path>'.",
+    "lint-askuser.sh and preflight.sh remain in the scripts/ directory but are no longer covered by any concept doc's declared source_file list after this refresh (they dropped out of this doc's scope and are not present in followup-sink.json or overnight-run.json either) — flagged for the caller to assign a concept home."
   ],
   "memories": []
 }

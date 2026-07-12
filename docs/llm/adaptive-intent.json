@@ -1,6 +1,6 @@
 {
   "concept": "adaptive-intent",
-  "last_updated": "2026-07-03",
+  "last_updated": "2026-07-09",
   "covers_spec": "beyond-sdd",
   "source_file": [
     "scripts/intent-schema.py",
@@ -16,49 +16,70 @@
     "docs/human/adaptive-intent.md"
   ],
   "confidence": "high",
-  "summary": "Default /z-plan intent-compiler and adaptive INTENT execution model: /z-plan now compiles conversation through sharpen-first, optional user-approved brainstorm, iterative INTENT drafting, concern/audit gates, execution strategy metadata, and watcher checkpoint seams before /z-execute freezes INTENT for BFS execution with LEDGER checkpoints.",
+  "summary": "Default /z-plan intent-compiler and adaptive INTENT execution model: /z-plan compiles conversation into INTENT.md plus an initial append-only known-work graph (work-graph.json), and /z-execute freezes INTENT then schedules over that graph via task-tree-generator (now a known-work graph expander) with LEDGER checkpoints and durable-DAG-settle-point acceptance evaluation.",
   "entry_points": [
     {
       "file": "scripts/intent-schema.py",
-      "line": 216,
+      "line": 219,
       "symbol": "validate_intent",
       "kind": "fn",
       "summary": "Validate frontmatter and required sections by intent level."
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 297,
+      "line": 300,
       "symbol": "lint_criteria",
       "kind": "fn",
       "summary": "Lint non-observable acceptance checklist criteria."
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 377,
+      "line": 380,
       "symbol": "reopen_intent",
       "kind": "fn",
       "summary": "Set frozen_at back to pending for amended contracts."
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 439,
+      "line": 442,
       "symbol": "freeze_intent",
       "kind": "fn",
       "summary": "Stamp frozen_at idempotently; reports FROZEN or ALREADY_FROZEN."
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 494,
+      "line": 497,
       "symbol": "bootstrap_ledger",
       "kind": "fn",
       "summary": "Create LEDGER.md frontmatter if absent without overwriting existing content."
     },
     {
       "file": "scripts/intent-schema.py",
-      "line": 635,
+      "line": 865,
       "symbol": "evaluate_acceptance",
       "kind": "fn",
       "summary": "Evaluate checklist criteria from INTENT, LEDGER citations, and cumulative diff."
+    },
+    {
+      "file": "agents/task-tree-generator.md",
+      "line": 21,
+      "symbol": "scheduler_mode / work_graph_path inputs",
+      "kind": "section",
+      "summary": "scheduler_mode: known_work_graph makes the generator append nodes to work_graph_path instead of only emitting a flat batch."
+    },
+    {
+      "file": "agents/task-tree-generator.md",
+      "line": 96,
+      "symbol": "Known-work rule",
+      "kind": "section",
+      "summary": "Append only work knowable from INTENT/flags/graph/last outcome; placeholder nodes must be explicit and sparing."
+    },
+    {
+      "file": "agents/task-tree-generator.md",
+      "line": 102,
+      "symbol": "Phase 2 — Emit TASKS.md and append the graph",
+      "kind": "section",
+      "summary": "Appends stable-ID nodes (T/W prefix), sets status=ready only when depends_on are done, appends append_log entry."
     },
     {
       "file": "skills/z-plan/SKILL.md",
@@ -107,7 +128,7 @@
       "line": 42,
       "symbol": "execution strategy generation",
       "kind": "section",
-      "summary": "/z-plan generates TASKS.md plus task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and workstream/handoff metadata."
+      "summary": "Phase 8 writes the initial work-graph.json known-work frontier (~line 2622), then derives execution-strategy.md (~line 2713) from TASKS.md + work-graph.json + workstreams.json; hard-fails if work-graph.json is missing."
     },
     {
       "file": "skills/z-plan/SKILL.md",
@@ -118,24 +139,52 @@
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 433,
+      "line": 440,
       "symbol": "mode detection",
       "kind": "section",
       "summary": "SPEC.md present -> legacy; INTENT.md present -> intent; neither -> halt."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 468,
+      "line": 506,
       "symbol": "freeze and snapshot",
       "kind": "section",
       "summary": "Freeze INTENT and snapshot to archive/INTENT.frozen.md on first freeze."
     },
     {
       "file": "skills/z-execute/SKILL.md",
-      "line": 674,
+      "line": 603,
+      "symbol": "WORK_GRAPH_FILE resolution",
+      "kind": "section",
+      "summary": "Resolves work-graph.json via the same exact-name _resolve_exact_plan_artifact seam as other intent-conversation companions."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 689,
+      "symbol": "known-work DAG scheduler loop",
+      "kind": "section",
+      "summary": "Re-reads work-graph.json, computes the ready frontier, dispatches via the reusable per-task engine, refills/appends as nodes return."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 794,
       "symbol": "task-tree-generator dispatch",
       "kind": "section",
-      "summary": "Generate BFS levels from frozen INTENT, LEDGER, unmet criteria, and prior outcomes."
+      "summary": "Expands known-work graph and refreshes TASKS.md projection for the current frontier."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 930,
+      "symbol": "INTENT mode context injection",
+      "kind": "section",
+      "summary": "Injects intent_snapshot:, ledger_path:, and (when present) work_graph_path: into implementer/reviewer prompts."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 1150,
+      "symbol": "work-graph status sync",
+      "kind": "section",
+      "summary": "After each settled frontier, recomputes node status from TASKS.md markers and depends_on; appends status_log entry."
     },
     {
       "file": "skills/z-amend/SKILL.md",
@@ -166,25 +215,31 @@
     "INTENT.md is drafted through a short user iteration loop before final approval.",
     "Concern flags are surfaced before final read-through, and /z-plan asks whether to incorporate an optional /z-audit-plan scan.",
     "Execution strategy metadata includes task-to-intent mapping, safe parallel batches, serial blockers, review gates, checkpoint cadence, and workstream/handoff data.",
-    "task-tree-generator may emit wider same-level INTENT BFS batches only when siblings have precise disjoint file scope and executor fan-out can be capped or partitioned.",
+    "work-graph.json is the durable append-only known-work DAG: /z-plan seeds the initial frontier from TASKS.md; /z-execute appends nodes via task-tree-generator (scheduler_mode: known_work_graph) and never deletes/rewrites existing node identity or append_log entries.",
+    "task-tree-generator may widen a ready frontier only when siblings have precise disjoint file scope and executor fan-out can be capped or partitioned; otherwise it must connect work with explicit graph dependencies (depends_on) rather than broadening the ready set.",
     "Watcher checkpoint seams run after preplanning artifacts and after execution strategy/handoff artifacts stabilize.",
     "Unknown acceptance state counts as unmet.",
-    "workflow.intent_parallel_levels defaults true but controls within-level sibling dispatch only, under /z-execute safety preconditions."
+    "workflow.intent_parallel_levels defaults true but controls within-frontier sibling dispatch only, under /z-execute safety preconditions.",
+    "True node-by-node pipelined refill (dispatching another ready node without draining the current frontier) is permitted only when the driver exposes a durable background handle/completion notification per track; synchronous-only hosts must drain-then-refill and must not report telemetry as concurrently refilled when they did not."
   ],
   "gotchas": [
     "workflow.intent_bfs_level_cap is runtime-read and may not appear in DEFAULTS; empty/None falls back to 6.",
     "stale_reason: amended-intent must replace any existing key, not duplicate it.",
-    ".bfs_level_state hash mismatch restarts from level 0.",
+    ".bfs_level_state hash mismatch restarts from scheduler depth 0; in known-work-graph mode it is a resume/telemetry hint only, not the source of scheduling truth.",
     "Brainstorm and audit are ask gates, not automatic route changes: /z-plan can recommend /z-brainstorm or /z-audit-plan, but it never launches them.",
     "Execution strategy metadata is part of the planning contract consumed by fresh /z-execute context; do not treat TASKS.md alone as the complete handoff.",
     "Do not pass spec_path/plan_path to implementers in INTENT mode.",
-    "Missing, unparseable, overlapping, or scope_unknown same-level task scope serializes the affected INTENT BFS level/task; do not infer arbitrary fan-out.",
-    "Default-on workflow.intent_parallel_levels still requires precise Files scope, bounded/partitioned fan-out, and per-task review diff isolation or serialized review capture."
+    "Missing, unparseable, overlapping, or scope_unknown same-frontier task scope serializes the affected node/frontier via an explicit depends_on edge; do not infer arbitrary fan-out.",
+    "Default-on workflow.intent_parallel_levels still requires precise Files scope, bounded/partitioned fan-out (INTENT_PARALLEL_FANOUT_LIMIT, hardcoded 3), and per-task review diff isolation or serialized review capture.",
+    "work-graph.json node identity and append_log[] are append-only, but the status field IS mutable scheduler state, resynced by /z-execute after every settled frontier (skills/z-execute/SKILL.md:1150) from TASKS.md task markers.",
+    "execution-strategy.md generation now hard-fails (SystemExit) if work-graph.json is missing after Phase 8's work-graph write.",
+    "WORK_GRAPH_FILE resolution mirrors intent-conversation companion artifacts: exact-name lookup via _resolve_exact_plan_artifact, never a fuzzy archive scan, falling back to $BASE/work-graph.json.",
+    "Current native hosts only issue synchronous Agent() calls, so true node-by-node pipelined refill is contract-only for them; they still drain a full frontier before refilling."
   ],
   "config_keys": {
     "workflow.planning_mode": "intent|full recommendation for the explicit mode gate",
     "workflow.intent_level": "auto|quick|standard|deep; level flags override and bypass classifier",
-    "workflow.intent_parallel_levels": "bool, default true; opt out with false; same-level INTENT BFS only when /z-execute safety preconditions pass",
+    "workflow.intent_parallel_levels": "bool, default true; opt out with false; same-frontier INTENT parallelism only when /z-execute safety preconditions pass",
     "workflow.intent_bfs_level_cap": "int guard, fallback 6 when unset",
     "workflow.hermes_enabled": "bool master gate for Hermes machinery"
   },

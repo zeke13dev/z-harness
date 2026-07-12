@@ -1,6 +1,6 @@
 # Follow-up Sink
 
-> Last updated: 2026-06-19
+> Last updated: 2026-07-09
 > Covers source: scripts/followup_common.py, scripts/sink-add-helpers.py, scripts/followup-reconcile-notion-impl.py, scripts/sink-claim.sh, scripts/sink-lock.sh, scripts/sink-view-reducer.py, scripts/sink-status-set-impl.py, scripts/sink-add.sh, scripts/sink-status-set.sh, scripts/sink-view-rebuild.sh, scripts/sink-compact.sh, scripts/sink-migrate.sh, scripts/followup-reconcile-notion.sh, scripts/validate-followup-schemas.sh, scripts/followup-view-lookup.py, scripts/sink-claim-helpers.py, scripts/sink-compact-impl.py, scripts/sink-auto-close-check.py, scripts/sink-audit-validate.py, scripts/notion-push.py, scripts/parse-followups-block.py, skills/z-followup-list/SKILL.md, skills/z-followup-status/SKILL.md, skills/z-followup-confirm/SKILL.md, skills/z-followup-dismiss/SKILL.md, skills/z-followup-refresh/SKILL.md, skills/z-followup-next/SKILL.md, docs/schemas/followup-entry.schema.json, docs/schemas/audit-evidence.schema.json
 
 ## Overview
@@ -15,7 +15,7 @@ A follow-up entry is a single work item with:
 
 - **Priority** (P0–P3)
 - **Name** — a short human-readable title
-- **Recommended command** — the z-harness command that would complete it (e.g., `/z-do "update README badge URL"`)
+- **Recommended command** — the z-harness command that would complete it (e.g., `/z-fix "update README badge URL"`)
 - **Cited paths** — files the follow-up concerns, used for staleness detection
 - **A prompt page** (`pages/<id>.md`) — the full context of what needs doing and why
 - **Lifecycle state** — where the entry sits in the `open → running → verify → done` flow

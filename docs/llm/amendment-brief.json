@@ -1,15 +1,14 @@
 {
   "concept": "amendment-brief",
-  "last_updated": "2026-06-24",
-  "source_files": [
+  "summary": "Shared amendment-continuation helpers: amend-gate-decision maps workflow.audit_to_amend resolver envelopes to auto_split/force_ask/halt for z-audit-plan Phase 5, and amendment-brief renders spec_gap corrections plus premise_failure concerns for z-audit-plan and z-review-all; z-review-all's own Phase 6.5 auto-amend is severity-agnostic and does not consult the gate decision. /z-amend no longer has a --skip-user-gate flag: its Phase 4 gate auto-proceeds whenever its own Phase 3 impact analysis finds an empty Touched-but-completed tasks list, which both callers guarantee by pre-filtering completed-task-touching findings.",
+  "last_updated": "2026-07-11",
+  "covers_spec": "none",
+  "source_file": [
     "scripts/amendment-brief.py",
     "scripts/amend-gate-decision.py",
-    "skills/z-audit-plan/SKILL.md",
-    "skills/z-review-all/SKILL.md",
     "docs/human/amendment-brief.md"
   ],
   "confidence": "high",
-  "summary": "Shared amendment-continuation helpers: amend-gate-decision maps workflow.audit_to_amend resolver envelopes to auto_split/force_ask/halt, and amendment-brief renders spec_gap corrections plus premise_failure concerns for z-audit-plan and z-review-all.",
   "entry_points": [
     {
       "file": "scripts/amendment-brief.py",
@@ -27,44 +26,49 @@
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 596,
+      "line": 644,
       "symbol": "Phase 5 gate decision",
       "kind": "module",
       "summary": "Calls config.py resolve-question workflow.audit_to_amend and passes envelope to amend-gate-decision.py."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 631,
+      "line": 679,
       "symbol": "auto_split branch",
       "kind": "module",
       "summary": "Auto-amends spec_gap findings and renders premise_failure findings with amendment-brief.py."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
-      "line": 778,
+      "line": 828,
       "symbol": "force_ask prose branch",
       "kind": "module",
       "summary": "Emits prose alignment summary instead of AskUserQuestion popup."
     },
     {
-      "file": "skills/z-review-all/SKILL.md",
-      "line": 821,
-      "symbol": "Phase 6.5 auto-amend",
+      "file": "skills/z-amend/SKILL.md",
+      "line": 164,
+      "symbol": "Phase 4 -- User gate",
       "kind": "module",
-      "summary": "Auto-applies all amendment_proposal tasks via /z-amend --skip-user-gate."
+      "summary": "Reads Touched-but-completed tasks list from amendment.md; auto-proceeds when empty (amend_user_gate_autoproceed), else conversational Approve/Revise/Abandon plus per-task disposition."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
-      "line": 892,
+      "line": 910,
+      "symbol": "Phase 6.5 auto-amend",
+      "kind": "module",
+      "summary": "Auto-amends every amendment_proposal task via plain /z-amend, all severities; skips completed_task_contradiction and implementation_drift; relies on z-amend's own Phase 4 gate auto-proceeding."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 981,
       "symbol": "Phase 6.6 amendment brief",
       "kind": "module",
-      "summary": "Builds corrections + approach_concerns JSON and writes archive amendment-brief.md."
+      "summary": "Subsection of Phase 6.5; builds corrections + approach_concerns JSON and writes archive amendment-brief.md."
     }
   ],
   "depends_on": [
-    "config",
-    "z-audit-plan",
-    "z-review-all"
+    "config"
   ],
   "consumed_by": [
     "z-audit-plan",
@@ -76,13 +80,19 @@
     "Worth your eyes section is omitted when there are zero approach_concerns.",
     "Gate decision source==none maps to auto_split.",
     "force_ask in current z-audit-plan is rendered as prose alignment, not popup.",
-    "z-review-all Phase 6.5 is unconditional for amendment proposals and does not call amend-gate-decision.py."
+    "z-review-all Phase 6.5 is severity-agnostic for amendment_proposal disposition tasks and does not call amend-gate-decision.py or consult workflow.audit_to_amend.",
+    "z-review-all Phase 6.5 excludes completed_task_contradiction (superseding_task) and implementation_drift (candidate_task) items from auto-amend.",
+    "/z-amend has no --skip-user-gate flag; its Phase 4 gate is decided solely by whether its own Phase 3 impact analysis produced a non-empty Touched-but-completed tasks list.",
+    "The amend-gate-decision.py resolver gate and /z-amend's Phase 4 completed-task gate are independent gates at different layers; neither calls the other."
   ],
   "gotchas": [
     "amend-gate-decision.py prints token without trailing newline.",
     "source==none is a common fresh-install path and auto-splits.",
     "amendment-brief.py correction target is an artifact path/gloss, not necessarily an absolute path.",
-    "A missing approach_concerns list is treated as empty and omits the Worth-your-eyes section."
+    "A missing approach_concerns list is treated as empty and omits the Worth-your-eyes section.",
+    "amend-gate-decision.py's module docstring (line 17) still says force_ask means '3-way interactive popup' -- stale; actual meaning is set by the calling skill (prose alignment summary in current z-audit-plan).",
+    "z-review-all Phase 6.6 is a ### subsection nested inside Phase 6.5, not a standalone ## phase header.",
+    "--skip-user-gate is removed corpus-wide from /z-amend and its callers; any reference to it (old docs, old plan artifacts) is stale. Current mechanism: callers pre-filter completed-task-touching findings so /z-amend's Phase 4 always finds an empty list and auto-proceeds."
   ],
   "memories": []
 }

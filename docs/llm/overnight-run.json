@@ -1,6 +1,7 @@
 {
   "concept": "overnight-run",
-  "last_updated": "2026-06-24",
+  "summary": "/z-overnight runs a linear chain of z-harness sub-commands unattended, converting instrumented AskUserQuestion callsites to halt events under Z_HARNESS_NO_ASK=halt, writing MORNING_REPORT.md and push-notifying at every terminal transition.",
+  "last_updated": "2026-07-09",
   "covers_spec": "none",
   "source_file": [
     "skills/z-overnight/SKILL.md",
@@ -29,14 +30,14 @@
     },
     {
       "file": "skills/z-overnight/SKILL.md",
-      "line": 94,
+      "line": 112,
       "symbol": "lock acquisition",
       "kind": "doc",
       "summary": "Lock file at $BASE/.overnight.lock (JSON: owner_run_id, started_at, last_heartbeat); flock file at $BASE/.overnight.flock; stale threshold Z_HARNESS_OVERNIGHT_LOCK_STALE_S (default 7200s)"
     },
     {
       "file": "skills/z-overnight/SKILL.md",
-      "line": 148,
+      "line": 150,
       "symbol": "AUTODECIDE_EFFECTIVE build",
       "kind": "doc",
       "summary": "Merge OVERNIGHT_AUTODECIDE_QIDS_DEFAULT with Z_HARNESS_OVERNIGHT_AUTODECIDE (JSON string); exported as Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE before Skill calls"
@@ -57,7 +58,7 @@
     },
     {
       "file": "skills/z-overnight/SKILL.md",
-      "line": 434,
+      "line": 452,
       "symbol": "Step 3.8 run_id_ambiguous",
       "kind": "doc",
       "summary": "If archive-dir snapshot finds 0 or >1 new dirs after Skill call, emit run_id_ambiguous as a top-level event (to overnight run_id), set STEP_STATUS=error, jump to terminal handling"
@@ -71,7 +72,7 @@
     },
     {
       "file": "skills/z-overnight/SKILL.md",
-      "line": 650,
+      "line": 668,
       "symbol": "Phase 4.3 MORNING_REPORT generation",
       "kind": "doc",
       "summary": "Invokes python3 scripts/morning-report.py <slug>; failure logged as morning_report_failure event; lock release proceeds regardless"
@@ -99,42 +100,42 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 635,
+      "line": 860,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "Default allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged under Z_HARNESS_OVERNIGHT_AUTODECIDE env override"
     },
     {
       "file": "scripts/config.py",
-      "line": 1842,
+      "line": 2186,
       "symbol": "_parse_overnight_allowlist",
       "kind": "fn",
       "summary": "Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (JSON object); merges over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT"
     },
     {
       "file": "scripts/config.py",
-      "line": 1933,
+      "line": 2277,
       "symbol": "_apply_overnight_overrides",
       "kind": "fn",
-      "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match -> overnight_decision envelope; no match -> halt envelope. Fires only when result==ask"
+      "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match -> overnight_decision envelope; no match -> halt envelope. Fires only when result==ask; also handles the Z_HARNESS_ASK_ALL=1 + NO_ASK=halt config_conflict exit(5) case"
     },
     {
       "file": "scripts/config.py",
-      "line": 2826,
+      "line": 3202,
       "symbol": "_is_policy_mode",
       "kind": "fn",
       "summary": "Returns True when Z_HARNESS_NO_ASK=halt AND either Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE is non-empty (frozen policy active)"
     },
     {
       "file": "scripts/config.py",
-      "line": 2842,
+      "line": 3218,
       "symbol": "_emit_unhandled_gate",
       "kind": "fn",
       "summary": "Emits unhandled_gate event via log-event.sh for a registered gate not covered by the frozen policy; non-fatal, skips if Z_HARNESS_RUN unset"
     },
     {
       "file": "scripts/config.py",
-      "line": 2988,
+      "line": 3364,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
       "summary": "check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]: returns JSON {result: halt|proceed|unhandled_gate, question_id, rule_id}; --range-high/--severity activates budget-aware _resolve_cost_gate path for cost gates; unhandled_gate fires when policy mode is active and a registered gate is not covered by the frozen allowlist"
@@ -170,7 +171,7 @@
     "Preflight slug-collision check runs BEFORE lock acquisition and BEFORE Z_HARNESS_NO_ASK is set; triggers when first step is plan OR research and PLAN.md already exists",
     "New sub-RUN identification uses set-difference of archive dirs excluding *-overnight-* dirs (C14 algorithm); 0 or >1 new dirs emits run_id_ambiguous as top-level event (to overnight run_id) then errors the step",
     "run-status.sh classify tail-reads last 20 events and tolerates malformed trailing JSON; no valid events -> unknown",
-    "Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt is a rejected config conflict; emits config_conflict event and exits nonzero",
+    "Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt is a rejected config conflict; _apply_overnight_overrides emits config_conflict event and exits nonzero (exit 5)",
     "morning-report.py is invoked directly (not inlined) in Phase 4.3; failure is advisory-only and does not block lock release",
     "overnight_lock_corrupt is in the HALT events allowlist in run-status.sh classify",
     "Policy mode (fail-closed H4): cmd_check_no_ask returns unhandled_gate instead of halt when _is_policy_mode() is true and a registered gate is not covered by the frozen allowlist",
@@ -200,7 +201,8 @@
     "Z_HARNESS_OVERNIGHT_AUTO_COMPACT=1 only logs a compact_recommended event; it does not trigger automatic context compaction — the caller must observe the event",
     "morning-report.py finds the latest overnight run by lexical sort of *-overnight-* dirs in the archive; if the wrong run is selected, MORNING_REPORT.md will reflect it silently",
     "run_id_ambiguous is a top-level event emitted to the overnight run_id (not the sub-run), so it appears in the overnight events.jsonl even when the sub-run cannot be identified",
-    "chain-runner.sh is now a required dependency — state-init/state-read/state-write/cursor/new-run-id operations are not inlined in z-overnight.md; they are all delegated to the runner"
+    "chain-runner.sh is a required dependency — state-init/state-read/state-write/cursor/new-run-id operations are not inlined in z-overnight.md; they are all delegated to the runner",
+    "scripts/config.py line numbers for overnight-gate functions drift readily (config.py is a large, actively-edited file); re-verify with grep before trusting a cited line on future refreshes"
   ],
   "memories": [],
   "event_vocabulary": {
@@ -217,10 +219,8 @@
     "fix_halt": "{reason, question_id, rule_id}",
     "audit_halt": "{reason, question_id, rule_id}",
     "plan_style_halt": "{reason, question_id, rule_id}",
-    "uplift_halt": "{reason, question_id, rule_id}",
     "debug_halt": "{reason, question_id, rule_id}",
     "light_halt": "{reason, question_id, rule_id}",
-    "map_halt": "{reason, question_id, rule_id}",
     "brainstorm_halt": "{reason, question_id, rule_id}",
     "plan_halt": "{reason, question_id, rule_id}",
     "review_halt": "{reason, question_id, rule_id}",
@@ -245,10 +245,9 @@
     "workflow.slug_confirm": [
       "skills/z-plan/SKILL.md",
       "skills/z-fix/SKILL.md",
-      "skills/z-uplift/SKILL.md",
       "skills/z-debug/SKILL.md",
       "skills/z-brainstorm/SKILL.md",
-      "skills/z-map/SKILL.md"
+      "skills/z-explore/SKILL.md"
     ],
     "workflow.audit_to_amend": [
       "skills/z-audit-plan/SKILL.md",

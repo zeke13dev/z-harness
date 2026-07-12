@@ -1,6 +1,7 @@
 {
   "concept": "followup-sink",
-  "last_updated": "2026-06-19",
+  "summary": "Durable follow-up registry draining out-of-scope discoveries into a priority-ordered lifecycle-tracked work queue. Three sinks (project, global, Notion mirror); conservative open->running->verify->done state machine; three completion paths (human-confirmed, audit-confirmed, auto-closed-low-risk). Shared module followup_common.py centralizes the two-tier lock model (per-entry + global cross-tool flock with .hb.lock-serialized holder JSON), batched config reads, and backgrounded Notion push. Event-sourced index.jsonl with incremental checkpoint rebuild (T010), compaction to index.archive.jsonl, corruption detection/repair, and materialized notion_sync_pending state.",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-harness/notion-followup-sink/SPEC.md",
   "source_file": [
     "scripts/sink-add.sh",
@@ -24,12 +25,12 @@
     "scripts/notion-push.py",
     "scripts/followup-reconcile-notion-impl.py",
     "scripts/parse-followups-block.py",
-    "commands/z-followup-list.md",
-    "commands/z-followup-status.md",
-    "commands/z-followup-confirm.md",
-    "commands/z-followup-dismiss.md",
-    "commands/z-followup-refresh.md",
-    "commands/z-followup-next.md",
+    "skills/z-followup-list/SKILL.md",
+    "skills/z-followup-status/SKILL.md",
+    "skills/z-followup-confirm/SKILL.md",
+    "skills/z-followup-dismiss/SKILL.md",
+    "skills/z-followup-refresh/SKILL.md",
+    "skills/z-followup-next/SKILL.md",
     "docs/schemas/followup-entry.schema.json",
     "docs/schemas/audit-evidence.schema.json"
   ],
@@ -134,42 +135,42 @@
       "summary": "Tolerant parser for **FOLLOWUPS:** fenced JSON blocks in reviewer returns; validates per-entry: priority, name, recommended_command (COMMAND_RE + control chars + length), cited_paths (cap 16); logs and skips invalid entries; never aborts"
     },
     {
-      "file": "commands/z-followup-next.md",
+      "file": "skills/z-followup-next/SKILL.md",
       "line": 1,
       "symbol": "z-followup-next",
       "kind": "module",
       "summary": "Interactive consumer (10 phases + cleanup): nest guard, heuristic lock probe (NOT mutual-exclusion), running-entry check, enumerate+sort claimable (depth<1 only), AskUserQuestion select, worktree check, staleness prompt, claim+heartbeat, Skill execute with depth=1, status writeback via claim ticket, auto-close attempt, kill-heartbeat-BEFORE-lock-release, push-notify"
     },
     {
-      "file": "commands/z-followup-list.md",
+      "file": "skills/z-followup-list/SKILL.md",
       "line": 1,
       "symbol": "z-followup-list",
       "kind": "module",
       "summary": "Read-only merged view from project+global sinks; filters: --status=, --sink=, --priority=; --json; table includes Notion sync pending column; never rebuilds view"
     },
     {
-      "file": "commands/z-followup-status.md",
+      "file": "skills/z-followup-status/SKILL.md",
       "line": 1,
       "symbol": "z-followup-status",
       "kind": "module",
       "summary": "Read-only diagnostic: counts per status, Notion sync pending count, per-entry + global lock state (flock-probed, not just JSON), oldest open entry age, last sync failure from index.jsonl"
     },
     {
-      "file": "commands/z-followup-confirm.md",
+      "file": "skills/z-followup-confirm/SKILL.md",
       "line": 1,
       "symbol": "z-followup-confirm",
       "kind": "module",
       "summary": "verify->done transition; --via=human prompts AskUserQuestion; --via=audit runs 11-point evidence validator; completion_mode mutex enforced"
     },
     {
-      "file": "commands/z-followup-dismiss.md",
+      "file": "skills/z-followup-dismiss/SKILL.md",
       "line": 1,
       "symbol": "z-followup-dismiss",
       "kind": "module",
       "summary": "Any-state -> dismissed transition; requires --reason; terminal; done->dismissed stamps dismissed_after_done=true"
     },
     {
-      "file": "commands/z-followup-refresh.md",
+      "file": "skills/z-followup-refresh/SKILL.md",
       "line": 1,
       "symbol": "z-followup-refresh",
       "kind": "module",
@@ -684,7 +685,7 @@
   "invariants": [
     "Consumer cannot self-promote verify->done without explicit completion_mode value",
     "verify->done is mutually exclusive: at most one of {human_confirmed, audit_confirmed, auto_closed_low_risk}",
-    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? -- no raw shell; /z-do is the shell escape",
+    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? -- no raw shell.",
     "depth <= 1 enforced at create time via Z_HARNESS_FOLLOWUP_CALLER_DEPTH env",
     "audit_confirmed requires git merge-base --is-ancestor capture_head verify_head to pass",
     "auto_close condition A requires diff_stat==0 AND no touched paths (binary/rename/mode-only does NOT qualify as noop)",

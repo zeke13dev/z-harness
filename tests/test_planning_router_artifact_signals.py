@@ -211,7 +211,7 @@ def _limited_artifact_router(signals: dict[str, object]) -> dict[str, str]:
     if signals.get("artifact_inventory_partial") and signals.get("artifact_inventory_truncated"):
         return {
             "STATUS": "routed",
-            "RECOMMENDED": "/z-do",
+            "RECOMMENDED": "/z-plan --quick",
             "ROUTE_CLASS": "primary",
             "CONFIDENCE": "low",
             "REASON_CODES": "inventory_partial,inventory_truncated,tiny_task",

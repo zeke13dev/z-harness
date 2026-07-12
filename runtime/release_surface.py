@@ -48,7 +48,6 @@ _PROD_VISIBLE_SKILLS = frozenset(
         "z-learn",
         "z-maintain-docs",
         "z-mr-review",
-        "z-personas",
         "z-plan",
         "z-plan-split",
         "z-providers-discover",
@@ -217,7 +216,6 @@ _PROD_EXCLUDED_PATHS = (
     "scripts/test_notify_watchdog.sh",
     "scripts/hang-check.sh",
     "scripts/schedule-hang-check.sh",
-    "personas/builtin/overnight-intern.md",
     # Hidden-surface docs/schemas: classify by surface family so new attend,
     # axiom, overnight, or Hermes docs do not silently enter prod artifacts.
     "docs/human/attend*.md",

@@ -1,6 +1,7 @@
 {
   "concept": "axioms",
-  "last_updated": "2026-06-19",
+  "summary": "Advisory behavioral-rule layer mined from interaction history, stored two-layer (global+project), compiled into KERNEL.md; store/resolver/kernel machinery is fully live, but all five /z-axiom-* commands are currently broken self-referential stubs.",
+  "last_updated": "2026-07-09",
   "covers_spec": "z-harness/inherited-agents-axioms/SPEC.md",
   "source_file": [
     "scripts/axiom-store.py",
@@ -9,11 +10,11 @@
     "scripts/resolve-kernel.sh",
     "scripts/build-skill-index.py",
     "agents/axiom-extractor.md",
-    "commands/z-axiom-scan.md",
-    "commands/z-axiom-list.md",
-    "commands/z-axiom-approve.md",
-    "commands/z-axiom-reject.md",
-    "commands/z-axiom-edit.md",
+    "skills/z-axiom-scan/SKILL.md",
+    "skills/z-axiom-list/SKILL.md",
+    "skills/z-axiom-approve/SKILL.md",
+    "skills/z-axiom-reject/SKILL.md",
+    "skills/z-axiom-edit/SKILL.md",
     "docs/schemas/axiom.schema.json",
     "scripts/config.py",
     "scripts/setup.py"
@@ -25,91 +26,126 @@
       "line": 1,
       "symbol": "axiom-store",
       "kind": "module",
-      "summary": "CRUD + validation for the two-layer (global+project) axiom store. Subcommands: path, add, list, get, validate, approve, reject, edit. All output JSON to stdout; diagnostics to stderr. Atomic writes via tmp+os.replace. O_EXCL lock (.approve.lock) on approve to prevent concurrent approvals producing a graph-invalid state."
+      "summary": "CRUD + validation for the two-layer (global+project) axiom store. Subcommands: path, add, list, get, validate, approve, reject, edit. Live and correct; independent of the broken command layer."
     },
     {
       "file": "scripts/axiom-store.py",
       "line": 336,
       "symbol": "validate_graph",
       "kind": "fn",
-      "summary": "R1: THE single shared graph validator used by both approve and build-kernel.py. Checks referential integrity (supersedes/conflicts_with targets exist), mutual approved conflicts, and acyclicity of the supersedes graph. Returns {ok, errors, warns}."
+      "summary": "R1: THE single shared graph validator used by both approve and build-kernel.py. Referential integrity, mutual approved conflicts, acyclicity of supersedes graph."
     },
     {
       "file": "scripts/axiom-store.py",
       "line": 488,
       "symbol": "_load_active_set",
       "kind": "fn",
-      "summary": "R1: Shared load semantics for approve and build-kernel.py. scope=None or project loads global then project (project shadows global by id). scope=global loads global only. Loads all statuses (candidate+approved+rejected) for graph validation context."
+      "summary": "R1: Shared load semantics for approve and build-kernel.py. scope=None/project loads global then project (project shadows global by id)."
     },
     {
       "file": "scripts/axiom-store.py",
       "line": 927,
       "symbol": "cmd_approve",
       "kind": "fn",
-      "summary": "Atomically promote candidate to approved. Algorithm: load candidate, schema-validate, needs_ack gate (no boundary/counterexamples without --ack-observation), O_EXCL lock, build prospective set, validate_graph, demote supersedes target to rejected/, write approved/<id>.json, remove candidate, regen kernel (synchronous). Returns needs_ack | graph_invalid | busy | cross_store_supersede_unsupported | approved | approved_kernel_stale."
+      "summary": "Atomic promote candidate->approved: schema-validate, needs_ack gate, O_EXCL lock, prospective graph validate, demote supersedes target, write approved/, regen kernel synchronously."
     },
     {
       "file": "scripts/axiom-extract.py",
       "line": 1,
       "symbol": "axiom-extract",
       "kind": "module",
-      "summary": "Mine candidate axioms from metrics.jsonl. Resolves metrics.jsonl via plan-path.sh base_dir (Phase-D external-base flip); falls back to repo_root/z-harness/metrics.jsonl. Mined kinds: user_choice, user_override (log-decision.sh), cost_gate_decision, critique_failure_decision, map_collision_decision, shared_concerns_ack_override. Grouping key: (event_kind, decision_key, normalized_value). Candidate proposed when group count >= axioms.extract_min_recurrence (default 3). confidence = min(0.95, rec/(rec+2)). Two-stage in-run dedup: exact statement+scope hash, then fuzzy token-set Jaccard >= 0.9. Advisory MEMORY.md overlap note on stderr. Invariant 8: never writes the store, never approves."
+      "summary": "Mine candidate axioms from metrics.jsonl. Resolves path via plan-path.sh base_dir. Invariant 8: never writes the store, never approves."
     },
     {
       "file": "scripts/axiom-extract.py",
       "line": 105,
       "symbol": "_resolved_base_dir",
       "kind": "fn",
-      "summary": "Resolve the artifact base directory via plan-path.sh base_dir, honouring the full 5-tier fallback. Falls back to repo_root/z-harness when plan-path.sh is unavailable. Best-effort; never raises. Added in the Phase-D external-base fix."
+      "summary": "Resolve artifact base dir via plan-path.sh base_dir (Phase-D external-base fallback to repo_root/z-harness)."
     },
     {
       "file": "scripts/build-kernel.py",
       "line": 1,
       "symbol": "build-kernel",
       "kind": "module",
-      "summary": "Compile KERNEL.md for a scope. Steps: (1) build skill index via build-skill-index.py, (2) load full active set via _load_active_set (R1 semantics), (3) graph-validate full set, (4) drop graph-invalid APPROVED records with axiom_integrity_warning event (R2), (5) sort approved by scope/discipline/confidence/recency (D3), (6) compute source_hash (SHA-256 over skill text + sorted id+statement, NO timestamp, R6), (7) budget-select axioms with exact rendered-size accounting, (8) atomic write KERNEL.md, (9) emit kernel_built event. --print-hash: non-mutating mode, prints 12-char prefix."
+      "summary": "Compile KERNEL.md for a scope. R1/R2/R5/R6 invariants. --print-hash: non-mutating hash mode."
     },
     {
       "file": "scripts/resolve-kernel.sh",
       "line": 1,
       "symbol": "resolve-kernel",
       "kind": "module",
-      "summary": "Resolve absolute KERNEL.md path. Resolution chain: Z_HARNESS_KERNEL_PATH (if set+exists) > <git-root>/.z-harness/KERNEL.md > $XDG_CONFIG_HOME/z-harness/KERNEL.md > exit 1. Non-blocking staleness check: parses source_hash from header, recomputes via build-kernel.py --print-hash, emits loud stderr warning on mismatch. Never changes exit code or resolved path on staleness."
+      "summary": "Resolve absolute KERNEL.md path; non-blocking staleness check via build-kernel.py --print-hash."
     },
     {
       "file": "scripts/build-skill-index.py",
-      "line": 198,
+      "line": 179,
       "symbol": "build_skill_index",
       "kind": "fn",
-      "summary": "Crawl commands/*.md frontmatter and emit compact one-line-per-entry markdown dispatch table. Sorted alphabetically by command name. Deduplicates by normalized command name (command description wins). Used by build-kernel.py to populate the skill dispatch section of KERNEL.md. Note: skills/ dir removed 2026-06-17; _crawl_skills helper present in code but returns [] since dir is gone."
+      "summary": "Crawl skills/*/SKILL.md frontmatter (skills/ is once again the sole source tier); emit compact dispatch table for KERNEL.md. Line moved 198->179 since last refresh; source tier flipped back from commands/ to skills/."
     },
     {
       "file": "agents/axiom-extractor.md",
       "line": 1,
       "symbol": "axiom-extractor",
       "kind": "module",
-      "summary": "Sonnet-tier retrospective policy-mining agent. Wraps axiom-extract.py with LLM judgement: merge near-duplicates, sharpen statements to imperative form, draft boundary_conditions + counterexamples, drop MEMORY.md overlap candidates, cap at <=5 candidates. Returns ONE fenced JSON array. Never writes the store, never approves (Invariant 8)."
+      "summary": "Sonnet-tier agent: sharpen statements, merge near-duplicates, draft falsifiability fields, cap at <=5 candidates. Designed to be dispatched by /z-axiom-scan (currently broken); can be dispatched directly as a workaround."
     },
     {
       "file": "scripts/config.py",
-      "line": 2109,
+      "line": 2562,
       "symbol": "_load_axiom_matches",
       "kind": "fn",
-      "summary": "Load graph-valid approved axioms whose applies_to array contains a <question_id>:<value> entry matching the given question_id. Gates on axioms.enabled (default true). Validates <value> against QUESTION_IDS[question_id]['choices'] — entries with unknown values are silently dropped. Delegates to axiom-store._load_active_set and validate_graph. Returns [] on any error (fail-open for the store, fail-closed for participation)."
+      "summary": "Load graph-valid approved axioms matching a question_id; validates <value> against QUESTION_IDS choices; gates on axioms.enabled. Line moved 2109->2562 since last refresh; logic unchanged."
     },
     {
       "file": "scripts/config.py",
-      "line": 2475,
+      "line": 2928,
       "symbol": "_build_resolve_envelope",
       "kind": "fn",
-      "summary": "Core resolver applying axiom layer on top of config+memory. Three axiom outcomes: (1) agree with resolved value -> listed in sources[] only, no result change; (2) gap-fill (config=ask default, memory silent) -> source='axiom', strength='soft', result via RESULT_MAP; (3) conflict with resolved value -> source='axiom_conflict', nested axiom:{id, statement, conflict:true}. No axiom match -> envelope byte-identical to pre-axiom (R7)."
+      "summary": "Core resolver applying axiom layer: agree / gap-fill / conflict outcomes. Line moved 2475->2928 since last refresh; logic unchanged."
     },
     {
       "file": "scripts/setup.py",
       "line": 1303,
       "symbol": "_wizard_axioms",
       "kind": "fn",
-      "summary": "Wizard section for the axioms scope. Configures axioms.enabled, axioms.auto_extract_post_run, axioms.kernel_budget_chars (int), axioms.extract_min_recurrence (int). Offers to add .z-harness/axioms/ and .z-harness/KERNEL.md to project .gitignore."
+      "summary": "/z-setup wizard for axioms scope. Configures ONLY axioms.enabled, axioms.auto_extract_post_run, axioms.kernel_budget_chars (axioms.extract_min_recurrence is NOT wizard-exposed despite being a live config key). Offers .gitignore additions + installs CLAUDE.md kernel pointer."
+    },
+    {
+      "file": "skills/z-axiom-scan/SKILL.md",
+      "line": 1,
+      "symbol": "z-axiom-scan",
+      "kind": "module",
+      "summary": "BROKEN: self-referential stub body ('Read and execute skills/z-axiom-scan/SKILL.md in full') with no procedure. Frontmatter intact (feeds build-skill-index.py). Real body deleted at commit 399ab4a; recoverable via git show 399ab4a^:skills/z-axiom-scan/SKILL.md."
+    },
+    {
+      "file": "skills/z-axiom-list/SKILL.md",
+      "line": 1,
+      "symbol": "z-axiom-list",
+      "kind": "module",
+      "summary": "BROKEN: same self-referential stub pattern as z-axiom-scan. Real body recoverable via git show 399ab4a^:skills/z-axiom-list/SKILL.md."
+    },
+    {
+      "file": "skills/z-axiom-approve/SKILL.md",
+      "line": 1,
+      "symbol": "z-axiom-approve",
+      "kind": "module",
+      "summary": "BROKEN: same self-referential stub pattern. Real body recoverable via git show 399ab4a^:skills/z-axiom-approve/SKILL.md."
+    },
+    {
+      "file": "skills/z-axiom-reject/SKILL.md",
+      "line": 1,
+      "symbol": "z-axiom-reject",
+      "kind": "module",
+      "summary": "BROKEN: same self-referential stub pattern. Real body recoverable via git show 399ab4a^:skills/z-axiom-reject/SKILL.md."
+    },
+    {
+      "file": "skills/z-axiom-edit/SKILL.md",
+      "line": 1,
+      "symbol": "z-axiom-edit",
+      "kind": "module",
+      "summary": "BROKEN: same self-referential stub pattern. Real body recoverable via git show 399ab4a^:skills/z-axiom-edit/SKILL.md."
     }
   ],
   "depends_on": [
@@ -125,7 +161,7 @@
   "invariants": [
     "Axioms are advisory: authority order is config/env > routing-preference memory > approved axioms > persona/built-in defaults. Config/memory always win direct conflicts.",
     "axiom_conflict envelope: when an axiom value differs from the config/memory-resolved value, source='axiom_conflict' is emitted and a nested axiom:{id, statement, conflict:true} object is added. The conflict is surfaced — never silently swallowed.",
-    "Axiom lifecycle: raw events (metrics.jsonl) -> candidate -> approved (KERNEL.md). Candidate-to-approved transition requires explicit user approval via /z-axiom-approve (ask_user gate). No auto-approval path exists.",
+    "Axiom lifecycle: raw events (metrics.jsonl) -> candidate -> approved (KERNEL.md). Candidate-to-approved transition requires explicit user approval via axiom-store.py approve (ask_user gate at the command layer, currently only reachable via direct script invocation).",
     "Invariant 8 (extractor proposes-only): axiom-extract.py and axiom-extractor agent NEVER write the axiom store and NEVER approve anything. They emit candidate JSON only.",
     "R1 (single shared validator): validate_graph() in axiom-store.py is the ONE shared graph validator used by both approve (prospective-set check) and build-kernel.py (full active-set check). Load semantics are identical (_load_active_set).",
     "R2 (loud drop, not silent skip): approved records that fail graph validation at compile time are excluded from KERNEL.md AND emit an axiom_integrity_warning event. drop_count is recorded in the kernel header.",
@@ -139,11 +175,17 @@
     "Store directories: global = $XDG_CONFIG_HOME/z-harness/axioms/{candidates,approved,rejected}/; project = <git-root>/.z-harness/axioms/{candidates,approved,rejected}/. Both survive /z-update.",
     "axioms.enabled=false causes _load_axiom_matches to return [] immediately; the resolver behaves identically to a pre-axioms run (backward-compatible). The axiom key is ABSENT entirely from the envelope when no axiom participates (R7).",
     "Kernel budget selection: greedy include-in-sort-order, then verify-and-trim loop. First axiom always kept even if it alone exceeds budget. Budget accounts for exact rendered-size including header widths, n_axioms, and omitted-count comment.",
-    "axiom-extract.py resolves metrics.jsonl via plan-path.sh base_dir (Phase-D external-base flip). Falls back to repo_root/z-harness/metrics.jsonl when plan-path.sh is unavailable or exits non-zero. Without a properly configured external base, /z-axiom-scan mines zero candidates from a missing file.",
+    "axiom-extract.py resolves metrics.jsonl via plan-path.sh base_dir (Phase-D external-base flip). Falls back to repo_root/z-harness/metrics.jsonl when plan-path.sh is unavailable or exits non-zero. Without a properly configured external base, mining (whether via the broken /z-axiom-scan command or axiom-extract.py directly) yields zero candidates from a missing file.",
     "_load_axiom_matches validates the <value> half of each applies_to entry against QUESTION_IDS[question_id]['choices']. Entries with unknown values are silently dropped and do not participate in resolution.",
-    "build-skill-index.py only crawls commands/ since skills/ dir was removed 2026-06-17. The _crawl_skills helper is still present in the code but returns [] (empty list). The skill dispatch index in KERNEL.md reflects commands/ only."
+    "build-skill-index.py crawls skills/*/SKILL.md frontmatter only (skills/ re-established as the sole source tier by the z-harness-portability plan; commands/ directory no longer exists in this repo).",
+    "All five /z-axiom-* SKILL.md files are self-referential broken stubs as of this doc revision: their body is a single line pointing at themselves ('Read and execute skills/<name>/SKILL.md in full'), which resolves to nothing. Frontmatter (used by build-skill-index.py for KERNEL.md's dispatch index) is intact and unaffected. Root cause: commit 399ab4a deleted the real skills/z-axiom-*/SKILL.md procedure bodies during a 'commands/ is the single source' refactor without merging content back into commands/*.md, leaving a dangling redirect that commit 2494756 later renamed (unchanged) back into skills/. Real bodies are recoverable via `git show 399ab4a^:skills/z-axiom-<name>/SKILL.md`. This is a real functional regression, not stale documentation — do not describe these commands as working."
   ],
   "gotchas": [
+    "All five /z-axiom-* commands are currently broken self-referential stubs (real functional regression, not doc drift). Root cause: commit 399ab4a deleted skills/z-axiom-*/SKILL.md (real 84-242 line procedure bodies) during the 'skills/ removed, commands/ is the single source' refactor and left commands/z-axiom-*.md as an orphaned redirect to the now-deleted skills/ target; commit 2494756 (T001, commands->skills re-flip) later renamed that already-broken stub verbatim back to skills/z-axiom-*/SKILL.md. Recovery: `git show 399ab4a^:skills/z-axiom-<name>/SKILL.md` has the original body; needs merging with the current (post-399ab4a) frontmatter. This is a /z-plan-scale fix, not something doc-updater performs.",
+    "The broken commands do NOT affect KERNEL.md or the resolver: build-skill-index.py only reads frontmatter, and the store/resolver/kernel-compile scripts are fully independent of the command layer. Drive axiom-store.py / axiom-extract.py / build-kernel.py directly via Bash, or dispatch the axiom-extractor agent by hand, as a workaround until the commands are fixed.",
+    "axioms.extract_min_recurrence is a live, validated config key (default 3) but is NOT exposed by the /z-setup axioms wizard (_wizard_axioms only prompts for enabled, auto_extract_post_run, kernel_budget_chars). Set it via direct TOML edit or config.py set.",
+    "build-skill-index.py crawls skills/*/SKILL.md, not commands/ — the commands/ directory does not exist in this repo. This reverses what an interim doc revision (reflecting the 399ab4a-era state) said.",
+    "Entry-point line numbers drifted since the last doc refresh even though logic is unchanged: build-skill-index.py build_skill_index 198->179; config.py _load_axiom_matches 2109->2562; config.py _build_resolve_envelope 2475->2928.",
     "Axioms advisory — config/memory win direct conflicts but conflict is surfaced: a config or memory entry that disagrees with an axiom produces source='axiom_conflict' in the resolve-question envelope. The result/strength/rule_id from config/memory still apply; the axiom object is informational. Callers must handle the axiom_conflict source value.",
     "Kernel regen synchronous on approve/reject/edit: any of these three mutations blocks until build-kernel.py completes. If the kernel cannot be written (e.g., disk full), the command exits with *_kernel_stale and the mutation HAS already been committed to the store. The store mutation is NOT rolled back on kernel failure.",
     "Store in user-space survives /z-update: $XDG_CONFIG_HOME/z-harness/axioms/ (global) and <git-root>/.z-harness/axioms/ (project) are outside the plugin install tree. /z-update (git pull or tarball swap) does not touch these directories.",
@@ -155,8 +197,7 @@
     "resolve-kernel.sh staleness check is non-blocking and best-effort. It shells out to build-kernel.py --print-hash; if that fails for any reason (missing script, non-zero exit, parse error), it silently skips the check. A stale kernel does not prevent agents from reading the file.",
     "validate_graph check 2 (mutual conflict between approved records): the exemption (one supersedes the other) only applies when the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be demoted (rejected) for the exemption to apply.",
     "Project scope _load_active_set always includes global records too (project is a SUPERSET). This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught. Passing --scope=project to validate --all also loads both stores.",
-    "Phase-D external-base: axiom-extract.py previously hardcoded repo_root/z-harness/metrics.jsonl. After the fix it calls plan-path.sh base_dir. If plan-path.sh is absent or the external base is not initialised, the legacy fallback path is used — meaning a new install that has never run /z-plan may silently scan an empty or missing metrics file.",
-    "build-skill-index.py _crawl_skills helper exists in source but skills/ dir was deleted 2026-06-17. _crawl_skills returns [] for any repo without that directory. The skill dispatch index and source_hash are based on commands/ only."
+    "Phase-D external-base: axiom-extract.py previously hardcoded repo_root/z-harness/metrics.jsonl. After the fix it calls plan-path.sh base_dir. If plan-path.sh is absent or the external base is not initialised, the legacy fallback path is used — meaning a new install that has never run /z-plan may silently scan an empty or missing metrics file."
   ],
   "memories": []
 }
