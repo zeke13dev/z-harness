@@ -126,17 +126,6 @@ DEFAULTS: dict = {
         "file":  "CHANGELOG.md",        # str: changelog path, relative to repo root
         "repos": ["*"],                 # list: repo-id allowlist; "*" = every repo
     },
-    "personas": {
-        "critique_panel":      True,    # bool: inject persona diversity in /z-plan critique panels
-        "audit":               True,    # bool: inject persona diversity in /z-audit dimension auditors
-        "review_eval":         True,    # bool: add advisory eval-reviewer arm at code-review gates
-        "implementer_retry":   "same",  # same | new: persona draw strategy on implementer retry
-        "consult_eval":        False,   # bool: add advisory persona consult arm (OFF by default — most expensive, lowest-signal)
-    },
-    "experiment": {
-        "persona_rotation":  True,   # bool: enable persona rotation across z-harness roles
-        "control_every_n":   5,      # int>0: forced-control cadence (every Nth implementer attempt)
-    },
     "runtime": {
         # on | off — off = single-model mode: consultant/reviewer roles resolve to
         # the "none" sentinel so cross-LLM consult and review are skipped. Exported
@@ -550,13 +539,6 @@ VALIDATORS: dict = {
     "brainstorm.personas":          _validate_bool,
     "brainstorm.wide_overflow_model": _validate_nonempty_string,
     "changelog.auto":               _validate_bool,
-    "personas.critique_panel":      _validate_bool,
-    "personas.audit":               _validate_bool,
-    "personas.review_eval":         _validate_bool,
-    "personas.implementer_retry":   {"same", "new"},
-    "personas.consult_eval":        _validate_bool,
-    "experiment.persona_rotation":  _validate_bool,
-    "experiment.control_every_n":   _validate_positive_int,
     "runtime.consult":              {"on", "off"},
     "runtime.pre_review":           _validate_bool,
     "runtime.impl_pre_review":      _validate_bool,
@@ -642,24 +624,6 @@ _COERCERS: dict[str, object] = {
     ),
     "changelog.auto": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "personas.critique_panel": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "personas.audit": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "personas.review_eval": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "personas.consult_eval": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "experiment.persona_rotation": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "experiment.control_every_n": lambda v: (
-        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "cost.token_budget": lambda v: (
         None if (v is None or v == "") else (
@@ -806,8 +770,6 @@ QUESTION_IDS: dict[str, dict] = {
             "skills/z-fix/SKILL.md:18",
             "skills/z-debug/SKILL.md:17",
             "skills/z-brainstorm/SKILL.md:19",
-            "skills/z-map/SKILL.md:133",
-            "skills/z-uplift/SKILL.md:71",
         ],
         # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
         # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
@@ -848,7 +810,6 @@ QUESTION_IDS: dict[str, dict] = {
         "callsites": [
             "scripts/pre-run-cost-gate.sh",
             "skills/z-research/SKILL.md",
-            "skills/z-uplift/SKILL.md",
             "skills/z-plan-split/SKILL.md",
             "skills/z-plan/SKILL.md",
         ],
@@ -959,7 +920,7 @@ def _dotted_to_env(key: str) -> str:
 
     notify.level  ->  Z_HARNESS_NOTIFY_LEVEL
     docs.always_apply  ->  Z_HARNESS_DOCS_ALWAYS_APPLY
-    experiment.persona_rotation  ->  Z_HARNESS_EXPERIMENT_PERSONA_ROTATION
+    axioms.enabled  ->  Z_HARNESS_AXIOMS_ENABLED
 
     Raises SystemExit(2) if key does not match ``^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$``
     (exactly 2 segments; 3-level role keys are not exported as env vars).
@@ -1947,20 +1908,17 @@ def cmd_ensure_defaults(args: list[str]) -> None:
         "# Whether to auto-apply docs in light flows. Values: always | never\n"
         'always_apply = "always"\n'
         "\n"
-        "# Default role bindings — persona + model + runtime per logical role.\n"
+        "# Default role bindings — model + runtime per logical role.\n"
         "# Override per command with [roles.<command>.<role>] sections.\n"
         "\n"
         "[roles.default.consultant_primary]\n"
-        'persona = "codex-default-consultant"\n'
         'model = ""              # empty = use provider\'s default_model\n'
         'runtime = "codex-cli"\n'
         "\n"
         "[roles.default.consultant_secondary]\n"
-        'persona = "gemini-default-consultant"\n'
         'runtime = "gemini-cli"\n'
         "\n"
         "[roles.default.reviewer]\n"
-        'persona = "codex-default-reviewer"\n'
         'runtime = "codex-cli"\n'
     )
     try:

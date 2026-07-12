@@ -1,15 +1,12 @@
 """
-T007: Tests for export_payload() delegation to runtime export() + persona loop.
+Tests for export_payload() delegation to runtime export().
 
 Verifies across all three adapters (cursor, codex, antigravity):
   * export_payload() calls runtime/drivers/<t>/export.py::export() for
-    commands/agents/skills AND runs the persona loop — files from both
-    stages appear in the merged ExportResult.
-  * No duplicate paths in the merged files list.
+    commands/agents/skills — the runtime files appear in the ExportResult.
+  * No duplicate paths in the files list.
   * Non-empty warnings from the runtime export are surfaced as RuntimeError
     (legacy hard-gate is preserved).
-  * Collision assert: persona names that overlap command/agent/skill ids
-    raise RuntimeError with a clear message.
   * The runtime-owned ExportResult is the single canonical type (BLOCKER-1).
 """
 
@@ -73,7 +70,7 @@ def _make_runtime_export_result_with_warnings(dest: Path, warnings: list[str]) -
 
 
 class TestCursorExportDelegation(unittest.TestCase):
-    """CursorAdapter.export_payload() delegates to runtime export() then persona loop."""
+    """CursorAdapter.export_payload() delegates to the runtime export()."""
 
     def setUp(self) -> None:
         from z_harness_cli.adapters.cursor import CursorAdapter
@@ -84,16 +81,10 @@ class TestCursorExportDelegation(unittest.TestCase):
         dest: Path,
         harness_root: Path,
         runtime_files: list[Path],
-        persona_files: list[Path],
         runtime_warnings: list[str] | None = None,
     ):
-        """Helper: run export_payload with mocked runtime export + persona modules."""
+        """Helper: run export_payload with a mocked runtime export module."""
         import z_harness_cli.adapters.cursor as _mod
-
-        personas_dir = harness_root / "personas" / "builtin"
-        personas_dir.mkdir(parents=True, exist_ok=True)
-        for pf in persona_files:
-            pf.write_text("---\nname: test\n---\nHello.\n", encoding="utf-8")
 
         rt_result = RuntimeExportResult(
             dest=dest,
@@ -105,18 +96,6 @@ class TestCursorExportDelegation(unittest.TestCase):
         mock_cursor_export = MagicMock()
         mock_cursor_export.export = mock_export_fn
 
-        exported_persona_paths: list[Path] = []
-
-        def _fake_export_persona(persona_file, target_root):
-            out = Path(target_root) / ".cursor" / "personas" / (persona_file.stem + ".mdc")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("fake persona content", encoding="utf-8")
-            exported_persona_paths.append(out.resolve())
-            return out.resolve()
-
-        mock_pe = MagicMock()
-        mock_pe.export_persona = _fake_export_persona
-
         with patch.object(
             _mod,
             "__file__",
@@ -125,15 +104,14 @@ class TestCursorExportDelegation(unittest.TestCase):
             "sys.modules",
             {
                 "runtime.drivers.cursor.export": mock_cursor_export,
-                "runtime.drivers.cursor.persona_export": mock_pe,
             },
         ):
             result = self.adapter.export_payload(dest)
 
-        return result, exported_persona_paths
+        return result
 
-    def test_files_contains_both_runtime_and_persona_files(self):
-        """export_payload() must include BOTH runtime-export files AND persona files."""
+    def test_files_contains_runtime_files(self):
+        """export_payload() must include the runtime-export files."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp).resolve()
             dest = tmp_path / "dest"
@@ -143,13 +121,11 @@ class TestCursorExportDelegation(unittest.TestCase):
             # Simulate runtime export producing 2 .mdc files.
             runtime_file_1 = dest / ".cursor" / "rules" / "z-plan.mdc"
             runtime_file_2 = dest / ".cursor" / "rules" / "z-implement.mdc"
-            persona_source = harness_root / "personas" / "builtin" / "assistant.md"
 
-            result, _ = self._run_export_with_mocks(
+            result = self._run_export_with_mocks(
                 dest=dest,
                 harness_root=harness_root,
                 runtime_files=[runtime_file_1, runtime_file_2],
-                persona_files=[persona_source],
             )
 
         self.assertEqual(result.fidelity, "flattened")
@@ -163,11 +139,6 @@ class TestCursorExportDelegation(unittest.TestCase):
             any("z-implement.mdc" in s for s in file_strs),
             f"runtime file z-implement.mdc missing from files: {result.files}",
         )
-        # Persona file must also be in the result.
-        self.assertTrue(
-            any("personas" in s and "assistant.mdc" in s for s in file_strs),
-            f"persona file assistant.mdc missing from files: {result.files}",
-        )
 
     def test_no_duplicate_paths(self):
         """No file path must appear more than once in ExportResult.files."""
@@ -178,13 +149,11 @@ class TestCursorExportDelegation(unittest.TestCase):
             harness_root = tmp_path / "harness"
 
             runtime_files = [dest / ".cursor" / "rules" / "z-plan.mdc"]
-            persona_source = harness_root / "personas" / "builtin" / "helper.md"
 
-            result, _ = self._run_export_with_mocks(
+            result = self._run_export_with_mocks(
                 dest=dest,
                 harness_root=harness_root,
                 runtime_files=runtime_files,
-                persona_files=[persona_source],
             )
 
         # All paths must be unique.
@@ -207,54 +176,10 @@ class TestCursorExportDelegation(unittest.TestCase):
                     dest=dest,
                     harness_root=harness_root,
                     runtime_files=[],
-                    persona_files=[],
                     runtime_warnings=["validation error: missing frontmatter in z-plan.mdc"],
                 )
 
         self.assertIn("validation error", str(ctx.exception).lower())
-
-    def test_persona_collision_raises_runtime_error(self):
-        """Persona name that collides with a command/agent/skill id must raise RuntimeError."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp).resolve()
-            dest = tmp_path / "dest"
-            dest.mkdir()
-            harness_root = tmp_path / "harness"
-            personas_dir = harness_root / "personas" / "builtin"
-            personas_dir.mkdir(parents=True, exist_ok=True)
-
-            # Persona file named "z-plan" — same as a runtime command id.
-            collision_persona = personas_dir / "z-plan.md"
-            collision_persona.write_text("---\nname: z-plan\n---\nPersona.\n", encoding="utf-8")
-
-            import z_harness_cli.adapters.cursor as _mod
-
-            # Runtime export emits z-plan.mdc (stem = "z-plan").
-            runtime_file = dest / ".cursor" / "rules" / "z-plan.mdc"
-            rt_result = RuntimeExportResult(
-                dest=dest,
-                files=[runtime_file],
-                fidelity="flattened",
-                warnings=[],
-            )
-            mock_export_fn = MagicMock(return_value=rt_result)
-            mock_cursor_export = MagicMock()
-            mock_cursor_export.export = mock_export_fn
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(harness_root / "z_harness_cli" / "adapters" / "cursor.py"),
-            ), patch.dict(
-                "sys.modules",
-                {
-                    "runtime.drivers.cursor.export": mock_cursor_export,
-                },
-            ), self.assertRaises(RuntimeError) as ctx:
-                self.adapter.export_payload(dest)
-
-        self.assertIn("collision", str(ctx.exception).lower())
-        self.assertIn("z-plan", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +188,7 @@ class TestCursorExportDelegation(unittest.TestCase):
 
 
 class TestCodexExportDelegation(unittest.TestCase):
-    """CodexAdapter.export_payload() delegates to runtime export() then persona loop."""
+    """CodexAdapter.export_payload() delegates to the runtime export()."""
 
     def setUp(self) -> None:
         from z_harness_cli.adapters.codex import CodexAdapter
@@ -274,16 +199,10 @@ class TestCodexExportDelegation(unittest.TestCase):
         dest: Path,
         harness_root: Path,
         runtime_files: list[Path],
-        persona_files: list[Path],
         runtime_warnings: list[str] | None = None,
     ):
-        """Helper: run export_payload with mocked runtime export + persona modules."""
+        """Helper: run export_payload with a mocked runtime export module."""
         import z_harness_cli.adapters.codex as _mod
-
-        personas_dir = harness_root / "personas" / "builtin"
-        personas_dir.mkdir(parents=True, exist_ok=True)
-        for pf in persona_files:
-            pf.write_text("---\nname: test\n---\nHello.\n", encoding="utf-8")
 
         rt_result = RuntimeExportResult(
             dest=dest,
@@ -295,15 +214,6 @@ class TestCodexExportDelegation(unittest.TestCase):
         mock_codex_export = MagicMock()
         mock_codex_export.export = mock_export_fn
 
-        def _fake_export_persona(persona_file, target_root):
-            out = Path(target_root) / "prompts" / "personas" / (persona_file.stem + ".md")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("fake persona content", encoding="utf-8")
-            return out.resolve()
-
-        mock_pe = MagicMock()
-        mock_pe.export_persona = _fake_export_persona
-
         with patch.object(
             _mod,
             "__file__",
@@ -312,15 +222,14 @@ class TestCodexExportDelegation(unittest.TestCase):
             "sys.modules",
             {
                 "runtime.drivers.codex.export": mock_codex_export,
-                "runtime.drivers.codex.persona_export": mock_pe,
             },
         ):
             result = self.adapter.export_payload(dest)
 
         return result
 
-    def test_files_contains_both_runtime_and_persona_files(self):
-        """export_payload() must include BOTH runtime-export files AND persona files."""
+    def test_files_contains_runtime_files(self):
+        """export_payload() must include the runtime-export files."""
         from z_harness_cli.adapters.codex_parity_gate import codex_export_fidelity
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -331,13 +240,11 @@ class TestCodexExportDelegation(unittest.TestCase):
 
             runtime_file_1 = dest / "prompts" / "z-plan.md"
             runtime_file_2 = dest / "AGENTS.md"
-            persona_source = harness_root / "personas" / "builtin" / "architect.md"
 
             result = self._run_export_with_mocks(
                 dest=dest,
                 harness_root=harness_root,
                 runtime_files=[runtime_file_1, runtime_file_2],
-                persona_files=[persona_source],
             )
 
         self.assertEqual(result.fidelity, codex_export_fidelity())
@@ -349,10 +256,6 @@ class TestCodexExportDelegation(unittest.TestCase):
         self.assertTrue(
             any("AGENTS.md" in s for s in file_strs),
             f"AGENTS.md missing from files: {result.files}",
-        )
-        self.assertTrue(
-            any("personas" in s and "architect.md" in s for s in file_strs),
-            f"persona file architect.md missing from files: {result.files}",
         )
 
     def test_runtime_warnings_raise_runtime_error(self):
@@ -368,7 +271,6 @@ class TestCodexExportDelegation(unittest.TestCase):
                     dest=dest,
                     harness_root=harness_root,
                     runtime_files=[],
-                    persona_files=[],
                     runtime_warnings=["validation error: bad prompt header"],
                 )
 
@@ -385,51 +287,6 @@ class TestCodexExportDelegation(unittest.TestCase):
 
         self.assertEqual(result.fidelity, codex_export_fidelity())
 
-    def test_persona_collision_in_prompts_namespace_raises(self):
-        """Persona name that collides with a prompt file id must raise RuntimeError.
-
-        Codex flat prompts/ is the real collision risk (MINOR-6).
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp).resolve()
-            dest = tmp_path / "dest"
-            dest.mkdir()
-            harness_root = tmp_path / "harness"
-            personas_dir = harness_root / "personas" / "builtin"
-            personas_dir.mkdir(parents=True, exist_ok=True)
-
-            # Persona named "z-implement" — same stem as a runtime command file.
-            collision_persona = personas_dir / "z-implement.md"
-            collision_persona.write_text("---\nname: z-implement\n---\nPersona.\n", encoding="utf-8")
-
-            import z_harness_cli.adapters.codex as _mod
-
-            runtime_file = dest / "prompts" / "z-implement.md"
-            rt_result = RuntimeExportResult(
-                dest=dest,
-                files=[runtime_file],
-                fidelity="flattened",
-                warnings=[],
-            )
-            mock_export_fn = MagicMock(return_value=rt_result)
-            mock_codex_export = MagicMock()
-            mock_codex_export.export = mock_export_fn
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(harness_root / "z_harness_cli" / "adapters" / "codex.py"),
-            ), patch.dict(
-                "sys.modules",
-                {
-                    "runtime.drivers.codex.export": mock_codex_export,
-                },
-            ), self.assertRaises(RuntimeError) as ctx:
-                self.adapter.export_payload(dest)
-
-        self.assertIn("collision", str(ctx.exception).lower())
-        self.assertIn("z-implement", str(ctx.exception))
-
 
 # ---------------------------------------------------------------------------
 # Antigravity adapter — export delegation tests
@@ -437,7 +294,7 @@ class TestCodexExportDelegation(unittest.TestCase):
 
 
 class TestAntigravityExportDelegation(unittest.TestCase):
-    """AntigravityAdapter.export_payload() delegates to runtime export() then persona loop."""
+    """AntigravityAdapter.export_payload() delegates to the runtime export()."""
 
     def setUp(self) -> None:
         from z_harness_cli.adapters.antigravity import AntigravityAdapter
@@ -448,16 +305,10 @@ class TestAntigravityExportDelegation(unittest.TestCase):
         dest: Path,
         harness_root: Path,
         runtime_files: list[Path],
-        persona_files: list[Path],
         runtime_warnings: list[str] | None = None,
     ):
-        """Helper: run export_payload with mocked runtime export + persona modules."""
+        """Helper: run export_payload with a mocked runtime export module."""
         import z_harness_cli.adapters.antigravity as _mod
-
-        personas_dir = harness_root / "personas" / "builtin"
-        personas_dir.mkdir(parents=True, exist_ok=True)
-        for pf in persona_files:
-            pf.write_text("---\nname: test\n---\nHello.\n", encoding="utf-8")
 
         rt_result = RuntimeExportResult(
             dest=dest,
@@ -469,15 +320,6 @@ class TestAntigravityExportDelegation(unittest.TestCase):
         mock_agy_export = MagicMock()
         mock_agy_export.export = mock_export_fn
 
-        def _fake_export_persona(persona_file, target_root):
-            out = Path(target_root) / ".agent" / "personas" / (persona_file.stem + ".md")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("fake persona content", encoding="utf-8")
-            return out.resolve()
-
-        mock_pe = MagicMock()
-        mock_pe.export_persona = _fake_export_persona
-
         with patch.object(
             _mod,
             "__file__",
@@ -486,15 +328,14 @@ class TestAntigravityExportDelegation(unittest.TestCase):
             "sys.modules",
             {
                 "runtime.drivers.antigravity.export": mock_agy_export,
-                "runtime.drivers.antigravity.persona_export": mock_pe,
             },
         ):
             result = self.adapter.export_payload(dest)
 
         return result
 
-    def test_files_contains_both_runtime_and_persona_files(self):
-        """export_payload() must include BOTH runtime-export files AND persona files."""
+    def test_files_contains_runtime_files(self):
+        """export_payload() must include the runtime-export files."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp).resolve()
             dest = tmp_path / "dest"
@@ -503,13 +344,11 @@ class TestAntigravityExportDelegation(unittest.TestCase):
 
             runtime_wf = dest / ".agent" / "workflows" / "z-plan.md"
             runtime_rule = dest / ".agent" / "rules" / "z-harness-reviewer.md"
-            persona_source = harness_root / "personas" / "builtin" / "researcher.md"
 
             result = self._run_export_with_mocks(
                 dest=dest,
                 harness_root=harness_root,
                 runtime_files=[runtime_wf, runtime_rule],
-                persona_files=[persona_source],
             )
 
         self.assertEqual(result.fidelity, "high")
@@ -522,10 +361,6 @@ class TestAntigravityExportDelegation(unittest.TestCase):
             any("z-harness-reviewer.md" in s for s in file_strs),
             f"runtime rule file missing from files: {result.files}",
         )
-        self.assertTrue(
-            any("personas" in s and "researcher.md" in s for s in file_strs),
-            f"persona file researcher.md missing from files: {result.files}",
-        )
 
     def test_no_duplicate_paths(self):
         """No file path must appear more than once in ExportResult.files."""
@@ -536,13 +371,11 @@ class TestAntigravityExportDelegation(unittest.TestCase):
             harness_root = tmp_path / "harness"
 
             runtime_files = [dest / ".agent" / "workflows" / "z-plan.md"]
-            persona_source = harness_root / "personas" / "builtin" / "helper.md"
 
             result = self._run_export_with_mocks(
                 dest=dest,
                 harness_root=harness_root,
                 runtime_files=runtime_files,
-                persona_files=[persona_source],
             )
 
         seen = set()
@@ -564,54 +397,10 @@ class TestAntigravityExportDelegation(unittest.TestCase):
                     dest=dest,
                     harness_root=harness_root,
                     runtime_files=[],
-                    persona_files=[],
                     runtime_warnings=["body is empty: .agent/workflows/z-plan.md"],
                 )
 
         self.assertIn("body is empty", str(ctx.exception))
-
-    def test_persona_collision_raises_runtime_error(self):
-        """Persona name that collides with a command/agent/skill id must raise RuntimeError."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp).resolve()
-            dest = tmp_path / "dest"
-            dest.mkdir()
-            harness_root = tmp_path / "harness"
-            personas_dir = harness_root / "personas" / "builtin"
-            personas_dir.mkdir(parents=True, exist_ok=True)
-
-            # Persona named "z-plan" — same as a workflow command id.
-            collision_persona = personas_dir / "z-plan.md"
-            collision_persona.write_text("---\nname: z-plan\n---\nPersona.\n", encoding="utf-8")
-
-            import z_harness_cli.adapters.antigravity as _mod
-
-            # Runtime emits a workflow file with stem "z-plan".
-            runtime_file = dest / ".agent" / "workflows" / "z-plan.md"
-            rt_result = RuntimeExportResult(
-                dest=dest,
-                files=[runtime_file],
-                fidelity="high",
-                warnings=[],
-            )
-            mock_export_fn = MagicMock(return_value=rt_result)
-            mock_agy_export = MagicMock()
-            mock_agy_export.export = mock_export_fn
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(harness_root / "z_harness_cli" / "adapters" / "antigravity.py"),
-            ), patch.dict(
-                "sys.modules",
-                {
-                    "runtime.drivers.antigravity.export": mock_agy_export,
-                },
-            ), self.assertRaises(RuntimeError) as ctx:
-                self.adapter.export_payload(dest)
-
-        self.assertIn("collision", str(ctx.exception).lower())
-        self.assertIn("z-plan", str(ctx.exception))
 
 
 
@@ -709,32 +498,6 @@ class TestOmpExportDelegation(unittest.TestCase):
 
         self.assertIn("collision", str(ctx.exception).lower())
 
-    def test_real_runtime_collision_reaches_adapter_as_runtime_error(self):
-        import z_harness_cli.adapters.omp as _mod
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp).resolve()
-            dest = tmp_path / "dest"
-            dest.mkdir()
-            harness_root = tmp_path / "harness"
-
-            skill = harness_root / "skills" / "z-plan" / "SKILL.md"
-            skill.parent.mkdir(parents=True, exist_ok=True)
-            skill.write_text("---\nname: z-plan\n---\nSkill.\n", encoding="utf-8")
-
-            persona = harness_root / "personas" / "builtin" / "z-plan.md"
-            persona.parent.mkdir(parents=True, exist_ok=True)
-            persona.write_text("---\nname: z-plan\n---\nPersona.\n", encoding="utf-8")
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(harness_root / "z_harness_cli" / "adapters" / "omp.py"),
-            ), self.assertRaises(RuntimeError) as ctx:
-                self.adapter.export_payload(dest)
-
-        self.assertIn("collision", str(ctx.exception).lower())
-        self.assertIn("z-plan", str(ctx.exception))
 
 # ---------------------------------------------------------------------------
 # Integration: verify ExportResult.fidelity is preserved per host
@@ -754,7 +517,7 @@ class TestFidelityPreserved(unittest.TestCase):
             dest = tmp_path / "dest"
             dest.mkdir()
             harness_root = tmp_path / "harness"
-            (harness_root / "personas" / "builtin").mkdir(parents=True, exist_ok=True)
+            harness_root.mkdir(parents=True, exist_ok=True)
 
             rt_result = RuntimeExportResult(
                 dest=dest, files=[], fidelity=fidelity, warnings=[]
@@ -807,68 +570,6 @@ class TestFidelityPreserved(unittest.TestCase):
         expected = omp_export_fidelity()
         result = self._minimal_export(OmpAdapter(), "omp", "native")  # exporter claims native
         self.assertEqual(result.fidelity, expected)  # adapter uses gate value
-
-
-class TestRealPersonaExportRegression(unittest.TestCase):
-    """Regression for the personas/builtin/ glob bug.
-
-    The CLI adapters globbed ``personas/*.md`` (non-recursive) while persona
-    sources live in ``personas/builtin/*.md`` (moved there by the
-    personas-and-roles reorg). Fresh exports therefore emitted ZERO personas,
-    silently — the committed exports/ retained stale pre-reorg personas, masking
-    it until a regen. The other delegation tests mock ``export_persona`` and so
-    never exercised the real glob against the real personas/ tree; this one runs
-    each real adapter end-to-end and asserts every builtin persona is exported.
-    """
-
-    def _expected_builtin_count(self) -> int:
-        repo_root = Path(__file__).resolve().parents[2]
-        builtin = repo_root / "personas" / "builtin"
-        n = len(list(builtin.glob("*.md")))
-        self.assertGreater(n, 0, "no personas/builtin/*.md sources found in repo")
-        return n
-
-    @staticmethod
-    def _count_persona_outputs(dest: Path) -> int:
-        return sum(
-            1 for p in dest.rglob("*") if p.is_file() and "personas" in p.parts
-        )
-
-    def test_antigravity_exports_all_builtin_personas(self):
-        from z_harness_cli.adapters.antigravity import AntigravityAdapter
-
-        expected = self._expected_builtin_count()
-        with tempfile.TemporaryDirectory() as td:
-            dest = Path(td)
-            AntigravityAdapter().export_payload(dest)
-            self.assertGreaterEqual(self._count_persona_outputs(dest), expected)
-
-    def test_cursor_exports_all_builtin_personas(self):
-        from z_harness_cli.adapters.cursor import CursorAdapter
-
-        expected = self._expected_builtin_count()
-        with tempfile.TemporaryDirectory() as td:
-            dest = Path(td)
-            CursorAdapter().export_payload(dest)
-            self.assertGreaterEqual(self._count_persona_outputs(dest), expected)
-
-    def test_codex_exports_all_builtin_personas(self):
-        from z_harness_cli.adapters.codex import CodexAdapter
-
-        expected = self._expected_builtin_count()
-        with tempfile.TemporaryDirectory() as td:
-            dest = Path(td)
-            CodexAdapter().export_payload(dest)
-            self.assertGreaterEqual(self._count_persona_outputs(dest), expected)
-
-    def test_claude_exports_all_builtin_personas(self):
-        from z_harness_cli.adapters.claude import ClaudeAdapter
-
-        expected = self._expected_builtin_count()
-        with tempfile.TemporaryDirectory() as td:
-            dest = Path(td)
-            ClaudeAdapter().export_payload(dest)
-            self.assertGreaterEqual(self._count_persona_outputs(dest), expected)
 
 
 if __name__ == "__main__":

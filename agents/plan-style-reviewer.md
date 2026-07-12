@@ -52,7 +52,7 @@ voices_available: [claude] | [claude, codex] | [claude, codex, gemini] | ...
 
 Read all three inputs before forming any findings:
 
-1. STYLE.md at `style_path` in full. Note the rule IDs and their prose.
+1. STYLE.md at `style_path` in full. Note the rule IDs and their prose. If any task in the plan touches a `skills/*/SKILL.md` or `agents/*.md` path, also Read `SKILL-STYLE.md` (repo root) — the skill/agent-authoring contract — and enforce it under the style-drift category, citing the violated section number (e.g. `SKILL-STYLE.md:§2`).
 2. The concatenated plan at `plan_artifacts_path` in full. Track the running line number within each section so findings can cite `source_file: SPEC.md` with the correct in-file `line_start` / `line_end`.
 3. `dismissed_signatures.json` at `dismissed_signatures_path`. Schema: `{"signatures": [{"file": "...", "category": "...", "normalized_snippet": "...", "prior_run_id": "..."}, ...], "n_runs_scanned": N}`. If the file is missing or its `signatures` array is empty, proceed as if no dismissed signatures exist.
 

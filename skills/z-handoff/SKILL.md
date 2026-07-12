@@ -25,7 +25,7 @@ If `$ARGUMENTS` is non-empty, it overrides the auto-detected `next_step`. If emp
 
 ## Shared command-side checkpoint hook
 
-For explicit `/clear` + resume checkpoints, workflow skills should prefer `scripts/write-clear-checkpoint.sh` (or `/z-clear-checkpoint`) over open-coded local ack files. The shared hook wraps this handoff producer, preserves the existing `handoff.json` schema, and puts workflow resume metadata in the `clear_checkpoint_written` event plus an optional checkpoint state file.
+For explicit `/clear` + resume checkpoints, workflow skills should prefer `scripts/write-clear-checkpoint.sh` over open-coded local ack files. The shared hook wraps this handoff producer, preserves the existing `handoff.json` schema, and puts workflow resume metadata in the `clear_checkpoint_written` event plus an optional checkpoint state file.
 
 Common seam setup:
 

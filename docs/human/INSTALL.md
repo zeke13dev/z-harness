@@ -90,7 +90,7 @@ OMP is the public package/export target:
 z-harness export --host omp --surface prod --out ./temp/z-harness-omp --force
 ```
 
-Use `--surface prod` for public-beta OMP exports. It keeps `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`, while hiding dev-only experimental commands such as `/z-research`, `/z-map`, `/z-overnight`, `/z-attend`, and `z-axiom-*`.
+Use `--surface prod` for public-beta OMP exports. It keeps `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`, while hiding dev-only experimental commands such as `/z-research`, `/z-overnight`, `/z-attend`, and `z-axiom-*`.
 
 Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot remain explicit dev/advanced or export-only targets; they are not selected by installed prod `setup --target all` or prod export defaults. Codex is selected by prod defaults, but remains `flattened` rather than native.
 

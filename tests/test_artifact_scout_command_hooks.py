@@ -12,7 +12,6 @@ SCOUT_SKILLS = {
     "/z-audit-plan-style": "skills/z-audit-plan-style/SKILL.md",
     "/z-debug": "skills/z-debug/SKILL.md",
     "/z-research": "skills/z-research/SKILL.md",
-    "/z-uplift": "skills/z-uplift/SKILL.md",
     "/z-plan-split": "skills/z-plan-split/SKILL.md",
 }
 
@@ -24,7 +23,6 @@ FIRST_EXPENSIVE_BOUNDARY = {
     "/z-audit-plan-style": "**Voice availability pre-check:**",
     "/z-debug": "## Auto-bail thresholds",
     "/z-research": "## Phase 1 — Subcommand dispatch",
-    "/z-uplift": "## Phase 2 — Cross-cutting pass",
     "/z-plan-split": "## Phase 2 — Parallel cluster-planner dispatch",
 }
 
@@ -32,7 +30,6 @@ HARD_GATE_MARKERS = {
     "/z-plan": "## Pre-subagent cost gate (hard)",
     "/z-research": "## Phase 0.5 — Cost gate",
     "/z-audit-plan-style": "**STYLE.md hard gate:**",
-    "/z-uplift": "## STYLE.md gate",
     "/z-plan-split": "## Phase 1.5 — Pre-fanout cost gate",
 }
 

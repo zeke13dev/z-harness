@@ -16,7 +16,6 @@ from pathlib import Path
 
 PROD_HIDDEN_SKILLS = (
     "z-research",
-    "z-map",
     "z-explore",
     "z-overnight",
     "z-attend",
@@ -133,7 +132,6 @@ def run_smoke(cli: str, out_dir: Path) -> None:
     for rel in (
         Path("skills") / "z-research" / "SKILL.md",
         Path("skills") / "z-explore" / "SKILL.md",
-        Path("prompts") / "z-map.md",
         Path("prompts") / "z-axiom-scan.md",
         Path("rules") / "z-overnight.md",
         Path("agents") / "axiom-extractor.md",

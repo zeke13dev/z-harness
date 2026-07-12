@@ -16,7 +16,7 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-explore --depth=deep` and `/z-brainstorm` respectively. `/z-map` is legacy/compatibility naming only, not a current dispatch target.
+Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-explore --depth=deep` and `/z-brainstorm` respectively.
 
 **Cost warning:** this pipeline runs up to 3M tokens for sub-commands + 3M tokens for the synthesis panel (3 perspectives @ ~1M each) + 0.5M for the judge. Total: 3–6M tokens. The cost gate in Phase 0.5 always runs before dispatch.
 

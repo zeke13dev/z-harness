@@ -19,9 +19,8 @@ ephemeral:  A gitignored CLAUDE.md is written to the project root with the
 
 Export layout (claude plugin)
 -----------------------------
-Delegates to runtime/drivers/claude/persona_export.py::export_persona().
-The output is <dest>/personas/<name>.md — a flat Markdown file injected as a
-system-prompt prefix by the Claude subagent dispatcher.
+Claude Code runs the z-harness plugin in place (installed-plugin mode); there
+is no host-specific export payload to write.
 
 Command-capability matrix
 --------------------------
@@ -158,68 +157,22 @@ class ClaudeAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export personas to the Claude plugin layout under *dest*.
+        """Return a native (in-place) export result for Claude Code.
 
-        Delegates to ``runtime/drivers/claude/persona_export.py::export_persona()``
-        for each persona file found in the ``personas/`` directory at the
-        harness repo root.
-
-        The written layout is::
-
-            <dest>/personas/<name>.md
+        Claude Code runs the z-harness plugin in place (installed-plugin mode),
+        so there is no host-specific file payload to write.  Returns an empty
+        native ExportResult.
 
         Returns
         -------
         ExportResult
-            fidelity="native"; files lists relative paths under dest.
+            fidelity="native"; empty files list.
         """
-        dest = Path(dest)
-
-        # Locate the harness repo root (where personas/ lives).
-        harness_root = Path(__file__).parent.parent.parent.resolve()
-        # Shipped personas live in personas/builtin/ (the canonical builtin layer
-        # per resolve-persona.py); personas/ itself holds only README.md. Globbing
-        # personas/ directly matches zero persona files and exports no personas.
-        personas_dir = harness_root / "personas" / "builtin"
-
-        written: list[Path] = []
-        warnings: list[str] = []
-
-        if not personas_dir.is_dir():
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="native",
-                warnings=["personas/builtin/ directory not found; nothing exported"],
-            )
-
-        # Lazy import so the adapter can be imported without the runtime
-        # package in sys.path in environments where only z_harness_cli is
-        # installed.
-        try:
-            from runtime.drivers.claude.persona_export import export_persona
-        except ImportError as exc:
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="native",
-                warnings=[
-                    f"runtime.drivers.claude.persona_export not importable: {exc}"
-                ],
-            )
-
-        for persona_file in sorted(personas_dir.glob("*.md")):
-            try:
-                out_path = export_persona(persona_file, dest)
-                written.append(out_path.relative_to(dest))
-            except (ValueError, OSError) as exc:
-                warnings.append(f"Skipped {persona_file.name}: {exc}")
-
         return ExportResult(
-            dest=dest,
-            files=written,
+            dest=Path(dest),
+            files=[],
             fidelity="native",
-            warnings=warnings,
+            warnings=[],
         )
 
     # ------------------------------------------------------------------

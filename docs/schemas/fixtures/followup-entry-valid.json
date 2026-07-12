@@ -10,7 +10,7 @@
   "capture_head": "abc123def456abc1",
   "source_artifact": "z-harness/some-plan/archive/20260528T120000Z/task-T003/diff.patch",
   "prompt_page_link": "pages/20260528T123456Z-fix-stale-readme-badge.md",
-  "recommended_command": "/z-do \"update README badge URL\"",
+  "recommended_command": "/z-fix \"update README badge URL\"",
   "recommended_command_safe_to_retry": true,
   "cited_paths": ["README.md", "scripts/lint.sh"],
   "file_blob_hashes": {

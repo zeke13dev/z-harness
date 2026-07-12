@@ -1,16 +1,12 @@
 ---
 name: z-amend
-disable-model-invocation: false
 description: Amend an existing z-harness plan (INTENT.md, SPEC/PLAN/TASKS, or FIX.md) so a change is propagated consistently across all artifacts. In intent mode, re-opens the frozen contract and invalidates the current level's TASKS.md for regeneration. Preserves completed task state; adds/modifies/removes tasks as needed; optionally cross-consults if the amendment is non-obvious.
-argument-hint: <what to change about the plan> [--skip-user-gate]
-runtime: c1
-driver_features_required:
-  - subagent
-  - ask_user
-unsupported_driver_behavior: explicit_gate
+argument-hint: "<what to change about the plan>"
+audience: user
+driver_features_required: [subagent, ask_user]
 ---
 
-You are running the **z-harness `/z-amend`** pipeline.
+You are running **z-harness `/z-amend`** — surgical edits to an already-produced planning artifact set, propagated consistently across every downstream file.
 
 Task (from `$ARGUMENTS`):
 
@@ -21,11 +17,7 @@ $ARGUMENTS
      accept a text reply. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What amendment should I make to the plan?" before proceeding. Do not invent.
 
-This command modifies an **already-produced** planning artifact set. It does NOT do exploration / consult-everywhere / full premise check — that's `/z-plan`. It does the surgical work of changing one or more decisions / scope items and making sure every downstream artifact (SPEC.md, PLAN.md, TASKS.md, or FIX.md) reflects the change consistently.
-
-### `--skip-user-gate` flag
-
-When `--skip-user-gate` is present in the arguments, Phase 4 (user gate) is skipped. The amendment proceeds directly from Phase 3 (impact analysis) to Phase 5 (consult, if triggered) then Phase 6 (propagate edits). This flag is intended for callers that have already validated the amendment via cross-LLM review (e.g. `/z-review-all` auto-amend). **Never** pass this flag in standalone invocations — it exists only for programmatic consumers.
+This command does NOT do exploration / consult-everywhere / full premise check — that's `/z-plan`. It changes one or more decisions / scope items and makes sure every downstream artifact (SPEC.md, PLAN.md, TASKS.md, or FIX.md) reflects the change consistently.
 
 ## Phase 0 — Discover plan slug
 
@@ -39,26 +31,75 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option (annotate each with mode: `intent` if INTENT.md present and no SPEC.md, `full` if SPEC.md exists, `light` if only FIX.md). Set `Z_HARNESS_SLUG` to chosen.
    - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan`. Stop.
 3. From here on, **`$BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy).
-4. Detect **mode**:
+4. Detect and `export MODE=<intent|full|light>`:
    - `intent` if `$BASE/INTENT.md` exists and `$BASE/SPEC.md` does NOT exist.
    - `full` if `$BASE/SPEC.md` exists.
    - `light` if only `$BASE/FIX.md` exists.
 
 ## Phase 1 — Setup + telemetry
 
-1. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-amend-<slug>`
-2. `mkdir -p $BASE/archive/$RUN/transcripts`
-3. **Version stamp + log:**
+1. **Preflight ceremony (single call).** `scripts/z-preflight.sh` owns resolve/session-id/RUN-stamp/claim/register/run-brief-init/run_start/kernel-resolve, in that fixed order (contract: script header; LEDGER T005). `/z-amend` mutates plan artifacts — it claims (no `--no-claim`):
+   ```bash
+   # Capture BEFORE eval — $? after eval loses the script's exit-code contract.
+   PREFLIGHT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-preflight.sh" \
+     --command /z-amend --slug "$Z_HARNESS_SLUG" \
+     --intent "<verbatim amendment request — max 240 chars; not the command name alone>")"
+   PREFLIGHT_RC=$?
+   [ "$PREFLIGHT_RC" -eq 0 ] && eval "$PREFLIGHT_OUT"
+   ```
+   On success, `RUN`, `Z_HARNESS_PLAN_DIR`, `CURRENT_ARCHIVE_DIR`, `Z_HARNESS_SESSION_ID`, `CLAIM_HELD`, `REG_RC`, `KERNEL_PATH` are exported (script header is the source of truth). `mkdir -p "$CURRENT_ARCHIVE_DIR/transcripts"`. Run-brief is initialized as part of this call — profile `full`, artifact the amendment record:
+   ```bash
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/amendment.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="INTENT.md:SPEC.md:PLAN.md:FIX.md"
+   ```
+
+   **Standard contention/corrupt-lock/register-failure menu** (documented once in the `z-preflight.sh` header; `/z-plan` Setup step 2 is the canonical writer instance — this is z-amend's deviations only, SKILL-STYLE.md §2):
+   - **Contention (`PREFLIGHT_RC==10`)** — nothing was created. `AskUserQuestion` — proceed anyway / abort / pick a different plan.
+     - proceed anyway → re-run the SAME preflight call with `--no-claim` appended and continue uncoordinated; log an `amend_claim_override` event.
+     - abort → `exit 1`. (Nothing was ever created.)
+     - pick a different plan → loop back to Phase 0 once (at most one re-derive; if the new slug also contends, abort).
+   - **Corrupt lock (`PREFLIGHT_RC==11`)** — same shape; manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry). `AskUserQuestion` — abort (default) / proceed UNCOORDINATED (`--no-claim`; log an `amend_claim_corrupt_proceed` event).
+   - **Register failure (`REG_RC != 0` on `PREFLIGHT_RC==0`)** — graduated, not a hard stop (z-preflight.sh already warned on stderr); `RUN`/`Z_HARNESS_PLAN_DIR`/run-brief already exist. `AskUserQuestion` — proceed without coordination (continue; the claim is still held; skip heartbeats/deregister later) / abort (run **Run Brief — halt finalize** below with reason `active-plan registry register failed`, status `escalated`).
+
+2. **Log amend run start** (domain-specific fields the generic wrapper `run_start` event doesn't carry):
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
    v = json.loads(sys.argv[1]); v["amendment"] = sys.argv[2]; v["mode"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>" "<intent|full|light>")"
+   ' "$VERSION_BLOB" "<arguments>" "$MODE")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_run_start "$START_PAYLOAD"
    ```
-4. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+3. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+
+## Run Brief — halt finalize
+
+Every terminal halt after Phase 1's `z-preflight.sh` call has succeeded (i.e. `RUN` is exported) funnels through this same procedure — never a bespoke cleanup path (SKILL-STYLE.md §2). Set `<reason>` (outcome text) and `<status>` (`abandoned` | `escalated` | `schema_error`) at the call site, then run:
+
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review the amendment status and retry or revise", "command": null}
+JSON
+```
+
+<!-- include: _fragments/run-brief-finalize.md -->
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_run_end \
+  "$(printf '{"status":"%s","mode":"%s","tasks_added":0,"tasks_modified":0,"tasks_removed":0,"tasks_superseded":0,"consulted":false,"intent_reopened":%s,"lint_suppressed":%s}' \
+     "<status>" "$MODE" \
+     "$([ "$MODE" = "intent" ] && echo "true" || echo "false")" \
+     "$([ "${LINT_SUPPRESSED:-false}" = "true" ] && echo "true" || echo "false")")"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-amend --status aborted
+exit 1
+```
+
+When `amendment.md` is missing (halts before Phase 3 completes), the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
 
 ## Phase 2 — Read the current plan
 
@@ -106,7 +147,7 @@ Articulate, in plain prose, what the amendment changes. Write `$BASE/archive/$RU
 - **New tasks:** T0NN, T0NN+1, ... (next IDs after current max)
 - **Modified tasks:** T0NN (status `[ ]` → still `[ ]`, but acceptance/files/deps changed)
 - **Removed tasks:** T0NN (only if status `[ ]`; never remove `[x]`)
-- **Touched-but-completed tasks:** T0NN (status `[x]` — flag for user decision)
+- **Touched-but-completed tasks:** <T0NN, T0NN, ... (status `[x]` — flag for user decision) | none>
 
 ### FIX.md    (light mode only)
 - <which sections change: Problem / Root cause / Approach / Files / Acceptance>
@@ -122,14 +163,15 @@ Articulate, in plain prose, what the amendment changes. Write `$BASE/archive/$RU
 
 ## Phase 4 — User gate
 
-**If `--skip-user-gate` is present:** Skip this phase entirely. Strip the flag from `$ARGUMENTS`. Emit an `amend_user_gate_skipped` event:
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_user_gate_skipped \
-  '{"reason":"skip_user_gate_flag"}'
-```
-Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has already validated the amendment via cross-LLM review.
+Read the **Touched-but-completed tasks** line from `amendment.md` (Phase 3). That list — not a caller-supplied flag — decides whether the amendment needs human sign-off: an amendment that only touches `[ ]` tasks or plan-level sections carries no risk of silently retracting shipped work; one that touches a `[x]` task does.
 
-**Otherwise** (normal invocation):
+**If the list is `none` (empty):** auto-proceed straight to Phase 5 — no ask. Emit:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_user_gate_autoproceed \
+  '{"reason":"no_completed_tasks_touched"}'
+```
+
+**Otherwise** (one or more `[x]` tasks touched):
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the amendment
      approval question (Approve / Revise / Abandon) via their native channel and
@@ -138,12 +180,12 @@ Present `amendment.md` to the user as a conversational reply — **not** an `Ask
 
 - **Approve as drafted** → proceed to Phase 5
 - **Revise** (free-text) → loop back to Phase 3 with their tweak
-- **Abandon** → log `amend_run_end` with `status: abandoned`; exit
+- **Abandon** → run **Run Brief — halt finalize** above with reason `user abandoned amendment` and status `abandoned`
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the completed-task
      disposition question for each touched-but-completed task via their native channel.
      Silent omission is forbidden. -->
-If `Touched-but-completed tasks` is non-empty, present them conversationally — one short block per task with your recommended disposition and why — and ask the user to confirm or override each in their reply (not a separate `AskUserQuestion` popup per task). The dispositions per task are:
+Present the touched-but-completed tasks conversationally — one short block per task with your recommended disposition and why — and ask the user to confirm or override each in their reply (not a separate `AskUserQuestion` popup per task). The dispositions per task are:
 - **Add superseding task** (usually recommended)
 - **Re-open T0NN** (flip `[x]` → `[ ]`) — work needs to be redone
 - **Leave T0NN alone** — amendment doesn't actually contradict it
@@ -171,9 +213,9 @@ Agent(subagent_type="consultant-secondary", description="Amend consult (Codex) f
       prompt="<same body>")
 ```
 
-When both return: apply **one reason it might be wrong** to each recommendation. Synthesize. Update `amendment.md` with a `## Consult outcome` section.
+When both return: apply **one reason it might be wrong** to each recommendation. Synthesize. Update `amendment.md` with a `## Consult outcome` section. Set `CONSULTED=true`.
 
-If neither consult trigger fires, skip this phase entirely — the user already approved in Phase 4.
+If neither consult trigger fires, skip this phase entirely — the user already approved (or auto-proceeded) in Phase 4. `CONSULTED=false`.
 
 ## Phase 6 — Propagate edits
 
@@ -185,7 +227,7 @@ Now apply the amendment to the actual artifacts. Use `Edit` (not `Write`) so dif
    ```bash
    INTENT_SNAPSHOT="$(cat "$BASE/INTENT.md")"
    ```
-   If at any later point the user chooses "Abandon" (lint disposition or Phase 7 fatal inconsistency), restore the file before exiting:
+   If at any later point the user chooses "Abandon" (lint disposition or Phase 7 fatal inconsistency), restore the file before halting:
    ```bash
    # Restore on abort
    printf '%s' "$INTENT_SNAPSHOT" > "$BASE/INTENT.md"
@@ -229,11 +271,9 @@ Now apply the amendment to the actual artifacts. Use `Edit` (not `Write`) so dif
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" lint_suppressed \
        "$(printf '{"failures_count":%d,"run":"%s"}' "$(echo "$LINT_OUT" | grep -c '^LINE')" "$RUN")"
      ```
-   - **Abandon** → restore the pre-edit snapshot, then log `amend_run_end` with `status: abandoned`; exit:
+   - **Abandon** → restore the pre-edit snapshot, then run **Run Brief — halt finalize** above with reason `acceptance-criterion lint failures` and status `abandoned`:
      ```bash
      printf '%s' "$INTENT_SNAPSHOT" > "$BASE/INTENT.md"
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_run_end \
-       '{"status":"abandoned","reason":"lint_failures"}'
      ```
 
 4. **Preserve LEDGER.md.** Do NOT touch LEDGER.md. It is append-only (SPEC.md Invariant 3). Never rewrite, truncate, or edit it.
@@ -311,13 +351,7 @@ Run a self-check. Read each amended file fresh and verify:
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
       validate-intent "$BASE/INTENT.md"
     ```
-    If `validate-intent` exits non-zero (fatal schema error), restore the snapshot and surface the error:
-    ```bash
-    if [ "$VALIDATE_EXIT" != "0" ]; then
-      printf '%s' "$INTENT_SNAPSHOT" > "$BASE/INTENT.md"
-      # then surface to user via AskUserQuestion and log amend_run_end status:schema_error
-    fi
-    ```
+    If `validate-intent` exits non-zero (fatal schema error): restore `$INTENT_SNAPSHOT` to `$BASE/INTENT.md`, surface the error to the user via `AskUserQuestion`, and run **Run Brief — halt finalize** above with reason `INTENT.md schema validation failed` and status `schema_error`.
   - **Lint-suppression audit:** If `$LINT_SUPPRESSED=true`, confirm this is recorded in `events.jsonl` (the `lint_suppressed` event logged in Phase 6 step 3) and append a durable note to the `## Amendments` section of INTENT.md indicating criteria were left with lint warnings. Phase 8's summary to the user must also call out that lint was suppressed.
   - LEDGER.md (if present) is byte-for-byte identical to its pre-amendment state (preserved).
   - If TASKS.md exists, it contains `stale_reason: amended-intent` in frontmatter, and the frontmatter has no duplicate `stale_reason` keys (parse with `_parse_frontmatter`; if duplicates detected, surface as inconsistency).
@@ -331,23 +365,36 @@ Run a self-check. Read each amended file fresh and verify:
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the consistency
      error choice (Fix automatically / revise / abort) via their native channel.
      Silent omission is forbidden. -->
-If any check fails, do **not** silently fix — surface it to the user conversationally ("inconsistency found: <X>") with your recommendation, and ask how to proceed (fix automatically / revise / abort).
+If any check fails, do **not** silently fix — surface it to the user conversationally ("inconsistency found: <X>") with your recommendation, and ask how to proceed (fix automatically / revise / abort). On **abort**, run **Run Brief — halt finalize** above with reason `<the inconsistency>` and status `escalated`.
 
 ## Phase 8 — Finalize
 
-1. Log run end:
+1. **Run Brief finalize.** Set outcome/next, then include the shared fragment before teardown. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+   Build `$NEXT_JSON` from the counts below: intent mode → `{"label":"Re-freeze and generate the next task batch","command":"/z-execute"}`; full mode with any tasks added/modified → `{"label":"Execute the amended plan","command":"/z-execute"}`; otherwise `{"label":"Done — no follow-up required","command":null}`.
+
+   ```bash
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   bash "$RB_SH" set-section --run "$RUN" --section outcome \
+     --value "Amendment applied to ${Z_HARNESS_SLUG}. ${N_ADDED} tasks added, ${N_MOD} modified, ${N_REM} removed, ${N_SUP} superseded."
+   NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+   printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+   rm -f "$NEXT_JSON_FILE"
+   ```
+
+   <!-- include: _fragments/run-brief-finalize.md -->
+
+2. Log the domain-specific run end, then tear down (after the brief's `--require` gate; releases the claim, deregisters, emits the generic `run_end`):
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_run_end \
      "$(printf '{"status":"applied","mode":"%s","tasks_added":%d,"tasks_modified":%d,"tasks_removed":%d,"tasks_superseded":%d,"consulted":%s,"intent_reopened":%s,"lint_suppressed":%s}' \
         "$MODE" "$N_ADDED" "$N_MOD" "$N_REM" "$N_SUP" "$CONSULTED" \
         "$([ "$MODE" = "intent" ] && echo "true" || echo "false")" \
         "$([ "$LINT_SUPPRESSED" = "true" ] && echo "true" || echo "false")")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+     --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-amend --status complete
    ```
-2. Push-notify (if policy ≠ `off`): "Amendment applied to `<slug>`. <N> tasks added, <M> modified, <K> removed, <S> superseded."
-3. Brief summary to user (3-5 sentences): what changed, what's next.
-4. Recommend next step:
-   - **intent mode** → INTENT.md is now re-opened (`frozen_at: pending`). Run `/z-execute` to re-freeze and regenerate the next level's task batch from the amended INTENT.
-   - **full mode with new/modified `[ ]` tasks** → `/z-execute`
 
 ## Phase 9 — Elevation Proposer
 
@@ -452,25 +499,14 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Never delete or silently mutate a `[x]` task.** Supersede instead.
 - **Never reuse a task ID.** New tasks always get fresh IDs.
 - **Never rewrite an artifact wholesale with `Write`** when surgical `Edit` will do. Preserve byte-for-byte content outside the amendment scope.
-- **Never skip Phase 4 (user gate) when invoked standalone.** The `--skip-user-gate` flag may only be used by callers (e.g. `/z-review-all` auto-amend) that have already validated the amendment via cross-LLM review.
+- **Phase 4's gate is data-driven, not caller-controlled.** It auto-proceeds only when Phase 3's `Touched-but-completed tasks` list is empty; any `[x]` task in scope always forces the conversational Approve/Revise/Abandon gate. No flag bypasses it.
 - **Cross-LLM consult only when triggered** — amendments are surgical; full consult is overkill for "rename this field".
 - **If the amendment grows past ~30% of the plan** (e.g. >5 new tasks, or the core premise of SPEC.md changes), STOP and recommend `/z-plan` from scratch instead — at that point you're not amending, you're replanning.
 - **In intent mode: never touch LEDGER.md.** It is append-only (SPEC.md Invariant 3). Re-freeze happens on the next `/z-execute`, not here.
 - **In intent mode: re-open always sets `frozen_at: pending`.** Do not delete the field or set it to an empty string; `pending` is the signal T009's freeze idempotency check reads.
+- **No exit past the funnel.** Applied → Phase 8's teardown call; everything else after Phase 1's preflight → **Run Brief — halt finalize** above.
 - **No emojis** anywhere in artifacts.
 
 ---
 
-## Runtime contract conformance
-
-| Feature | Used | Gates |
-|---------|------|-------|
-| `subagent` | yes | Phase 5 consultant-primary and consultant-secondary Agent() calls |
-| `ask_user` | yes | Empty arguments gate; Phase 0 multiple-candidates slug selection; Phase 4 amendment approval; Phase 4 completed-task disposition; Phase 6 intent-mode lint failure disposition; Phase 7 consistency error choice; Phase 9 preference elevation proposal |
-| `skill_invoke` | no | — |
-
-Driver support requirements: see frontmatter `driver_features_required`.
-
-Non-supporting drivers **must surface and skip** any gated block — silent
-omission is forbidden. Each gated call site is annotated with a
-`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+Driver support requirements: see frontmatter `driver_features_required`. Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site carries its own `<!-- RUNTIME-GATE: ... -->` comment immediately before the call; that is the single source of truth (SKILL-STYLE.md §1 — the closing conformance table is retired for rewritten skills).

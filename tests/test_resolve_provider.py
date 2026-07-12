@@ -347,7 +347,7 @@ class TestModelsOverride(unittest.TestCase):
         # Must contain the standardised fail-loud message.
         self.assertIn("nonexistent-provider", result.stderr)
         self.assertIn("not found in providers.json", result.stderr)
-        self.assertIn("/z-providers-discover", result.stderr)
+        self.assertIn("scripts/discover-providers.py", result.stderr)
 
     def test_models_drift(self):
         """DRIFT: provider present but compose_argv precondition fails → fail-loud.

@@ -685,7 +685,7 @@
   "invariants": [
     "Consumer cannot self-promote verify->done without explicit completion_mode value",
     "verify->done is mutually exclusive: at most one of {human_confirmed, audit_confirmed, auto_closed_low_risk}",
-    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? -- no raw shell; /z-do is the shell escape",
+    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? -- no raw shell.",
     "depth <= 1 enforced at create time via Z_HARNESS_FOLLOWUP_CALLER_DEPTH env",
     "audit_confirmed requires git merge-base --is-ancestor capture_head verify_head to pass",
     "auto_close condition A requires diff_stat==0 AND no touched paths (binary/rename/mode-only does NOT qualify as noop)",

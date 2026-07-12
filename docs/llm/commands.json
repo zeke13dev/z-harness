@@ -1,18 +1,26 @@
 {
   "concept": "commands",
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-11",
   "covers_spec": "none",
   "source_file": [
     "skills/z-amend/SKILL.md",
+    "skills/z-attend/SKILL.md",
     "skills/z-audit-plan-style/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
     "skills/z-audit/SKILL.md",
+    "skills/z-axiom-approve/SKILL.md",
+    "skills/z-axiom-edit/SKILL.md",
+    "skills/z-axiom-list/SKILL.md",
+    "skills/z-axiom-reject/SKILL.md",
+    "skills/z-axiom-scan/SKILL.md",
     "skills/z-brainstorm/SKILL.md",
+    "skills/z-context-budget/SKILL.md",
+    "skills/z-debt/SKILL.md",
     "skills/z-debug/SKILL.md",
-    "skills/z-do/SKILL.md",
     "skills/z-doc-rationale/SKILL.md",
     "skills/z-execute/SKILL.md",
     "skills/z-explain/SKILL.md",
+    "skills/z-explore/SKILL.md",
     "skills/z-export/SKILL.md",
     "skills/z-fix/SKILL.md",
     "skills/z-followup-confirm/SKILL.md",
@@ -28,25 +36,21 @@
     "skills/z-init-docs/SKILL.md",
     "skills/z-learn/SKILL.md",
     "skills/z-maintain-docs/SKILL.md",
-    "skills/z-map/SKILL.md",
     "skills/z-mr-review/SKILL.md",
     "skills/z-overnight/SKILL.md",
     "skills/z-plan-split/SKILL.md",
     "skills/z-plan/SKILL.md",
-    "skills/z-providers-discover/SKILL.md",
     "skills/z-report/SKILL.md",
     "skills/z-research/SKILL.md",
     "skills/z-resume/SKILL.md",
     "skills/z-review-all/SKILL.md",
+    "skills/z-setup/SKILL.md",
     "skills/z-sharpen/SKILL.md",
-    "skills/z-skill-fix/SKILL.md",
     "skills/z-stats/SKILL.md",
     "skills/z-style-init/SKILL.md",
     "skills/z-suggest-memory/SKILL.md",
     "skills/z-test/SKILL.md",
-    "skills/z-update/SKILL.md",
-    "skills/z-uplift/SKILL.md",
-    "skills/z-where/SKILL.md"
+    "skills/z-update/SKILL.md"
   ],
   "confidence": "medium",
   "summary": "Slash-command contract catalogue covering explicit routing, z-plan's single-gate prose plan-brief + known-work DAG (work-graph.json), z-execute's INTENT-mode acceptance-evaluator/divergence-halt scheduler and native model routing, z-brainstorm/z-sharpen pre-planning, Hermes-marker integration (handoff/fanout/needs_input), and docs maintenance through doc-updater rather than ad hoc index edits.",
@@ -56,7 +60,7 @@
       "line": 1,
       "symbol": "z-amend",
       "kind": "module",
-      "summary": "Propagates approved changes through plan artifacts; `--skip-user-gate` for programmatic callers (e.g. `/z-review-all` auto-amend); Phase 9 elevation proposer after finalize."
+      "summary": "Propagates approved changes through plan artifacts; Phase 4 user gate is data-driven (auto-proceeds via `amend_user_gate_autoproceed` when Phase 3's Touched-but-completed-tasks list is empty — no `--skip-user-gate` flag; any `[x]` task in scope always forces the conversational Approve/Revise/Abandon gate). Phase 9 elevation proposer after finalize."
     },
     {
       "file": "skills/z-attend/SKILL.md",
@@ -84,7 +88,7 @@
       "line": 1,
       "symbol": "z-audit",
       "kind": "module",
-      "summary": "Read-only multi-dimension audits; Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (`scope_probe_skipped_fast_path`); `--scope-from` for HEAVY sub-flow fan-out; Phase 2a draws up to 4 distinct `audit_persona` personas (`personas.audit`, default ON); Phase 4a measured advisory consult arm (`personas.consult_eval`, default OFF). Active-plan registry lifecycle."
+      "summary": "Read-only multi-dimension audits; Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (`scope_probe_skipped_fast_path`); `--scope-from` for HEAVY sub-flow fan-out; Phase 2 dispatches one `auditor` subagent per selected dimension in parallel (persona-diversity rotation removed); Phase 4 unconditionally runs a bundled cross-LLM (`consultant-primary` + `consultant-secondary`) consult on findings. Active-plan registry lifecycle."
     },
     {
       "file": "skills/z-axiom-approve/SKILL.md",
@@ -126,7 +130,7 @@
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Cheap parallel ideation with conversational tail. Phase 0: shared z-sharpen component runs when `GRILL.md` is absent (wrapper not invoked; no auto-dispatch); NL count parse (WIDE_N, default 3; emits `count_parsed`); scope probe `per_vendor`/`per_framing` axis; wide\u00d7HEAVY suppression (D2). Phase 2a: 3 distinct `ideator` personas when `brainstorm.personas` ON. Phase 2c (WIDE_N>3): conversational cost gate; phased overflow waves (cap 3, anti-seed, distinct personas); `ideator-clusterer` (Haiku) collapses N framings\u2192K directions. Phase 3: ranked prose briefing + HARD end-turn guardrail (MUST NOT auto-decide). Phase 4 LIGHT/MEDIUM: discussion loop (ask/combine/re-spin cap 3/lock-in/abandon; `synthesized` default chosen_framing). Phase 4 HEAVY: ranked-pair briefing + end-turn."
+      "summary": "Cheap parallel ideation with conversational tail. Phase 0: shared z-sharpen component runs when `GRILL.md` is absent (wrapper not invoked; no auto-dispatch); NL count parse (WIDE_N, default 3; emits `count_parsed`); scope probe `per_vendor`/`per_framing` axis; wide×HEAVY suppression (D2). Phase 2a: always dispatches 3 fixed-vendor ideators in parallel (Claude general-purpose Sonnet, Codex via `consultant-secondary`, Gemini via `consultant-primary`) with byte-identical scaffolding — vendor diversity, not persona rotation, is the divergence source. Phase 2c (WIDE_N>3): conversational cost gate; phased overflow waves (cap 3, anti-seed, distinct vendor/model axes); `ideator-clusterer` (Haiku) collapses N framings→K directions. Phase 3: ranked prose briefing + HARD end-turn guardrail (MUST NOT auto-decide). Phase 4 LIGHT/MEDIUM: discussion loop (ask/combine/re-spin cap 3/lock-in/abandon; `synthesized` default chosen_framing). Phase 4 HEAVY: ranked-pair briefing + end-turn."
     },
     {
       "file": "skills/z-context-budget/SKILL.md",
@@ -147,14 +151,7 @@
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); 10-strategy Phase 2 feedback-loop escalation ladder; bisect at Phase 2.5; `repro_confidence` field; Phase 10 sequential AskUser loop capped at 3 candidates; emits `memory_review_terminal`. Active-plan registry lifecycle. Phases 3a/3b/7 use fixed 5-panel when `experiment.persona_rotation=true`; Phases 3a/3b draw distinct `consultant` personas when `personas.critique_panel` ON; Phase 7 fix-consult emits `selection_source=fixed_panel` for all arms (no persona prefix draw by design)."
-    },
-    {
-      "file": "skills/z-do/SKILL.md",
-      "line": 1,
-      "symbol": "z-do",
-      "kind": "module",
-      "summary": "**Deprecated compatibility wrapper.** Routes to `/z-plan --quick`; do not present it as the current tiny plan-free command. Keep only for historical/user muscle-memory references."
+      "summary": "Heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); 10-strategy Phase 2 feedback-loop escalation ladder; bisect at Phase 2.5; `repro_confidence` field; Phase 10 sequential AskUser loop capped at 3 candidates; emits `memory_review_terminal`. Active-plan registry lifecycle. Phases 3a/3b/7 dispatch a fixed consultant panel; Phase 7 fix-consult emits `selection_source=fixed_panel` for all arms."
     },
     {
       "file": "skills/z-doc-rationale/SKILL.md",
@@ -162,13 +159,6 @@
       "symbol": "z-doc-rationale",
       "kind": "module",
       "summary": "Tier 2 narrative doc command. Reads finalized `tier2-context.json` and produces ADRs, design rationale, tradeoff explanations, and migration guides. Memoized by hash of `tier2-context.json`."
-    },
-    {
-      "file": "skills/z-evaluate/SKILL.md",
-      "line": 1,
-      "symbol": "z-evaluate",
-      "kind": "module",
-      "summary": "Read-only single-phase command. Evaluates a completed z-harness session archive via `scripts/evaluate-session.py` for patterns worth preserving as memories or skills. Surfaces candidates to user with `/z-suggest-memory` recommendation."
     },
     {
       "file": "skills/z-explain/SKILL.md",
@@ -182,7 +172,7 @@
       "line": 1,
       "symbol": "z-explore",
       "kind": "module",
-      "summary": "Source/dev-only active depth-scaled codebase terrain discovery; excluded from prod release artifacts and MCP tool lists. `/z-map` is legacy source/dev compatibility only."
+      "summary": "Source/dev-only active depth-scaled codebase terrain discovery (587 lines); excluded from prod release artifacts and MCP tool lists. Depth modes: `quick` (default; 1-2 Haiku Explores, inline findings), `standard` (up to 3 Haiku Explores, persisted EXPLORE.md + surface-map.json), `deep` (up to 3 Haiku/Sonnet Explores, full research-draft + bundled cross-LLM critique + MAP.md). Single preflight call with `--no-claim` (SKILL-STYLE.md §2): `/z-explore` never edits the codebase (only its own terrain artifacts under `$Z_HARNESS_PLAN_DIR/`), so it runs the shared `z-preflight.sh` lifecycle minus the claim step — `plan-claim.sh acquire` is never invoked, so contention/corrupt-lock exits cannot occur here."
     },
     {
       "file": "skills/z-export/SKILL.md",
@@ -196,21 +186,21 @@
       "line": 1,
       "symbol": "z-fix",
       "kind": "module",
-      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check; `check-no-ask` halt branch emitting `fix_halt`. Advisory eval-reviewer (`personas.review_eval`, default ON)."
+      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check; `check-no-ask` halt branch emitting `fix_halt`. Full `z-preflight.sh`/`z-teardown.sh` lifecycle across 10 phases (a WRITE command — claims, no `--no-claim`). Phase 8 Codex review is a non-negotiable safety gate; the former persona-gated advisory eval-reviewer step was removed along with the personas subsystem."
     },
     {
       "file": "skills/z-followup-confirm/SKILL.md",
       "line": 1,
       "symbol": "z-followup-confirm",
       "kind": "module",
-      "summary": "verify\u2192done transition via human approval (`--via=human`) or 11-point audit evidence validation (`--via=audit --evidence=<path>`). Nest-guarded."
+      "summary": "verify→done transition via human approval (`--via=human`) or 11-point audit evidence validation (`--via=audit --evidence=<path>`). Nest-guarded."
     },
     {
       "file": "skills/z-followup-dismiss/SKILL.md",
       "line": 1,
       "symbol": "z-followup-dismiss",
       "kind": "module",
-      "summary": "Any-state \u2192 dismissed; requires `--reason`; terminal. Nest-guarded."
+      "summary": "Any-state → dismissed; requires `--reason`; terminal. Nest-guarded."
     },
     {
       "file": "skills/z-followup-list/SKILL.md",
@@ -259,21 +249,14 @@
       "line": 1,
       "symbol": "z-handoff",
       "kind": "module",
-      "summary": "Writes `handoff.json` (protocol-version 1.0/1.1, 7 fields: `protocol_version`, `timestamp`, `agent`, `slug`, `status`, `next_step`, `context_files`) for session continuity across `/clear` boundaries. Universal across pi, Claude Code, Codex CLI. Producer-side of the handoff-protocol schema. Phase 3b: when `HERMES_MARKER_FILE` is set, emits a `handoff_continue` marker via `emit-hermes-marker.sh --strict` (a genuine write failure surfaces and exits non-zero rather than stranding the session \u2014 this is what makes user-triggered `/z-handoff`, not just the automatic clear-checkpoint path, Hermes-consumable). Phase 5 always prints a fenced copy-paste resume block with the FULL untruncated `next_step` (not the old truncated 80-char summary line), shown whether or not Hermes is managing the session."
-    },
-    {
-      "file": "skills/z-clear-checkpoint/SKILL.md",
-      "line": 1,
-      "symbol": "z-clear-checkpoint",
-      "kind": "module",
-      "summary": "Writes watcher-readable `handoff.json`, preserves existing `SESSION.md`, and emits `clear_checkpoint_written` so Oh My Pi, Hermes, MCP, or future watchers can clear and resume."
+      "summary": "Writes `handoff.json` (protocol-version 1.0/1.1, 7 fields: `protocol_version`, `timestamp`, `agent`, `slug`, `status`, `next_step`, `context_files`) for session continuity across `/clear` boundaries. Universal across pi, Claude Code, Codex CLI. Producer-side of the handoff-protocol schema. Phase 3b: when `HERMES_MARKER_FILE` is set, emits a `handoff_continue` marker via `emit-hermes-marker.sh --strict` (a genuine write failure surfaces and exits non-zero rather than stranding the session — this is what makes user-triggered `/z-handoff`, not just the automatic clear-checkpoint path, Hermes-consumable). Phase 5 always prints a fenced copy-paste resume block with the FULL untruncated `next_step` (not the old truncated 80-char summary line), shown whether or not Hermes is managing the session."
     },
     {
       "file": "skills/z-execute/SKILL.md",
       "line": 1,
       "symbol": "z-execute",
       "kind": "module",
-      "summary": "Orchestrates task queue with fresh subagents, reviewers, auto memory review (Phase 9). Supports both `IMPLEMENT_MODE=legacy` (TASKS.md main loop) and `IMPLEMENT_MODE=intent` (known-work DAG scheduler over `work-graph.json`/`LEDGER.md` with a T024 acceptance-evaluator seam (`intent-schema.py evaluate-acceptance`) at every durable settle point, plus a `divergence_signal` halt that routes to `/z-amend --reopen-intent` when a settled frontier invalidates the frozen INTENT). Phase 0.0 active-plan registry lifecycle after structural validation; Phase 0.1 consumer check (emits `implement_halted_followup_running`). N=2 cross-cluster parallel dispatch requires BOTH `overlap_count==0` AND `workflow.hermes_enabled=true` (default false \u2192 serial); intra-level `workflow.intent_parallel_levels` parallelism is additionally gated on parseable per-sibling `**Files:**` scope, `workstreams.json scope_unknown:false`, disjoint file scope, and a fan-out cap of 3. Cycle-2 skip-on-clean-cycle-1; `check-no-ask` halt branch on second review failure emitting `task_halt`+`implement_end`. Implementer model resolved via native `[model_routing.implementer]`/`[model_classes]` routing (`runtime.dispatch.dispatcher.resolve_implementer_model`); emits `subagent_model_source/route/route_kind/override_applied/override_support` telemetry. REMOTE_VERIFY dispatch is per-task in legacy mode but coalesced to one `remote-runner` build per BFS level boundary in INTENT mode. Hermes-managed mode (`HERMES_MARKER_FILE` set): `resolve-question` gates emit a `needs_input` marker via `emit-hermes-marker.sh` instead of `AskUserQuestion`. Step 5.0 persona-rotation block: implementer draw; `personas.implementer_retry` knob. Canonical Advisory eval-reviewer shared snippet (`<!-- ADVISORY-EVAL-REVIEWER -->` anchor). Steps 6+7a consult-aware: `Z_HARNESS_CONSULT=off` \u2192 `self-reviewer` subagent, emitting `no_consult_dispatch`+`self_review_completed`; consult=on \u2192 dual reviewer (base codex + advisory random-arm when `personas.review_eval` ON). Phase 9: persists candidates to JSONL, emits `memory_review_complete`, no in-phase AskUser loop."
+      "summary": "Orchestrates task queue with fresh subagents, reviewers, auto memory review (Phase 9). Supports both `IMPLEMENT_MODE=legacy` (TASKS.md main loop) and `IMPLEMENT_MODE=intent` (known-work DAG scheduler over `work-graph.json`/`LEDGER.md` with a T024 acceptance-evaluator seam (`intent-schema.py evaluate-acceptance`) at every durable settle point, plus a `divergence_signal` halt that routes to `/z-amend --reopen-intent` when a settled frontier invalidates the frozen INTENT). Phase 0.0 active-plan registry lifecycle after structural validation; Phase 0.1 consumer check (emits `implement_halted_followup_running`). N=2 cross-cluster parallel dispatch requires BOTH `overlap_count==0` AND `workflow.hermes_enabled=true` (default false → serial); intra-level `workflow.intent_parallel_levels` parallelism is additionally gated on parseable per-sibling `**Files:**` scope, `workstreams.json scope_unknown:false`, disjoint file scope, and a fan-out cap of 3. Cycle-2 skip-on-clean-cycle-1; `check-no-ask` halt branch on second review failure emitting `task_halt`+`implement_end`. Implementer model resolved via native `[model_routing.implementer]`/`[model_classes]` routing (`runtime.dispatch.dispatcher.resolve_implementer_model`); emits `subagent_model_source/route/route_kind/override_applied/override_support` telemetry. REMOTE_VERIFY dispatch is per-task in legacy mode but coalesced to one `remote-runner` build per BFS level boundary in INTENT mode. Hermes-managed mode (`HERMES_MARKER_FILE` set): `resolve-question` gates emit a `needs_input` marker via `emit-hermes-marker.sh` instead of `AskUserQuestion`. Steps 6+7a consult-aware: `Z_HARNESS_CONSULT=off` → `self-reviewer` subagent, emitting `no_consult_dispatch`+`self_review_completed`; consult=on → base codex reviewer. Phase 9: persists candidates to JSONL, emits `memory_review_complete`, no in-phase AskUser loop."
     },
     {
       "file": "skills/z-improve/SKILL.md",
@@ -287,7 +270,7 @@
       "line": 1,
       "symbol": "z-init-docs",
       "kind": "module",
-      "summary": "Bootstraps two-tier human and LLM documentation; also creates repo-root `CONTEXT.md` (domain glossary) by default \u2014 `--no-glossary` to skip. Idempotent: re-run extends without clobbering user terms. RUNTIME-GATE before Explore and AskUser."
+      "summary": "Bootstraps two-tier human and LLM documentation; also creates repo-root `CONTEXT.md` (domain glossary) by default — `--no-glossary` to skip. Idempotent: re-run extends without clobbering user terms. RUNTIME-GATE before Explore and AskUser."
     },
     {
       "file": "skills/z-learn/SKILL.md",
@@ -304,13 +287,6 @@
       "summary": "Refreshes stale concept docs (applies by default; `--dry-run` to preview), keeping human docs, LLM concept JSON, and INDEX metadata synchronized through doc-updater proposals. `--glossary` flag also refreshes repo-root `CONTEXT.md`. Stops for confirmation only on genuine-risk signals (memories_lost mismatch, or audit reject/needs-review under `--audit`)."
     },
     {
-      "file": "skills/z-map/SKILL.md",
-      "line": 1,
-      "symbol": "z-map",
-      "kind": "module",
-      "summary": "Source/dev-only legacy compatibility wrapper. Delegates to `/z-explore --depth=deep`; excluded from prod release artifacts and MCP tool lists."
-    },
-    {
       "file": "skills/z-mr-review/SKILL.md",
       "line": 1,
       "symbol": "z-mr-review",
@@ -325,13 +301,6 @@
       "summary": "Source/dev-only unattended pipeline orchestrator; excluded from prod release artifacts and MCP tool lists. Chains sub-commands via `Z_HARNESS_NO_ASK=halt`; writes MORNING_REPORT.md on completion/halt."
     },
     {
-      "file": "skills/z-personas/SKILL.md",
-      "line": 1,
-      "symbol": "z-personas",
-      "kind": "module",
-      "summary": "Read-only persona registry inspector. Subcommands: `list`, `roles` (default), `validate`, `read <name>`, `where <name>`. Shows effective role bindings, enumerates persona files, validates registry, reads body, or locates a persona file. Never writes any file."
-    },
-    {
       "file": "skills/z-plan-split/SKILL.md",
       "line": 1,
       "symbol": "z-plan-split",
@@ -343,14 +312,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Default path is a conversational intent compiler: sharpen first (`GRILL.md`), ask before optional `/z-brainstorm`, draft and iterate `INTENT.md`, flag concerns/decisions plus optional audit-plan scan, then a single unified final-approval gate. `--full` remains the legacy SPEC.md + PLAN.md + TASKS.md compatibility path. Route checks and brainstorm/audit recommendations ask rather than auto-dispatch. Watcher-managed checkpoint seams use `check-compaction.sh` / `write-clear-checkpoint.sh` before high-context planning and before `/z-execute`. Final approval (Phase 5) renders one dense prose plan brief (intent, approach, high-impact decisions with tradeoffs, shortcuts, inlined `intent-readthrough-flags.md`, acceptance criteria) and asks ONE gate \u2014 approve / reject-shortcuts / amend / grill the draft / return to sharpen-brainstorm / stop \u2014 replacing the old per-decision and per-shortcut `AskUserQuestion` popups; a shortcut is approved only when the brief containing it is approved. \"Grill the draft\" runs an inline post-draft grill loop seeded from `intent-readthrough-flags.md` (emits `post_draft_grill`, writes `post-draft-grill.md`) before re-rendering the brief. On approval, generates `TASKS.md`, an initial append-only `work-graph.json` known-work DAG (nodes derived from TASKS.md `**Files:**`/`**Depends on:**`/`**Advances:**`, `level_hint` = dependency depth) for `/z-execute`'s INTENT-mode scheduler, task-to-intent mapping, workstreams/execution strategy, `HANDOFF.md`, and watcher-readable checkpoint metadata."
-    },
-    {
-      "file": "skills/z-providers-discover/SKILL.md",
-      "line": 1,
-      "symbol": "z-providers-discover",
-      "kind": "module",
-      "summary": "Probes PATH for LLM CLIs and writes `providers.json` with role bindings. Enforces `consultant_primary != consultant_secondary`. Atomic write via tmpfile+rename."
+      "summary": "Default path is a conversational intent compiler: sharpen first (`GRILL.md`), ask before optional `/z-brainstorm`, draft and iterate `INTENT.md`, flag concerns/decisions plus optional audit-plan scan, then a single unified final-approval gate. `--full` remains the legacy SPEC.md + PLAN.md + TASKS.md compatibility path. Route checks and brainstorm/audit recommendations ask rather than auto-dispatch. Watcher-managed checkpoint seams use `check-compaction.sh` / `write-clear-checkpoint.sh` before high-context planning and before `/z-execute`. Final approval (Phase 5) renders one dense prose plan brief (intent, approach, high-impact decisions with tradeoffs, shortcuts, inlined `intent-readthrough-flags.md`, acceptance criteria) and asks ONE gate — approve / reject-shortcuts / amend / grill the draft / return to sharpen-brainstorm / stop — replacing the old per-decision and per-shortcut `AskUserQuestion` popups; a shortcut is approved only when the brief containing it is approved. \"Grill the draft\" runs an inline post-draft grill loop seeded from `intent-readthrough-flags.md` (emits `post_draft_grill`, writes `post-draft-grill.md`) before re-rendering the brief. On approval, generates `TASKS.md`, an initial append-only `work-graph.json` known-work DAG (nodes derived from TASKS.md `**Files:**`/`**Depends on:**`/`**Advances:**`, `level_hint` = dependency depth) for `/z-execute`'s INTENT-mode scheduler, task-to-intent mapping, workstreams/execution strategy, `HANDOFF.md`, and watcher-readable checkpoint metadata."
     },
     {
       "file": "skills/z-report/SKILL.md",
@@ -378,14 +340,14 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final-gate cross-LLM review of cumulative diff vs plan contract. Phase 0 consumer check (emits `review_halted_followup_running`). Phase 3.7.5 routes non-halting findings to project sink (`followups_routed_to_sink`). Phase 6.5 unconditionally auto-amends every spec_gap via `/z-amend --skip-user-gate`; writes `auto-amend-log.md`; emits `auto_amend_applied`. Phase 6.6 renders unified amendment brief via `scripts/amendment-brief.py`; skipped when both lists empty. `check-no-ask` halt branch (`review_halt`) with `.review_state.json` resume at Phase 3.7. Phase 7: auto memory review, `memory_review_complete`, no in-phase AskUser loop."
+      "summary": "Final-gate cross-LLM review of cumulative diff vs plan contract. Phase 0 consumer check (emits `review_halted_followup_running`). Phase 3.7.5 routes non-halting findings to project sink (`followups_routed_to_sink`). Phase 6.5 unconditionally auto-amends every spec_gap via `/z-amend` (step 3's completed-task exclusion makes `/z-amend`'s own Phase 4 gate auto-proceed — no `--skip-user-gate` flag); writes `auto-amend-log.md`; emits `auto_amend_applied`. Phase 6.6 renders unified amendment brief via `scripts/amendment-brief.py`; skipped when both lists empty. `check-no-ask` halt branch (`review_halt`) with `.review_state.json` resume at Phase 3.7. Phase 7: auto memory review, `memory_review_complete`, no in-phase AskUser loop."
     },
     {
       "file": "skills/z-setup/SKILL.md",
       "line": 1,
       "symbol": "z-setup",
       "kind": "module",
-      "summary": "Configuration cockpit: inspect resolved state (default), run guided concern-grouped wizard (`wizard [--scope <name>]`), or apply a posture preset (`apply --posture <name>`). Delegates to `scripts/setup.py`. Seven wizard scopes: notifications, workflow, overnight, providers, personas, docs, memories."
+      "summary": "Configuration cockpit: inspect resolved state (default), run guided concern-grouped wizard (`wizard [--scope <name>]`), or apply a posture preset (`apply --posture <name>`). Delegates to `scripts/setup.py`. Seven wizard scopes: notifications, workflow, overnight, providers, docs, memories, axioms."
     },
     {
       "file": "skills/z-sharpen/SKILL.md",
@@ -395,18 +357,11 @@
       "summary": "Reusable bounded sharpening component plus slash-command wrapper. The component assesses clarity/alternatives, returns `proceed`, `sharpen_more`, or `route_to_brainstorm`, and can produce `GRILL.md`; callers such as `/z-brainstorm` reuse only that component. The wrapper owns empty-topic bootstrap, slug/collision handling, telemetry, final GRILL.md write, and advisory handoff. Neither surface auto-dispatches `/z-plan` or `/z-brainstorm`."
     },
     {
-      "file": "skills/z-skill-fix/SKILL.md",
-      "line": 1,
-      "symbol": "z-skill-fix",
-      "kind": "module",
-      "summary": "Diagnoses and patches misleading skill or command files."
-    },
-    {
       "file": "skills/z-stats/SKILL.md",
       "line": 1,
       "symbol": "z-stats",
       "kind": "module",
-      "summary": "Reports read-only run progress, timing, cost, next step, and recent memory-review activity (Phase 4b). Phase 0b prints resolved base, repo-id, and active-plan count from the registry unconditionally (not gated behind any env var)."
+      "summary": "Read-only 156-line report (target ≤ 2s wall time); absorbs the former `/z-where` command as Phase 1 (registry-wide header — always runs first, no slug needed). Every computed section shells out to `scripts/stats.py` (`header`/`active-plans`/`progress`/`walltime`/`tokens`/`coordination`/`halts`/`next-command` subcommands) plus `scripts/estimate-tokens.py subagent-costs` for the per-host cost breakdown — no inline jq/awk. Phase 1 prints resolved base, repo-id, and the active-plan table from the registry unconditionally (not gated behind any env var). The former Phase 4b memory-review-activity report (`review_agent_call` tally) was dropped in the skill-overhaul-phase1 rewrite — `/z-stats` no longer surfaces memory-review history."
     },
     {
       "file": "skills/z-style-init/SKILL.md",
@@ -420,7 +375,7 @@
       "line": 1,
       "symbol": "z-suggest-memory",
       "kind": "module",
-      "summary": "**Known-broken procedure body.** The `--source` prefix table and `--kind routing-preference` structured-write mode (target `docs/llm/workflow.json` / `docs/llm/workflow-<project-slug>.json`) are documented and intact, but the general interactive memory-authoring body was lost in the commands/\u2192skills/ migration: line ~60 reads \"Read and execute `skills/z-suggest-memory/SKILL.md` in full\" \u2014 a self-reference to its own file, not a working delegation target. Do not describe general (non-`--kind routing-preference`, non-`--from-candidate-json`) invocation as a working procedure until this is fixed."
+      "summary": "**Known-broken procedure body.** The `--source` prefix table and `--kind routing-preference` structured-write mode (target `docs/llm/workflow.json` / `docs/llm/workflow-<project-slug>.json`) are documented and intact, but the general interactive memory-authoring body was lost in the commands/→skills/ migration: line ~60 reads \"Read and execute `skills/z-suggest-memory/SKILL.md` in full\" — a self-reference to its own file, not a working delegation target. Do not describe general (non-`--kind routing-preference`, non-`--from-candidate-json`) invocation as a working procedure until this is fixed."
     },
     {
       "file": "skills/z-test/SKILL.md",
@@ -434,28 +389,7 @@
       "line": 1,
       "symbol": "z-update",
       "kind": "module",
-      "summary": "Thin host wrapper: runs the deterministic `z-harness update` / `python3 -m z_harness_cli update` CLI and surfaces its exact result verbatim. The skill body performs no manifest fetch, no schema validation, no tarball extraction, and no install-mode detection itself \u2014 the CLI (`z_harness_cli/commands/update.py`, `z_harness_cli/release.py`) owns all release-manifest and install-mode logic (wheel/uv upgrade, clean-checkout `git pull --ff-only`, or manifest-backed reinstall guidance for tarball/runtime installs)."
-    },
-    {
-      "file": "skills/z-uplift/SKILL.md",
-      "line": 1,
-      "symbol": "z-uplift",
-      "kind": "module",
-      "summary": "Tiered bulk codebase quality uplift: decompose, cross-cut, per-component audits, sequential implement. Slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check; `check-no-ask` halt branch emitting `uplift_halt`. MANIFEST.md single source of truth; resumable via `--retry-bailed`, `--refresh-component`."
-    },
-    {
-      "file": "skills/z-verify/SKILL.md",
-      "line": 1,
-      "symbol": "z-verify",
-      "kind": "module",
-      "summary": "Interactive understanding command. Reconstructs what a codebase feature actually does, cross-references against what was intended, and converges on a verified model. Delegates to `skills/z-verify/SKILL.md`. Supports `--slug`, `--path`, `--concept` targeting."
-    },
-    {
-      "file": "skills/z-where/SKILL.md",
-      "line": 1,
-      "symbol": "z-where",
-      "kind": "module",
-      "summary": "Read-only concurrent-run diagnostic. No LLM calls, no subagent dispatch, no writes. Phase 0 prints resolved base + repo-id. Phase 1 lists all active plans from registry table (slug, command, phase, branch, current_task, age, status). Phase 2 optionally shows path-overlap with a specific run-id (`--run-id <id>` or `Z_HARNESS_RUN_ID`). Robust to registry unavailability."
+      "summary": "Thin host wrapper: runs the deterministic `z-harness update` / `python3 -m z_harness_cli update` CLI and surfaces its exact result verbatim. The skill body performs no manifest fetch, no schema validation, no tarball extraction, and no install-mode detection itself — the CLI (`z_harness_cli/commands/update.py`, `z_harness_cli/release.py`) owns all release-manifest and install-mode logic (wheel/uv upgrade, clean-checkout `git pull --ff-only`, or manifest-backed reinstall guidance for tarball/runtime installs)."
     }
   ],
   "depends_on": [
@@ -475,40 +409,20 @@
     "Commands are Markdown procedure specs; planning, research, audit, and test commands do not write production code unless explicitly scoped to do so.",
     "Route checks collect deterministic signals first; planning-router is advisory only when deterministic signals conflict.",
     "Every route decision writes route-decision.md, emits plan_route_decision, asks the user, and never auto-executes the target command.",
-    "Primary routes are z-do, z-plan, z-plan-split, z-brainstorm, and z-sharpen; contextual exits include z-audit-plan, z-fix, z-debug, z-amend, and z-maintain-docs.",
+    "Primary routes are z-plan, z-plan-split, z-brainstorm, and z-sharpen; contextual exits include z-audit-plan, z-fix, z-debug, z-amend, and z-maintain-docs.",
     "z-audit-plan is valid only with existing plan artifacts and remains read-only.",
     "Review-family commands preserve evidence separately and promote only actionable findings into task-shaped artifacts consumed by z-execute --tasks.",
     "z-execute preserves fresh-context implementation by delegating tasks to implementer and reviewer subagents.",
-    "[registry] Run-creating commands (z-plan, z-execute, z-do, z-debug, z-audit, z-plan-split) register with active-plan-registry.py immediately after slug discovery and structural validation. Overlap is advisory (lockless safe); strict mode (Z_HARNESS_STRICT_OVERLAP=1) adds one hard gate on explicit x explicit exact path collision.",
+    "[registry] Run-creating commands (z-plan, z-execute, z-debug, z-audit, z-plan-split) register with active-plan-registry.py immediately after slug discovery and structural validation. Overlap is advisory (lockless safe); strict mode (Z_HARNESS_STRICT_OVERLAP=1) adds one hard gate on explicit x explicit exact path collision.",
     "[registry] FINALIZE_STATUS rule: after REG_RC==0, any run-ending halt sets FINALIZE_STATUS=aborted and calls deregister --status aborted before exiting. Normal completion deregisters with complete. If register failed (REG_RC==3 or nonzero), never call deregister.",
     "[registry] REG_RC==3 means register FAILED (no record written). Orchestrator logs registry_error, then: interactive -> AskUserQuestion proceed/abort; unattended -> proceed+log (or halt if Z_HARNESS_STRICT_OVERLAP=1). Any other nonzero REG_RC treated identically to REG_RC==3.",
     "[registry] OVL_RC==0 proceed silently. OVL_RC==10 (advisory) AskUserQuestion: proceed/wait/abort; under Z_HARNESS_NO_ASK proceed+log. OVL_RC==20 (blocking) hard halt. Any other nonzero log registry_error and proceed.",
-    "[registry] z-where is purely read-only: no events, no writes, no LLM calls. Always exits cleanly even when registry unavailable.",
-    "[registry] z-stats Phase 0b reads active-plan count unconditionally (NOT gated behind any env var). Fallback: print 'Active plans: (registry unavailable)' and continue.",
-    "[rotation] When experiment.persona_rotation=true, z-execute draws one implementer persona per attempt via random-for-role (or forced-control on cadence); dual reviewer (base_codex + random_arm advisory when personas.review_eval=true); ONE persona_attempt_outcome per attempt at close.",
-    "[rotation] personas.implementer_retry knob (default 'same'): 'same' reuses cycle-1 persona-draw.json anchor across all cycles; 'new' draws fresh persona to persona-draw-v<CYCLE>.json sidecar; cycle-1 anchor NEVER overwritten on retry.",
-    "[rotation] When experiment.persona_rotation=false, all rotation behavior is a complete no-op.",
-    "[rotation] z-plan and z-debug use fixed 5-panel (selection_source=fixed_panel) when experiment.persona_rotation=true; no random draw for consultant phases unless personas.critique_panel=true.",
-    "[rotation] z-plan Phases 3 and 7 draw independent persona sets (random-distinct-for-role consultant --count=5). Phase 3 draw MUST NOT be reused for Phase 7.",
-    "[rotation] z-debug Phases 3a and 3b share the same consultant persona draw (drawn once before Phase 3a, reused at 3b). Phase 7 fix-consult uses fixed_panel for all arms \u2014 no persona prefix draw by design.",
-    "[rotation] z-brainstorm Phase 2a draws 3 distinct ideator personas when brainstorm.personas=true (default ON). Knob OFF is a complete no-op.",
-    "[rotation] z-audit Phase 2a draws up to 4 distinct audit_persona personas (personas.audit, default ON). Underflow is graceful: shorter array returned, unfilled slots run vanilla.",
-    "[rotation] personas.consult_eval (advisory consult arm, default OFF) applies to z-audit Phase 4a. Advisory arm output NEVER merged into neutral synthesis.",
-    "[rotation] personas.review_eval (advisory eval-reviewer, default ON) applies to z-fix, z-do, and z-execute. Advisory reviewer verdict NEVER changes pass/fail outcome, NEVER triggers retry. Canonical implementation is the shared snippet in skills/z-execute/SKILL.md (<!-- ADVISORY-EVAL-REVIEWER --> anchor).",
-    "[rotation] persona_attempt_outcome status field uses 'done' (not 'ok').",
-    "[rotation] Random-arm reviewer verdict is advisory only \u2014 MUST NOT change halt/retry behavior. Only base_codex reviewer determines review outcome.",
+    "[registry] z-stats Phase 1 (registry-wide header) reads active-plan count unconditionally (NOT gated behind any env var). Fallback: print 'Active plans: (registry unavailable)' and continue.",
     "Long consult-heavy phases use explicit compaction breakpoints or resumable state files where specified.",
     "z-execute Phase 9 and z-review-all Phase 7 are soft auto-memory-review phases: all failure paths exit silently without halting. Phase 9 emits memory_review_complete (no in-phase AskUser loop).",
     "z-debug Phase 10 is a soft auto-memory-review phase that DOES have a sequential AskUser loop (capped at 3 candidates) and emits memory_review_terminal. Abandoned branch skips entirely.",
-    "z-uplift never writes production code directly; orchestrates audits via auditor subagents and delegates implementation to z-execute.",
-    "z-uplift gates on STYLE.md presence and doc-staleness before decomposition; it never auto-invokes z-style-init or z-maintain-docs.",
-    "z-uplift MANIFEST.md is the single source of truth for component state across phases and resumes; all state transitions are atomic via tmp-then-rename writes.",
-    "The cross-cutting synthetic component is excluded from Phase 3 per-component audit iteration and handled in Phase 5 only.",
-    "perf is excluded from z-uplift default dimensions to bound cost; must be added explicitly via --dimensions.",
     "z-style-init Mode A refuses if STYLE.md already exists; Mode B refuses if STYLE.md does not exist.",
     "z-export delegates all file I/O to adapter scripts; the command itself performs no writes.",
-    "z-providers-discover enforces consultant_primary != consultant_secondary before writing providers.json.",
-    "z-providers-discover writes atomically via tmpfile+rename.",
     "z-audit-plan-style requires STYLE.md at repo root; there is no --no-style escape.",
     "z-audit-plan-style is read-only; plan mutations happen only via /z-amend applied to surviving PLAN_STYLE_AUDIT.md findings.",
     "z-audit Phase 0 (scope-probe) is skipped when --scope-from is present; SKIP_PHASE_0=true is set before slug derivation, doc-fetcher, or run_start logging.",
@@ -520,29 +434,28 @@
     "All commands that fire notifications call scripts/config.py should-notify --event <type> and act only when the return is yes.",
     "Commands that send notifications or apply docs call scripts/config.py export-env during Setup before any phase runs.",
     "Resolver hooks (resolve-question) branch on {result: skip|prefill|ask}; a resolver error always falls back to asking the user normally.",
-    "The hard slug-collision check (PLAN.md/TASKS.md already in slug dir) runs unconditionally in z-plan, z-fix, and z-uplift before resolve-question is called.",
+    "The hard slug-collision check (PLAN.md/TASKS.md already in slug dir) runs unconditionally in z-plan and z-fix before resolve-question is called.",
     "z-audit-plan Phase 9, z-audit-plan-style Phase 9, and z-amend Phase 9 are soft elevation-proposer phases: if propose-prefs.py returns empty or nonzero exit, the phase is skipped silently.",
     "z-suggest-memory --kind routing-preference writes to docs/llm/workflow.json (global) or docs/llm/workflow-<project-slug>.json (project); file created with INDEX.json registration if absent; MEMORIES-FLAT.md regenerated after every write.",
     "z-plan step 9c is the sole consolidated freshness gate covering docs-staleness, research-staleness, and map-staleness in one AskUserQuestion.",
-    "z-research Phase 1 dispatches /z-map and /z-brainstorm in a single parallel message when both need to run. Sub-run identification uses the first event's kind field (map_run_start vs brainstorm_run_start) in events.jsonl.",
+    "z-research Phase 1 dispatches /z-explore --depth=deep and /z-brainstorm in a single parallel message when both need to run. Sub-run identification uses the first event's kind field in events.jsonl.",
     "z-execute N=2 cross-cluster parallel dispatch fires only when overlap_count==0 in SHARED-CONCERNS.md frontmatter AND workflow.hermes_enabled=true (default false -> always serial; this is Hermes-specific machinery, not a general optimization).",
     "z-execute cycle-2 skip-on-clean-cycle-1 fires when CYCLE==2 AND cycle-1 reviewer returned blockers=0 AND majors=0, regardless of why the implementer re-ran.",
     "check-no-ask is fail-closed: it returns halt|proceed and correctly handles Z_HARNESS_ASK_ALL=1 vs Z_HARNESS_NO_ASK=halt conflicts (exit 5). Exit 5 is a hard config-conflict error.",
-    "Seven commands are instrumented with check-no-ask halt branches: z-plan (plan_halt x2), z-fix (fix_halt), z-uplift (uplift_halt), z-audit-plan (audit_halt), z-audit-plan-style (plan_style_halt), z-review-all (review_halt + .review_state.json), z-execute (task_halt + implement_end on second review failure).",
+    "Six commands are instrumented with check-no-ask halt branches: z-plan (plan_halt x2), z-fix (fix_halt), z-audit-plan (audit_halt), z-audit-plan-style (plan_style_halt), z-review-all (review_halt + .review_state.json), z-execute (task_halt + implement_end on second review failure).",
     "z-overnight sets Z_HARNESS_NO_ASK=halt ONLY around each Skill call; the parent orchestrator's own AskUserQuestion prompts run with NO_ASK unset.",
     "z-review-all halted-state resume: if .review_state.json has halted: true AND halt_reason: no_ask_blocked, emit review_resume_from_halt and jump to Phase 3.7 re-run.",
     "Phase 0 consumer check in z-execute and z-review-all reads index.view.json as a dict with entries as an object (not a list); uses entries_obj.values(). A missing or malformed index.view.json yields RUNNING_COUNT=0.",
     "All six z-followup-* commands carry a nest guard (Z_HARNESS_FOLLOWUP_CALLER_DEPTH >= 1) that fires before any other logic.",
     "z-followup-next is the only followup command that acquires per-entry locks; it checks the global cross-tool lock before claiming.",
     "z-attend Invariant 1: any gate with no explicit halt category resolves to 'ask', never 'mechanical_proceed'. Gate policy lives in z-attend.md; sequencing mechanics live in chain-runner.sh (Invariant 2).",
-    "z-axiom-scan proposes only \u2014 never auto-approves. z-axiom-approve requires explicit user confirmation before any kernel regeneration.",
-    "z-personas is read-only \u2014 it never writes any file.",
-    "z-context-budget and z-evaluate are read-only single-phase commands; they perform no subagent dispatch and no code edits.",
+    "z-axiom-scan proposes only — never auto-approves. z-axiom-approve requires explicit user confirmation before any kernel regeneration.",
+    "z-context-budget is a read-only single-phase command; it performs no subagent dispatch and no code edits.",
     "z-debt is read-only unless --save flag is explicitly passed; no LLM analysis, no auto-upgrade, no subagent dispatch.",
     "z-setup delegates configuration state reads/writes to scripts/setup.py; the command itself does not directly mutate TOML.",
-    "z-review-all Phase 6.5 unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6 renders unified amendment brief via amendment-brief.py when either list is non-empty.",
+    "z-review-all Phase 6.5 unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend; step 3 already excludes any finding touching a [x] completed task, so /z-amend's own Phase 4 gate always finds an empty Touched-but-completed-tasks list there and auto-proceeds (data-driven, not a --skip-user-gate flag — that flag no longer exists); no per-finding popup; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6 renders unified amendment brief via amendment-brief.py when either list is non-empty.",
     "z-audit-plan Phase 5 default (source==none) is auto_split: INTENT-mode batches all spec_gap into ONE /z-amend call; legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose. force_ask fires only when amend-gate-decision.py returns force_ask.",
-    "Z_HARNESS_CONSULT=off is detected via resolve-provider.py returning the none sentinel \u2014 NOT by reading the env var directly. Commands that check for none: z-plan (consultant_primary, Phases 3+7), z-execute (reviewer, Steps 6+7a).",
+    "Z_HARNESS_CONSULT=off is detected via resolve-provider.py returning the none sentinel — NOT by reading the env var directly. Commands that check for none: z-plan (consultant_primary, Phases 3+7), z-execute (reviewer, Steps 6+7a).",
     "consult_skipped (z-plan) and no_consult_dispatch (z-execute) are distinct event kinds. consult_skipped carries {phase:3} or {phase:7}; no_consult_dispatch carries {id, reason, reviewer_replaced_by: self_review} per task-cycle.",
     "z-plan is a workflow.pre_run_cost_gate hard callsite before planning-router, intent-classifier, doc-fetcher, Explore, consultant panels, task-tree-generator, or any other expensive Agent dispatch.",
     "z-plan nonterminal cost-reduction attempts emit cost_gate_reestimate_attempt; exactly one terminal cost_gate_decision is emitted per run.",
@@ -565,54 +478,42 @@
     "z-plan-split supports Hermes multi-session fanout: when fanout is requested, Phase 5 ensures workstreams.json exists (scripts/generate-workstreams.py) and emits a fanout payload (slug, group_id, workstreams_path, handoff_paths, shared_concerns_path, ack_required, partial_tree) that Hermes consumes via MCP so_start_fanout to start one grouped child session per ready workstream (skipping failed workstreams by default).",
     "The canonical prod-visibility manifest implementation is runtime.release_surface as of the codex-prod-support/model-routing work; z_harness_cli.release_surface is now a thin re-export shim over it, not the canonical source. Codex is a core public export/release target alongside Claude and OMP (promoted from a non-core/advanced target).",
     "z-suggest-memory's --kind routing-preference structured-write mode and --source prefix conventions are intact and working; the general interactive/--from-candidate-json memory-authoring procedure body is a known-broken self-referential stub (the file instructs reading and executing itself) left over from the commands/->skills/ migration -- do not present general invocation as a working procedure.",
-    "Percentage-based adaptive context compaction (scripts/check-compaction.sh / scripts/write-clear-checkpoint.sh, percentage-threshold-evaluated seams rather than fixed points) is wired as a shared cross-command mechanism through z-plan, z-execute, z-audit, z-debug, z-review-all, z-test, z-uplift, z-research, z-explore, z-handoff, z-clear-checkpoint, and z-map (via its z-explore delegation)."
+    "Percentage-based adaptive context compaction (scripts/check-compaction.sh / scripts/write-clear-checkpoint.sh, percentage-threshold-evaluated seams rather than fixed points) is wired as a shared cross-command mechanism through z-plan, z-execute, z-audit, z-debug, z-review-all, z-test, z-research, z-explore, and z-handoff."
   ],
   "gotchas": [
     "[registry] z-plan Phase 0.0 ordering: register runs AFTER slug discovery, collision check, and resolver gate. Pre-validation register creates a zombie record with no deregister path.",
     "[registry] z-execute Phase 0.0 ordering: registration must occur AFTER Setup steps 1, 2, 2b, and 3. All tree-validation abort paths before Phase 0.0 have no record to deregister.",
     "[registry] scope-extractor subagent: update-scope returns 0 by design and self-logs registry_error on internal failure. Do NOT add redundant || log after the call.",
-    "[rotation] persona_attempt_outcome is emitted by the orchestrator at attempt close, not by the implementer subagent.",
-    "[rotation] personas.implementer_retry='same' (default): REUSE=1 set from cycle-1 anchor persona-draw.json. The cycle-1 anchor NEVER overwritten on retry.",
-    "[rotation] On retry, implementer_retry='new' uses --exclude so retry gets a different persona. Prior persona not guaranteed to be excluded when pool is large.",
-    "[rotation] z-debug Phase 7 fix-consult emits selection_source=fixed_panel for all arms even when experiment.persona_rotation=true \u2014 no persona prefix draw for Phase 7. Do not reuse the Phase 3a draw.",
-    "[rotation] z-plan Phases 3 and 7 draws are independent: each phase calls random-distinct-for-role consultant --count=5 separately. Phase 3 draw MUST NOT be forwarded to Phase 7.",
-    "[rotation] personas.consult_eval default is false (OFF). Unlike personas.review_eval (ON by default), must be explicitly enabled.",
-    "[rotation] personas.review_eval advisory arm fires ONLY when BOTH experiment.persona_rotation AND personas.review_eval are both true.",
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
     "z-execute --tasks derives BASE from the provided tasks file and bypasses normal slug/tree discovery.",
     "z-suggest-memory is a thin delegator; memory mutation lives in commands/z-suggest-memory.md.",
     "Plain z-maintain-docs applies refreshed docs by default; pass --dry-run to preview without writing.",
     "--from-candidate-json on z-suggest-memory accepts a file path or - (stdin); it is the automated path used by Phase 9/Phase 7/Phase 10 only.",
-    "z-execute Phase 9 does NOT present a sequential AskUserQuestion loop \u2014 it persists all candidates to JSONL and push-notifies the user. The 3-candidate per-run cap applies only to z-debug Phase 10's in-phase AskUser loop.",
+    "z-execute Phase 9 does NOT present a sequential AskUserQuestion loop — it persists all candidates to JSONL and push-notifies the user. The 3-candidate per-run cap applies only to z-debug Phase 10's in-phase AskUser loop.",
     "z-debug Phase 10 memory review is skipped entirely on the abandoned branch; no memory_review_terminal event is emitted.",
     "z-debug Phase 10 clears .notify-dedup-session at the start of each fresh invocation.",
     "z-debug Phase 2.5 bisect fast-path: all three gates must hold. Non-ok bisect returns fall through to Phase 3a silently.",
-    "z-uplift slug collision detection presents one AskUserQuestion per colliding slug before COMPONENTS.md is written.",
-    "z-uplift --refresh-component archives both REPORT.md and TASKS.md atomically before resetting the MANIFEST row; both files must exist or the command exits with an error.",
-    "z-uplift resume detection reads MANIFEST state before entering any phase; SKIP_TO_PHASE guards must be checked at the top of every skippable phase.",
     "z-style-init --amend Mode B exits early when DISMISSED_SIGNATURES is empty or N_CLUSTERS is 0 after Jaccard clustering with min-2-member filter.",
     "z-style-init Phase 4 parallel critique: if both consultants fail, critique is skipped with a log event and the draft proceeds to user review unmodified.",
-    "z-providers-discover last-assignment-wins for multi-CLI role selections; consultant_primary/consultant_secondary collision triggers a reprompt loop.",
-    "z-export --target=all runs cursor, codex, agy sequentially \u2014 not in parallel. A failed target does not abort subsequent targets.",
+    "z-export --target=all runs cursor, codex, agy sequentially — not in parallel. A failed target does not abort subsequent targets.",
     "z-audit-plan-style archives any existing PLAN_STYLE_AUDIT.md before overwriting; this archive is what extract-dismissals.py reads for prior dismissal signatures.",
     "z-audit --scope-from must be parsed BEFORE Setup (before slug derivation, doc-fetcher, or run_start logging).",
     "z-brainstorm HEAVY Phase 4 Back-loop is capped at 3 iterations; the fourth Back is treated as Abandon.",
-    "z-brainstorm scope-probe low-confidence results are silently downgraded to MEDIUM in v1a \u2014 no AskUser gate.",
+    "z-brainstorm scope-probe low-confidence results are silently downgraded to MEDIUM in v1a — no AskUser gate.",
     "Notification policy is now driven by config.py should-notify; do not check Z_HARNESS_NOTIFY_LEVEL directly.",
-    "The hard slug-collision check runs unconditionally before resolve-question in z-plan, z-fix, and z-uplift; a resolver result of 'skip' does NOT bypass the collision check.",
-    "z-plan step 9c to_command: null means the user chose to proceed with stale inputs or abandon \u2014 not a routing failure. /z-stats must not interpret null as an error.",
+    "The hard slug-collision check runs unconditionally before resolve-question in z-plan and z-fix; a resolver result of 'skip' does NOT bypass the collision check.",
+    "z-plan step 9c to_command: null means the user chose to proceed with stale inputs or abandon — not a routing failure. /z-stats must not interpret null as an error.",
     "z-execute cycle-2 skip-on-clean-cycle-1 fires regardless of why the implementer re-ran.",
-    "check-no-ask exit 5 means Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are both set \u2014 hard config conflict, not a normal halt.",
+    "check-no-ask exit 5 means Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are both set — hard config conflict, not a normal halt.",
     "z-overnight v1 known limit: only 12 AskUserQuestion callsites are instrumented for halt-from-ask. Run scripts/lint-askuser.sh --strict before launching a long overnight chain.",
-    "Phase 0 consumer check parses index.view.json as a dict (entries is an object keyed by entry-id, not a list). A list-style parse silently reports 0 running entries \u2014 the T100 fix uses entries_obj.values().",
+    "Phase 0 consumer check parses index.view.json as a dict (entries is an object keyed by entry-id, not a list). A list-style parse silently reports 0 running entries — the T100 fix uses entries_obj.values().",
     "z-followup-confirm --via=audit requires --evidence=<path>; --via=human is mutually exclusive with --evidence. Mixing is a hard argument-parse error.",
     "z-followup-refresh only accepts entries in blocked state; other block reasons are rejected with an explicit error.",
-    "Z_HARNESS_CONSULT=off is detected via resolve-provider.py returning the none sentinel \u2014 NOT by reading the env var directly.",
+    "Z_HARNESS_CONSULT=off is detected via resolve-provider.py returning the none sentinel — NOT by reading the env var directly.",
     "The self-reviewer subagent has no Edit or Write tools by design. Always use subagent_type='self-reviewer'.",
     "z-attend gate policy separation Invariant 2: sequencing/state mechanics live in chain-runner.sh; z-attend owns only the gate category posture. Never hardcode the step list in z-attend.",
-    "z-axiom-scan never auto-approves; the user must explicitly call z-axiom-approve. z-axiom-approve regenerates the kernel synchronously on approval \u2014 this is synchronous and may take a moment.",
-    "z-verify delegates fully to skills/z-verify/SKILL.md; the command file itself is a one-line dispatch.",
-    "z-context-budget and z-evaluate both register/deregister in the active-plan registry even though they are read-only \u2014 this is advisory-only registration for visibility.",
+    "z-axiom-scan never auto-approves; the user must explicitly call z-axiom-approve. z-axiom-approve regenerates the kernel synchronously on approval — this is synchronous and may take a moment.",
+    "z-context-budget registers/deregisters in the active-plan registry even though it is read-only — this is advisory-only registration for visibility.",
     "z-review-all Phase 6.5 auto-amends ALL spec_gap findings unconditionally (blocker/major/minor); only implementation_drift is left as candidate fixup tasks. Phase 6.6 is skipped when both corrections and approach_concerns lists are empty.",
     "z-audit-plan auto_split path (source==none): INTENT-mode batches ALL spec_gap into a single /z-amend re-freeze, not per-finding. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator.",
     "z-plan cost-reduction can only lower documented intent-depth/Phase-3 drivers and must re-run the hard gate; it does not mutate config or silently reduce doc_fetcher/explore/Phase-7/task-tree-generator dispatch.",
@@ -629,7 +530,10 @@
     "z-handoff Phase 3b's --strict flag on emit-hermes-marker.sh only affects behavior when HERMES_MARKER_FILE is set; unset HERMES_MARKER_FILE is always a no-op regardless of --strict, so this block is invisible to pi/Claude Code/Codex CLI runs.",
     "z-update's frontmatter/body no longer documents symlink-vs-tarball detection logic directly -- that entirely moved into z_harness_cli/commands/update.py and z_harness_cli/release.py; treat the skill file as a thin CLI-delegation wrapper, not a source of install-mode detection detail.",
     "z-plan-split's Hermes fanout block only fires when fanout is requested or a handoff_fanout marker will be emitted; ordinary (non-Hermes) z-plan-split runs never touch workstreams.json generation from this path.",
-    "The human doc's entry-points table and this JSON's entry_points currently omit z-reconcile and z-test-prune, both real skills present in skills/ -- they were outside this refresh's given source_files scope; flag for a follow-up doc-updater pass rather than treating their absence as confirmed non-existence."
+    "The human doc's entry-points table and this JSON's entry_points currently omit z-reconcile and z-test-prune, both real skills present in skills/ -- they were outside this refresh's given source_files scope; flag for a follow-up doc-updater pass rather than treating their absence as confirmed non-existence.",
+    "The personas subsystem (personas/ directory, resolve-persona.py/.sh, and per-command persona-rotation config keys like personas.audit/personas.consult_eval/personas.review_eval/brainstorm.personas) was fully excised in skill-overhaul-phase1: z-audit's dimension auditors, z-brainstorm's 3 fixed-vendor ideators (Claude/Codex/Gemini), z-execute (no more Step 5.0 persona-rotation block), and z-fix's Codex safety-gate review no longer have a persona-selection step. z-export/SKILL.md was NOT part of this rewrite and still describes exporting personas/ content — but the personas/ source directory itself has been deleted; this is a real, pre-existing inconsistency left for a follow-up doc-updater pass, not something this refresh corrected.",
+    "z-amend's --skip-user-gate flag no longer exists (neither does z-review-all's or z-audit-plan's use of it); the Phase 4 user gate is now purely data-driven off the Touched-but-completed-tasks list computed in Phase 3 — any [x]-task-touching amendment always forces the conversational gate, and callers cannot bypass it with a flag.",
+    "z-stats was rewritten to 156 lines with entirely renumbered phases (Phase 1 = registry-wide header, was Phase 0b) and now delegates everything to scripts/stats.py / scripts/estimate-tokens.py; the former Phase 4b memory-review-activity section (review_agent_call tally) was dropped, not renumbered — do not describe /z-stats as surfacing memory-review history."
   ],
   "memories": []
 }

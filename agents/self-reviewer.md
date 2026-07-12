@@ -90,7 +90,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
       {
         "priority": "P3",
         "name": "<short title for the follow-up>",
-        "recommended_command": "/z-do \"<command>\"",
+        "recommended_command": "/z-plan --quick \"<command>\"",
         "cited_paths": ["<path1>", "<path2>"],
         "recommended_command_safe_to_retry": false,
         "auto_close_eligible": false

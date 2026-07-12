@@ -15,7 +15,7 @@ A follow-up entry is a single work item with:
 
 - **Priority** (P0–P3)
 - **Name** — a short human-readable title
-- **Recommended command** — the z-harness command that would complete it (e.g., `/z-do "update README badge URL"`)
+- **Recommended command** — the z-harness command that would complete it (e.g., `/z-fix "update README badge URL"`)
 - **Cited paths** — files the follow-up concerns, used for staleness detection
 - **A prompt page** (`pages/<id>.md`) — the full context of what needs doing and why
 - **Lifecycle state** — where the entry sits in the `open → running → verify → done` flow

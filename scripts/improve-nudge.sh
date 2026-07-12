@@ -17,7 +17,7 @@
 #                  Z_HARNESS_BASE_DIR exactly like the writer.
 # [suggest-target] what to put after `/z-improve ` in the message (defaults to
 #                  <run-id>). Callers pass the form /z-improve expects, e.g.
-#                  "adhoc/$RUN" for /z-do runs.
+#                  "adhoc/$RUN" for legacy ad-hoc runs.
 set -uo pipefail
 
 RUN="${1:-}"

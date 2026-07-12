@@ -90,6 +90,7 @@ This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can co
      absent or irrelevant in INTENT mode. If the frozen INTENT snapshot is ambiguous about your
      task's scope, **STOP and return `status: "needs_clarification"`** with the specific question.
     If `intent_flags_path:`, `execution_strategy_path:`, or `workstreams_path:` are present, read the relevant sections after INTENT/LEDGER. These artifacts preserve the intent conversation and execution DAG; they are guardrails, not permission to add scope.
+    If the task's **Files** list includes any `skills/*/SKILL.md` or `agents/*.md` path, also Read `SKILL-STYLE.md` (repo root) — the skill/agent-authoring contract — and author those files to its sections, in both legacy and INTENT mode.
 3. **Premise check:**
    - **Legacy mode**: If during reading you realize the task is wrong, infeasible as specified, or
      would break an invariant in SPEC.md, return `status: "spec_problem"` with the issue. Do not

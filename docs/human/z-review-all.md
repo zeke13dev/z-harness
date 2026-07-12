@@ -1,6 +1,6 @@
 # z-review-all
 
-> Last updated: 2026-07-09
+> Last updated: 2026-07-11
 > Covers source: skills/z-review-all/SKILL.md, docs/human/z-review-all.md
 
 ## Overview
@@ -25,7 +25,7 @@ If there are no actionable findings or escalations, the command writes `shipped.
 
 ## Phase 6.5 and 6.6
 
-Phase 6.5 auto-applies every `amendment_proposal` regardless of severity. It uses `/z-amend --skip-user-gate`, logs `auto-amend-log.md`, emits `auto_amend_applied`, and never auto-implements code changes. Candidate fixups, superseding tasks, and premise-failure escalations remain for the user.
+Phase 6.5 auto-applies every `amendment_proposal` regardless of severity. It invokes `/z-amend "<amendment text>"` inline (same session, not a subagent). Step 3 of the phase already skips any finding that would touch a `[x]` completed task, so `/z-amend`'s own Phase 4 gate always finds an empty "Touched-but-completed tasks" list for these amendments and auto-proceeds straight to Phase 5 without asking — no caller flag is needed to suppress the prompt. Phase 6.5 logs `auto-amend-log.md`, emits `auto_amend_applied`, and never auto-implements code changes. Candidate fixups, superseding tasks, and premise-failure escalations remain for the user.
 
 Phase 6.6 builds `{corrections, approach_concerns}`, calls `scripts/amendment-brief.py`, and writes archive `amendment-brief.md` unless both lists are empty. Finalize prefers that brief over `findings.md` for run-brief approach bullets.
 
@@ -37,7 +37,7 @@ Phase 6.6 builds `{corrections, approach_concerns}`, calls `scripts/amendment-br
 - `skills/z-review-all/SKILL.md:651` — Phase 4 — Gemini/Codex final-review consultants.
 - `skills/z-review-all/SKILL.md:763` — finding promotion contract — required fields and Class enum.
 - `skills/z-review-all/SKILL.md:844` — Phase 6 — writes `REVIEW-TASKS.md` or clean `shipped.md`.
-- `skills/z-review-all/SKILL.md:910` — Phase 6.5 — auto-amends every amendable amendment proposal.
+- `skills/z-review-all/SKILL.md:910` — Phase 6.5 — auto-amends every amendable amendment proposal via `/z-amend` inline invocation, relying on `/z-amend`'s own empty-touched-completed-tasks gate to auto-proceed.
 - `skills/z-review-all/SKILL.md:981` — Phase 6.6 — amendment brief renderer integration.
 - `skills/z-review-all/SKILL.md:1065` — Phase 6.6 skip gate — skip only when corrections and approach_concerns are both empty.
 - `skills/z-review-all/SKILL.md:1094` — Phase 6.7 — finalizes tier2 context and significance gate.
@@ -49,7 +49,7 @@ Phase 6.6 builds `{corrections, approach_concerns}`, calls `scripts/amendment-br
 ## How it interacts with others
 
 - `z-execute` — produces the TASKS.md/LEDGER.md/SPEC.md (or frozen INTENT) that `/z-review-all` diffs against, recommends `/z-review-all` as its own next step, and later consumes `REVIEW-TASKS.md` via `/z-execute --tasks REVIEW-TASKS.md`.
-- `z-amend` — Phase 6.5 calls `/z-amend --skip-user-gate` inline to auto-apply `spec_gap` amendment proposals.
+- `z-amend` — Phase 6.5 invokes `/z-amend "<amendment text>"` inline (same session) to auto-apply `spec_gap` amendment proposals; since Phase 6.5 already excludes findings touching `[x]` completed tasks, `/z-amend`'s Phase 4 gate finds an empty "Touched-but-completed tasks" list and auto-proceeds without a user prompt (no `--skip-user-gate` flag — that flag was removed corpus-wide).
 - `amendment-brief` (`scripts/amendment-brief.py`) — Phase 6.6 renders `corrections` + `approach_concerns` into `amendment-brief.md`, shared with `z-audit-plan`.
 - `active-plan-registry` — the shared plan-discovery/base-ref machinery this command reuses in Phase 0/2.
 - `run-brief-contract` — Finalize and halt-finalize both render through the shared run-brief fragment; never author independent completion prose.
@@ -60,6 +60,7 @@ Phase 6.6 builds `{corrections, approach_concerns}`, calls `scripts/amendment-br
 ## Edge cases / gotchas
 
 - Phase 6.5's heading says "severity-based" but the current rule auto-amends blocker/major/minor amendment proposals alike — severity does not gate the decision.
+- Phase 6.5 no longer passes a `--skip-user-gate` flag to `/z-amend` (that flag was removed corpus-wide). The same no-prompt behavior is now achieved because Phase 6.5's step 3 already filters out any amendment touching a completed `[x]` task before invoking `/z-amend`, so `/z-amend`'s Phase 4 "Touched-but-completed tasks" gate is always empty for these calls and auto-proceeds.
 - A clean review writes `shipped.md` and omits `REVIEW-TASKS.md`; Phase 6.5/6.6 then have nothing to do and are skipped without logs.
 - `amendment-brief.md` lives under `archive/$RRUN/`, not `$BASE` directly.
 - Phase 7 memory review can dispatch `axiom-extractor` alongside `review-agent` when an `AXIOM_READY` line is present in `run-memory-review.sh` output; the axiom-extractor only proposes candidates, never auto-approves.

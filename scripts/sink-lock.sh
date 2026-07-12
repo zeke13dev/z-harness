@@ -401,28 +401,47 @@ _DAEMON_CODE = textwrap.dedent("""\
     def iso_now():
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Both hb.lock critical sections below block SIGTERM/SIGHUP for their
+    # duration. flock() locks are scoped to the open file description, not
+    # the process: if a signal arrived mid-critical-section and invoked
+    # _on_exit -> zero_lock_under_hblock while write_lock_json_under_hblock's
+    # own hb_fd was still open (lock still held on that fd), the handler's
+    # SECOND fd would flock(LOCK_EX) the same file and block forever behind
+    # its own process's first fd -- a self-deadlock that wedges the lock file
+    # for every future caller (heartbeat/release/check-stale all then hang
+    # too, since they also flock hb.lock). Blocking the signals here defers
+    # delivery until the critical section's own finally has already closed
+    # its fd, so _on_exit's flock is always uncontended when it finally runs.
     def write_lock_json_under_hblock(hb_lock_file, lock_path, holder, pid, started_at, last_heartbeat):
-        hb_fd = os.open(str(hb_lock_file), os.O_CREAT | os.O_RDWR, 0o644)
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
         try:
-            fcntl.flock(hb_fd, fcntl.LOCK_EX)
-            obj = {"holder": holder, "pid": pid,
-                   "started_at": started_at, "last_heartbeat": last_heartbeat}
-            tmp = lock_path.parent / (lock_path.name + f".tmp.{os.getpid()}")
-            tmp.write_text(json.dumps(obj) + "\\n", encoding="utf-8")
-            tmp.rename(lock_path)
+            hb_fd = os.open(str(hb_lock_file), os.O_CREAT | os.O_RDWR, 0o644)
+            try:
+                fcntl.flock(hb_fd, fcntl.LOCK_EX)
+                obj = {"holder": holder, "pid": pid,
+                       "started_at": started_at, "last_heartbeat": last_heartbeat}
+                tmp = lock_path.parent / (lock_path.name + f".tmp.{os.getpid()}")
+                tmp.write_text(json.dumps(obj) + "\\n", encoding="utf-8")
+                tmp.rename(lock_path)
+            finally:
+                os.close(hb_fd)
         finally:
-            os.close(hb_fd)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGHUP})
 
     def zero_lock_under_hblock(hb_lock_file, lock_path):
-        hb_fd = os.open(str(hb_lock_file), os.O_CREAT | os.O_RDWR, 0o644)
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
         try:
-            fcntl.flock(hb_fd, fcntl.LOCK_EX)
+            hb_fd = os.open(str(hb_lock_file), os.O_CREAT | os.O_RDWR, 0o644)
             try:
-                lock_path.write_text("", encoding="utf-8")
-            except OSError:
-                pass
+                fcntl.flock(hb_fd, fcntl.LOCK_EX)
+                try:
+                    lock_path.write_text("", encoding="utf-8")
+                except OSError:
+                    pass
+            finally:
+                os.close(hb_fd)
         finally:
-            os.close(hb_fd)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGHUP})
 
     flock_file_str, lock_path_str, hb_lock_file_str, holder_id, started_at, ready_w_fd_str = sys.argv[1:]
     ready_w = int(ready_w_fd_str)

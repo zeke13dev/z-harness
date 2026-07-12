@@ -1,15 +1,15 @@
 # Cost Estimation
 
-> Last updated: 2026-07-09
-> Covers source: scripts/estimate-tokens.py, scripts/pre-run-cost-gate.sh, scripts/token-cost-profiles.json, scripts/config.py, skills/z-research/SKILL.md, skills/z-uplift/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-audit/SKILL.md, skills/z-debug/SKILL.md, skills/z-plan/SKILL.md
+> Last updated: 2026-07-11
+> Covers source: scripts/estimate-tokens.py, scripts/pre-run-cost-gate.sh, scripts/token-cost-profiles.json, scripts/config.py, scripts/zplan-cost-gate-runtime.sh, _fragments/zplan-cost-gate-reference.md, skills/z-research/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-audit/SKILL.md, skills/z-debug/SKILL.md, skills/z-plan/SKILL.md
 
 ## Overview
 
 The cost-estimation subsystem provides LLM-free pre-run token-cost estimates for expensive z-harness commands. Before large commands run, the system estimates token consumption, renders a human-readable summary, and either asks the user to confirm, proceeds automatically, or halts — depending on the command's severity and the resolved `workflow.pre_run_cost_gate` preference.
 
-The design is intentionally DRY: one estimator (`estimate-tokens.py`), one gate helper (`pre-run-cost-gate.sh`), one event kind (`cost_gate_decision`), and one profile file (`token-cost-profiles.json`). No per-command cost logic is duplicated. The estimator also exposes a `subagent-costs` subcommand that reads `subagent_call` events from `metrics.jsonl` and computes per-host, per-model cost breakdowns used by `/z-stats`. All seven gating skills now live under `skills/<name>/SKILL.md` (the pre-Phase-D `commands/*.md` layout is gone); `/z-plan`'s hard gate carries the richest telemetry contract of the group and is documented in detail below.
+The design is intentionally DRY: one estimator (`estimate-tokens.py`), one gate helper (`pre-run-cost-gate.sh`), one event kind (`cost_gate_decision`), and one profile file (`token-cost-profiles.json`). No per-command cost logic is duplicated. The estimator also exposes a `subagent-costs` subcommand that reads `subagent_call` events from `metrics.jsonl` and computes per-host, per-model cost breakdowns used by `/z-stats`. All seven gating skills now live under `skills/<name>/SKILL.md` (the pre-Phase-D per-command markdown layout is gone); `/z-plan`'s hard gate carries the richest telemetry contract of the group and is documented in detail below. `/z-plan`'s mechanical cost-gate plumbing (dispatch computation, gate-JSON normalization, reduction mutation, decision-JSON building, halt-finalize) was extracted at T113 (skill-overhaul-phase1, criterion #9) into `scripts/zplan-cost-gate-runtime.sh` — see "Mechanical extraction" below.
 
-Hard-gated skills (`/z-plan`, `/z-research`, `/z-uplift`, `/z-plan-split`) also run Artifact Scout preflight around their hard gate (deterministic inventory pre-gate, optional `artifact-scout` Agent classifier post-gate). That mechanism is documented in its own concept doc — see "How it interacts with others" below — this doc only covers the boundary invariant it depends on: **no pre-gate Agent dispatch** of any kind.
+Hard-gated skills (`/z-plan`, `/z-research`, `/z-plan-split`) also run Artifact Scout preflight around their hard gate (deterministic inventory pre-gate, optional `artifact-scout` Agent classifier post-gate). That mechanism is documented in its own concept doc — see "How it interacts with others" below — this doc only covers the boundary invariant it depends on: **no pre-gate Agent dispatch** of any kind.
 
 ## The estimator: `scripts/estimate-tokens.py`
 
@@ -128,8 +128,6 @@ When `provider_input_tokens` / `provider_output_tokens` are present in an event 
   "profiles": {
     "z-research":    {"range": [3000000, 6000000], "gate": "hard",
                       "multipliers": {"map": 2000000, "brainstorm": 200000}},
-    "z-uplift":      {"range": [2000000, 8000000], "gate": "hard",
-                      "multipliers": {"per_component": 600000}},
     "z-plan-split":  {"range": [1500000, 5000000], "gate": "hard",
                       "multipliers": {"per_cluster": 700000}},
     "z-plan":        {"range": [300000, 900000], "gate": "hard",
@@ -218,7 +216,7 @@ The helper is fail-open at the estimator layer: estimator failures produce a zer
 
 ### `workflow.pre_run_cost_gate` (enum question_id)
 
-Controls how the AskUser cost gate behaves when the gate helper returns `disposition: ask`. Registered in `QUESTION_IDS` (`scripts/config.py`) with callsites `scripts/pre-run-cost-gate.sh`, `skills/z-research/SKILL.md`, `skills/z-uplift/SKILL.md`, `skills/z-plan-split/SKILL.md`, and `skills/z-plan/SKILL.md`.
+Controls how the AskUser cost gate behaves when the gate helper returns `disposition: ask`. Registered in `QUESTION_IDS` (`scripts/config.py`) with callsites `scripts/pre-run-cost-gate.sh`, `skills/z-research/SKILL.md`, `skills/z-plan-split/SKILL.md`, and `skills/z-plan/SKILL.md`.
 
 | Value | Behavior |
 |-------|----------|
@@ -252,7 +250,6 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 | Command | Severity | Gate fires on |
 |---------|----------|---------------|
 | `/z-research` | hard | Phase 0.5, after dispatch decision and deterministic scout inventory, before the post-gate `artifact-scout` classifier or child terrain (`/z-explore --depth=deep`, producing MAP.md) / `/z-brainstorm` dispatch |
-| `/z-uplift` | hard | Phase 1.5 pre-fanout gate after component count is known |
 | `/z-plan-split` | hard | Phase 1.5 pre-fanout gate after cluster confirmation |
 | `/z-plan` | hard | Pre-subagent gate (`skills/z-plan/SKILL.md`, "Pre-subagent cost gate (hard)"), after setup/claim/register, freshness checks, deterministic route preflight, and the explicit planning-mode gate; before deferred `planning-router`, `intent-classifier`, doc-fetcher, Explore, Phase 3/7 consultant panels, `task-tree-generator`, or any other Agent |
 | `/z-brainstorm` | soft | HEAVY classification path only (Phase 0 HEAVY fan-out, step 1a) |
@@ -269,6 +266,20 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 
 `/z-plan`'s hard gate (`skills/z-plan/SKILL.md`, "Pre-subagent cost gate (hard)" onward) has the richest telemetry contract of the seven gating skills, and its docs previously undersold it. Key mechanics:
 
+### Mechanical extraction: `scripts/zplan-cost-gate-runtime.sh` (T113)
+
+At T113 (skill-overhaul-phase1, criterion #9 — SKILL-STYLE.md's size tripwire), the mechanical (non-judgment) plumbing of `/z-plan`'s hard gate was extracted out of `skills/z-plan/SKILL.md` into `scripts/zplan-cost-gate-runtime.sh`, a 5-subcommand script called via `eval "$(bash scripts/zplan-cost-gate-runtime.sh <subcommand> ...)"`:
+
+- **`compute-dispatch --planning-mode M --intent-level-config L --docs-index-exists B`** — computes the seven `ZPLAN_DISPATCH_*` counts (and `ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX`) from planning mode / intent-level-config / docs-index-exists inputs; prints `export` lines.
+- **`call-gate --run RUN --dispatch KEY=VAL ...`** — calls `pre-run-cost-gate.sh`, normalizes the single JSON envelope, and applies the sanitized-error degrade (`Z_HARNESS_NO_ASK` set → `halt`, else → `ask`). Reused for BOTH the initial gate call and every reduction re-estimate (identical normalize/sanitize logic) — this is why it is a script and not inline bash per SKILL-STYLE.md §2's "second consumer" rule. Prints `export GATE_*` lines.
+- **`apply-reduction <force_l2_standard|force_l1_quick>`** — prints the authoritative-state export lines for one bounded cost-gate driver reduction; exits 2 on an unrecognized token.
+- **`build-decision-json CHOICE EST CONFIDENCE BASIS DISPOSITION RULE_ID RANGE_HIGH SOURCE ATTEMPTS REASON GATE_ID`** — prints the single-line `cost_gate_decision` JSON payload to stdout. SKILL.md's thin `emit_zplan_cost_gate_decision_once()` wrapper still owns the exactly-once guard and the actual `log-event.sh` call, so that guarantee stays directly inspectable in the skill file itself.
+- **`halt-finalize --run RUN --slug SLUG --reason REASON`** — sets the run-brief outcome/next sections for a cost-gate halt, then calls `scripts/z-teardown.sh --status aborted` (which itself performs release-before-deregister). Equivalent to the prior inline `zplan_cost_gate_halt_finalize` function body.
+
+Judgment-dense prose — the Intent-vs-Full mode gate narrative, the user-facing "Choose a cost-gate action" menu copy, the interactive AskUserQuestion loop, and the L3/L2/L1 downgrade semantics — stays inline in `skills/z-plan/SKILL.md`; only mechanical computation moved. The script's own header comment enumerates the behavioral invariants it must preserve verbatim: `cost_gate_decision` emitted exactly once per run (guard stays in SKILL.md), `cost_gate_reestimate_attempt` stays nonterminal (SKILL.md still owns that emission), raw helper JSON is never logged anywhere, and halt-finalize's release-before-deregister ordering is unchanged (owned by `z-teardown.sh`).
+
+A companion reference fragment, `_fragments/zplan-cost-gate-reference.md`, was extracted at the same T113 change and is pulled into `skills/z-plan/SKILL.md` via `<!-- include: _fragments/zplan-cost-gate-reference.md -->` at the terminal cleanup helper. It holds three lookup tables the model consults while running the cost-gate branch (never restated inline in SKILL.md): the field-by-field shape of `cost_gate_decision` vs `cost_gate_reestimate_attempt`, the branch → terminal-event → cleanup "Cleanup matrix", and the "Sanitized helper-error expansion" table (the only allowed outcomes once `GATE_SANITIZED_ERROR` is set).
+
 **Dispatch keys computed pre-gate:** `planning_mode_full`, `intent_level_depth` (0=quick/1=standard/2=deep — forced levels are charged exactly, `auto`/unknown charges deep conservatively), `doc_fetcher` (from the cheap `DOCS_LLM_INDEX_EXISTS` setup signal), `explore` (from `workflow.max_explore`, default 3), `phase3_consultants` (5, or 0 only when a pre-known L1 Quick level makes Phase 3 structurally unreachable), `phase7_consultants` (5, always conservative pre-gate), `task_tree_generator` (1 for intent-mode runs).
 
 **`cost_gate_decision` fields** (exactly one terminal event per `/z-plan` run, emitted via `emit_zplan_cost_gate_decision_once`):
@@ -281,13 +292,16 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
   "confidence":       "medium",
   "basis":            "static profile + dispatch(...)",
   "disposition":      "auto_proceed | ask | halt | unhandled_gate | <sanitized fallback>",
+  "choice_source":    "helper | user | policy | sanitized_helper_error | driver_interrupt",
+  "gate_id":          "<RUN>:z-plan:pre-subagent-cost-gate",
   "rule_id":          "<from config.py, when known>",
   "range_high":       900000,
-  "choice_source":    "helper | user | policy | sanitized_helper_error | driver_interrupt",
   "attempt_count":    0,
   "reason":           "gate_policy_halt | unhandled_gate | helper_invocation_failure | malformed_helper_json | missing_estimate_fields | user_abandoned | user_wait_interrupted (optional)"
 }
 ```
+
+`command`, `choice`, `estimated_tokens`, `confidence`, `basis`, `disposition`, and `choice_source` are unconditional fields printed by `scripts/zplan-cost-gate-runtime.sh build-decision-json` (as of the T113 extraction, `gate_id` — the same `<RUN>:z-plan:pre-subagent-cost-gate` value used to correlate nonterminal `cost_gate_reestimate_attempt` events — is unconditional too). `rule_id`, `range_high`, `attempt_count`, and `reason` are conditionally included only when their corresponding argument is non-empty/non-zero.
 
 **Nonterminal reduction attempts** emit `cost_gate_reestimate_attempt` instead (never `cost_gate_decision`):
 
@@ -307,9 +321,9 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 
 **Bounded reduction loop.** `ZPLAN_COST_REESTIMATE_MAX=2` — after two valid reduction attempts, the prompt drops all reduction options and offers only proceed-with-current-estimate or abandon. Reducible drivers are deliberately narrow: only `force_l2_standard` (downgrade to L2 Standard, `intent_level_depth=1`) and `force_l1_quick` (downgrade to L1 Quick, `intent_level_depth=0` and `phase3_consultants=0`) are offered, and only in `PLANNING_MODE=intent`. `doc_fetcher`, `task_tree_generator`, `phase7_consultants`, and `explore` are never reducible from this loop. If a reduction re-estimate refreshes `GATE_DISPOSITION=auto_proceed`, that is terminal (`choice_source=helper`) — no further prompt.
 
-**Terminal cleanup.** Every non-proceed terminal branch (`abandon`, `halt`, `unhandled_gate`, helper failure/malformed/missing-field no-ask halt, or interrupted wait) reuses Run Brief halt-finalize semantics (`zplan_cost_gate_halt_finalize`) before any claim release or registry deregister.
+**Terminal cleanup.** Every non-proceed terminal branch (`abandon`, `halt`, `unhandled_gate`, helper failure/malformed/missing-field no-ask halt, or interrupted wait) reuses Run Brief halt-finalize semantics before any claim release or registry deregister. `zplan_cost_gate_halt_finalize` is now a thin SKILL.md wrapper around `scripts/zplan-cost-gate-runtime.sh halt-finalize`, which sets the run-brief outcome/next sections and then calls `scripts/z-teardown.sh --status aborted` — release-before-deregister ordering is owned by `z-teardown.sh` itself, unchanged by the T113 extraction.
 
-This detail is specific to `/z-plan`; the other hard-gate skills (`z-research`, `z-uplift`, `z-plan-split`) use the simpler proceed/change-dispatch/abandon shape described in the `cost_gate_decision` event section below.
+This detail is specific to `/z-plan`; the other hard-gate skills (`z-research`, `z-plan-split`) use the simpler proceed/change-dispatch/abandon shape described in the `cost_gate_decision` event section below.
 
 ## The `cost_gate_decision` event (general shape)
 
@@ -363,9 +377,9 @@ The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs
 ## How it interacts with others
 
 - `config` — `_resolve_cost_gate` (`scripts/config.py:3274`) is the single authority for cost-gate disposition; `pre-run-cost-gate.sh` delegates to it via `check-no-ask`; `cost.token_budget` and `workflow.pre_run_cost_gate` are both defined in `config.py` DEFAULTS
-- `scripts` — `estimate-tokens.py` and `pre-run-cost-gate.sh` live in `scripts/`; these scripts share no state beyond subprocess invocation and archived JSON artifacts
-- `artifact-scout` — hard-gated skills (`z-plan`, `z-research`, `z-uplift`, `z-plan-split`) run Artifact Scout's deterministic inventory pre-gate and the classifier Agent post-gate; that mechanism has its own concept doc; this concept only owns the invariant that no Agent may dispatch before the hard gate resolves
-- `skills` — seven skills (`z-research`, `z-uplift`, `z-plan-split`, `z-plan`, `z-brainstorm`, `z-audit`, `z-debug`) call `pre-run-cost-gate.sh` and own AskUser + `cost_gate_decision` event logging
+- `scripts` — `estimate-tokens.py`, `pre-run-cost-gate.sh`, and `zplan-cost-gate-runtime.sh` live in `scripts/`; these scripts share no state beyond subprocess invocation and archived JSON artifacts. `zplan-cost-gate-runtime.sh` (5 subcommands: `compute-dispatch`, `call-gate`, `apply-reduction`, `build-decision-json`, `halt-finalize`) is `/z-plan`'s mechanical cost-gate plumbing, extracted from `skills/z-plan/SKILL.md` at T113 (skill-overhaul-phase1, criterion #9); `_fragments/zplan-cost-gate-reference.md` is the companion telemetry/cleanup-matrix reference fragment pulled into the same skill via `<!-- include: -->`. `scripts/render-cost-summary.py` is invoked by the halt-finalize path but lives outside this concept's tracked source files.
+- `artifact-scout` — hard-gated skills (`z-plan`, `z-research`, `z-plan-split`) run Artifact Scout's deterministic inventory pre-gate and the classifier Agent post-gate; that mechanism has its own concept doc; this concept only owns the invariant that no Agent may dispatch before the hard gate resolves
+- `skills` — six skills (`z-research`, `z-plan-split`, `z-plan`, `z-brainstorm`, `z-audit`, `z-debug`) call `pre-run-cost-gate.sh` and own AskUser + `cost_gate_decision` event logging
 - `subagent-telemetry` — `estimate-tokens.py subagent-costs` reads `subagent_call` events to produce the cost model output consumed by `/z-stats`
 
 ## Edge cases / gotchas
@@ -385,5 +399,7 @@ The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs
 - `_KIND_TO_COMMAND` maps generic `run_start`/`run_end` to `z-plan` as a best-effort default for legacy pre-T001 events; if pre-T001 z-research events appear in the tail window, attribution will be wrong for those runs only.
 - `/z-plan` dispatch defaults are fail-closed because route/depth/doc/explore/consult fan-out may not be fully known before the gate.
 - `zplan_cost_gate_halt_finalize` (inside `skills/z-plan/SKILL.md`) invokes `scripts/render-cost-summary.py` to render a cost summary from `events.jsonl` on halt; that renderer is a separate script outside this concept's tracked source files but is directly wired into the `/z-plan` cost-gate halt path.
+- The T113 extraction moved dispatch computation, gate-JSON normalization/sanitization, reduction-driver mutation, decision-JSON building, and halt-finalize plumbing into `scripts/zplan-cost-gate-runtime.sh`; `skills/z-plan/SKILL.md` retains only the judgment-dense prose (mode narrative, AskUser menu copy, interactive loop) plus thin wrapper functions (`emit_zplan_cost_gate_decision_once`, `zplan_apply_cost_reduction`, `zplan_cost_gate_halt_finalize`) that call the script's subcommands.
+- `build-decision-json`'s payload always includes `gate_id` (`<RUN>:z-plan:pre-subagent-cost-gate`) alongside the previously-documented fields; `rule_id`, `range_high`, `attempt_count`, and `reason` remain conditional (only emitted when their argument is non-empty/non-zero).
 - `subagent-costs` pricing rates are approximate for native Claude subagents (chars/4 → tokens); only external CLIs that print a usage line produce `provider_input_tokens` / `provider_output_tokens` for exact accounting.
 - The `_default_metrics_path()` function resolves the external base via `bash scripts/plan-path.sh base_dir` (subprocess, 10s timeout). If this fails, it falls back to the legacy in-repo `z-harness/metrics.jsonl` path. `Z_HARNESS_BASE_DIR` env override is the reliable escape hatch.

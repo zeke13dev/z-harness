@@ -13,7 +13,6 @@ def _active_docs_and_wrappers() -> list[Path]:
         REPO_ROOT / "AGENTS.md",
         REPO_ROOT / "README.md",
         REPO_ROOT / "Makefile",
-        REPO_ROOT / "skills" / "z-do" / "SKILL.md",
         REPO_ROOT / "skills" / "z-export" / "SKILL.md",
     ]
     paths.extend((REPO_ROOT / "docs" / "human").glob("*.md"))
@@ -64,12 +63,6 @@ def test_generated_export_mirrors_are_documented_as_scratch_not_release_source()
     assert not violations
 
 
-def test_z_do_is_only_a_minimal_deprecated_wrapper() -> None:
-    text = (REPO_ROOT / "skills" / "z-do" / "SKILL.md").read_text(encoding="utf-8")
-
-    assert "/z-plan --quick $ARGUMENTS" in text
-    assert "approach.md" in text
-    assert "premise.md" in text
-    assert "Phase 1" not in text
-    assert "Codex review" not in text
-    assert len(text.splitlines()) < 40
+def test_z_do_wrapper_is_deleted() -> None:
+    # /z-do was a deprecated pass-through wrapper; it is now fully removed.
+    assert not (REPO_ROOT / "skills" / "z-do" / "SKILL.md").exists()

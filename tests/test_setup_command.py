@@ -241,7 +241,63 @@ class InstallCommandProdScopeTest(unittest.TestCase):
         args = run_mock.call_args[0][0]
         self.assertIn("--target=all", args)
 
+    def _bootstrap_codex_plugin_manifest(self) -> None:
+        """Materialize REPO_ROOT/.codex-plugin/plugin.json for install.sh's
+        is_codex_plugin_source() compatibility check.
+
+        This dev monorepo checkout is gitignored for .codex-plugin/ (it is
+        generated at export/install time); a real prod-shaped codex-plugin
+        source clone ships that manifest already. Reuses the driver's own
+        manifest renderer rather than duplicating its logic.
+        """
+        from runtime.drivers.codex.export import _render_plugin_manifest
+
+        manifest_path = REPO_ROOT / ".codex-plugin" / "plugin.json"
+        if manifest_path.exists():
+            # A developer already generated this locally; leave it alone.
+            self._created_codex_plugin_manifest = False
+            return
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(_render_plugin_manifest(REPO_ROOT), encoding="utf-8")
+        self._created_codex_plugin_manifest = True
+
+    def _teardown_codex_plugin_manifest(self) -> None:
+        if getattr(self, "_created_codex_plugin_manifest", False):
+            manifest_path = REPO_ROOT / ".codex-plugin" / "plugin.json"
+            manifest_path.unlink(missing_ok=True)
+            try:
+                manifest_path.parent.rmdir()
+            except OSError:
+                pass  # directory not empty (e.g. other generated files present)
+
+    def _repo_clone_cwd(self) -> Path:
+        """Return a directory install.sh's is_repo_clone()/is_codex_plugin_source()
+        checks will recognize as a valid repo clone.
+
+        REPO_ROOT (this worktree checkout) has `.git` as a gitdir-pointer *file*,
+        not a directory -- a normal git-worktree invariant, not a defect. install.sh's
+        `[[ -d ".git" ]]` gate is correct and must not be weakened, so we must not
+        mutate the real `.git` (that would also corrupt this worktree). Instead,
+        materialize a disposable mirror: symlink every real top-level entry from
+        REPO_ROOT (including the now-materialized .codex-plugin/) except `.git`,
+        which becomes a plain, content-less directory -- install.sh only ever
+        checks `-d ".git"` in this code path and never runs a git command against it.
+        """
+        self._bootstrap_codex_plugin_manifest()
+        self.addCleanup(self._teardown_codex_plugin_manifest)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        mirror = Path(tmp.name)
+        for entry in REPO_ROOT.iterdir():
+            if entry.name == ".git":
+                (mirror / ".git").mkdir()
+            else:
+                (mirror / entry.name).symlink_to(entry)
+        return mirror
+
     def test_install_sh_prod_codex_repo_mode_is_valid(self) -> None:
+        repo_clone_cwd = self._repo_clone_cwd()
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
             fake_codex = Path(bin_dir) / "codex"
             fake_codex.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/codex-calls.log\"\n", encoding="utf-8")
@@ -254,7 +310,7 @@ class InstallCommandProdScopeTest(unittest.TestCase):
             }
             result = subprocess.run(
                 ["bash", "install.sh", "--target=codex"],
-                cwd=REPO_ROOT,
+                cwd=repo_clone_cwd,
                 env=env,
                 text=True,
                 capture_output=True,
@@ -265,6 +321,7 @@ class InstallCommandProdScopeTest(unittest.TestCase):
         self.assertIn("z-harness installed for Codex", result.stdout)
 
     def test_install_sh_prod_all_repo_mode_installs_claude_and_codex(self) -> None:
+        repo_clone_cwd = self._repo_clone_cwd()
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bin_dir:
             fake_codex = Path(bin_dir) / "codex"
             fake_codex.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/codex-calls.log\"\n", encoding="utf-8")
@@ -277,7 +334,7 @@ class InstallCommandProdScopeTest(unittest.TestCase):
             }
             result = subprocess.run(
                 ["bash", "install.sh", "--target=all"],
-                cwd=REPO_ROOT,
+                cwd=repo_clone_cwd,
                 env=env,
                 text=True,
                 capture_output=True,
@@ -316,7 +373,6 @@ class ProdSurfaceExportFilterTest(unittest.TestCase):
         self.assertIn("z-sharpen", skill_ids)
         self.assertIn("z-grill", skill_ids)
         self.assertNotIn("z-research", skill_ids)
-        self.assertNotIn("z-map", skill_ids)
         self.assertNotIn("z-explore", skill_ids)
         self.assertNotIn("z-overnight", skill_ids)
         self.assertNotIn("z-attend", skill_ids)
@@ -337,7 +393,6 @@ class ProdSurfaceExportFilterTest(unittest.TestCase):
 
         skill_ids = {entry["id"] for entry in sources["skills"]}
         self.assertIn("z-research", skill_ids)
-        self.assertIn("z-map", skill_ids)
         self.assertIn("z-explore", skill_ids)
         self.assertIn("z-overnight", skill_ids)
         self.assertIn("z-attend", skill_ids)

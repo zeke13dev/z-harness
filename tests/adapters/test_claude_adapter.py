@@ -2,7 +2,7 @@
 
 Covers:
   - detect(): installed/not-installed/version-parse
-  - export_payload(): personas/ absent → warnings; personas/ present → files list
+  - export_payload(): returns an empty native ExportResult (in-place plugin)
   - inject() ephemeral: writes CLAUDE.md, sets CLAUDE_PLUGIN_ROOT, manifest
   - inject() in_place: no files written, no CLAUDE_PLUGIN_ROOT injected
   - launch(): stubs pty_launch; verifies argv + env forwarding
@@ -157,133 +157,21 @@ class TestDetect(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestExportPayload(unittest.TestCase):
-    """export_payload() delegates to runtime.drivers.claude.persona_export."""
+    """export_payload() returns an empty native (in-place) ExportResult."""
 
-    def test_no_personas_dir_returns_warning(self):
-        """When the personas/ dir is absent, returns empty files + warning."""
+    def test_export_payload_returns_empty_native_result(self):
+        """Claude runs in place — export_payload writes nothing; fidelity='native'."""
         adapter = ClaudeAdapter()
         with tempfile.TemporaryDirectory() as dest_dir:
-            # Patch the harness root so personas/ is absent.
-            with patch.object(
-                _claude_mod.Path,
-                "is_dir",
-                side_effect=lambda p: False if "personas" in str(p) else Path.is_dir(p),
-            ):
-                # Simpler: patch the personas_dir lookup directly.
-                pass  # handled below
-
-            # Direct approach: point the adapter at a harness root with no personas/.
-            with tempfile.TemporaryDirectory() as fake_root:
-                with patch(
-                    "z_harness_cli.adapters.claude.Path.__file__",
-                    new_callable=lambda: property(lambda self: Path(fake_root) / "adapters" / "claude.py"),
-                    create=True,
-                ):
-                    pass  # complex to patch __file__ — use export_persona mock instead
-
-            # Cleanest approach: mock export_persona to verify delegation.
-            with patch("z_harness_cli.adapters.claude.Path") as mock_path_cls:
-                # Restore normal Path behavior but make personas_dir.is_dir() return False.
-                real_path = Path
-                call_count = [0]
-
-                class PatchedPath(real_path):
-                    pass
-
-                # This approach is too complex. Use a simpler strategy below.
-                pass
-
-    def test_export_delegates_to_persona_export(self):
-        """export_payload() calls export_persona for each .md in personas/."""
-        adapter = ClaudeAdapter()
-        with tempfile.TemporaryDirectory() as dest_dir:
-            dest = Path(dest_dir)
-            # Create a mock personas directory and a fake persona file.
-            with tempfile.TemporaryDirectory() as fake_harness:
-                personas_dir = Path(fake_harness) / "personas" / "builtin"
-                personas_dir.mkdir(parents=True)
-                persona_file = personas_dir / "implementer.md"
-                persona_file.write_text(
-                    "---\nname: implementer\nrole: Implementer\n---\n\n# Implementer\n",
-                    encoding="utf-8",
-                )
-
-                written_path = dest / "personas" / "implementer.md"
-
-                # Patch _harness_root resolution inside export_payload.
-                with patch.object(
-                    type(adapter),
-                    "export_payload",
-                    wraps=adapter.export_payload,
-                ):
-                    # Patch the Path(__file__).parent.parent.parent chain by
-                    # patching the __file__ attribute at module level.
-                    original_file = _claude_mod.__file__
-
-                    # We need the adapter's harness_root (which is Path(__file__).parent^3)
-                    # to point at fake_harness.  Patch via monkeypatching the import.
-                    fake_claude_py = str(Path(fake_harness) / "z_harness_cli" / "adapters" / "claude.py")
-
-                    def fake_export_persona(persona_file_path, target_export_root):
-                        # Simulate writing the output file.
-                        out_dir = Path(target_export_root) / "personas"
-                        out_dir.mkdir(parents=True, exist_ok=True)
-                        out = out_dir / "implementer.md"
-                        out.write_text("exported content", encoding="utf-8")
-                        return out.resolve()
-
-                    with patch(
-                        "z_harness_cli.adapters.claude.ClaudeAdapter.export_payload"
-                    ) as mock_ep:
-                        # Call the real method but with a controlled persona dir.
-                        # Instead, test via the real code with mocked internals.
-                        pass
-
-            # Use a clean integration approach: mock just import and personas_dir.
-            with tempfile.TemporaryDirectory() as dest_dir2:
-                dest2 = Path(dest_dir2)
-                mock_export = MagicMock(return_value=dest2 / "personas" / "implementer.md")
-                with patch.dict(
-                    "sys.modules",
-                    {
-                        "runtime": MagicMock(),
-                        "runtime.drivers": MagicMock(),
-                        "runtime.drivers.claude": MagicMock(),
-                        "runtime.drivers.claude.persona_export": MagicMock(
-                            export_persona=mock_export
-                        ),
-                    },
-                ):
-                    # Patch the harness root's personas dir to exist with one file.
-                    with tempfile.TemporaryDirectory() as fake_root2:
-                        personas_dir2 = Path(fake_root2) / "personas" / "builtin"
-                        personas_dir2.mkdir(parents=True)
-                        (personas_dir2 / "test.md").write_text("content", encoding="utf-8")
-
-                        adapter2 = ClaudeAdapter()
-
-                        # Patch Path(__file__).parent^3 to point at fake_root2.
-                        # We resolve harness_root in export_payload as:
-                        # Path(__file__).parent.parent.parent.resolve()
-                        # The cleanest test: patch `personas_dir` within the method
-                        # by using a subclass or by patching at the module level.
-                        # Use __file__ patching approach:
-                        with patch.object(
-                            _claude_mod,
-                            "__file__",
-                            str(Path(fake_root2) / "z_harness_cli" / "adapters" / "claude.py"),
-                        ):
-                            result = adapter2.export_payload(dest2)
-
-                # mock_export was called once.
-                mock_export.assert_called_once()
-                self.assertIsInstance(result, ExportResult)
-                self.assertEqual(result.fidelity, "native")
+            result = adapter.export_payload(Path(dest_dir))
+        self.assertIsInstance(result, ExportResult)
+        self.assertEqual(result.fidelity, "native")
+        self.assertEqual(list(result.files), [])
+        self.assertEqual(list(result.warnings), [])
 
     def test_export_result_fidelity_native(self):
         """export_payload always returns fidelity='native'."""
         adapter = ClaudeAdapter()
-        # When personas/ is absent → still fidelity='native'.
         with tempfile.TemporaryDirectory() as dest_dir:
             with patch.object(
                 _claude_mod,

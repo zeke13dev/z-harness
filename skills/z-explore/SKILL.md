@@ -1,13 +1,9 @@
 ---
 name: z-explore
-disable-model-invocation: false
 description: depth-scaled codebase terrain explorer; quick scout through deep MAP.md terrain synthesis
-argument-hint: "<question> [--depth=quick|standard|deep] [--repo] [--slug=<kebab>] [--surface=auto|off|force]"
-runtime: c1
-driver_features_required:
-  - subagent
-  - ask_user
-unsupported_driver_behavior: explicit_gate
+argument-hint: "<question> [--depth=quick|standard|deep] [--slug=<kebab>]"
+audience: user
+driver_features_required: [subagent, ask_user]
 ---
 
 You are running the **z-harness `/z-explore`** pipeline — a depth-scaled terrain discovery command from quick scouts through deep MAP.md synthesis.
@@ -19,7 +15,7 @@ $ARGUMENTS
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What question should I explore?" to the user via their native channel and
      accept a text reply. Silent omission is forbidden. -->
-**If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I explore?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
+**If the question above is empty or whitespace**, use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I explore?". Wait for their reply and treat it as the question. Pre-preflight: a plain exit here is fine if none is given — nothing is registered yet.
 
 Strict, multi-phase. Do not skip phases. `/z-explore` produces a terrain note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
 
@@ -32,33 +28,36 @@ Strict, multi-phase. Do not skip phases. `/z-explore` produces a terrain note on
 
 ## Setup
 
-1. **Parse `--depth=` flag** from `$ARGUMENTS`. If present, strip it and set `EXPLORE_DEPTH=<quick|standard|deep>`. Default: `quick`. Valid values only — if unrecognized, error and ask user. Initialize `CITATION_COUNT=0` and `GAP_COUNT=0` for telemetry tracking during synthesis (see Phase 4).
+1. **Parse `--depth=` flag** from `$ARGUMENTS`. If present, strip it and set `EXPLORE_DEPTH=<quick|standard|deep>`. Default: `quick`. Valid values only — if unrecognized, error and ask user (pre-preflight; plain exit). Initialize `CITATION_COUNT=0` and `GAP_COUNT=0` for telemetry tracking during synthesis (see Phase 4).
 
-2. **Parse `--slug=<value>`, `--resume-phase=<seam_id>`, and `--resume-run=<run-id>` flags** from `$ARGUMENTS` before slug derivation. Strip each entire token from the cleaned exploration question. The stripped resume tokens MUST NOT appear in prompts, slug derivation, or `input_hash`; store them as `RESUME_PHASE` and `RESUME_RUN` for the deep-mode resume gate. If `--slug=` is present, the explicit slug overrides auto-derivation.
+2. **Parse `--slug=<value>`, `--resume-phase=<seam_id>`, and `--resume-run=<run-id>` flags** — one pass, reused by the resume gate below (never re-parsed). Strip each entire token from the cleaned exploration question; the stripped resume tokens MUST NOT appear in prompts, slug derivation, or `input_hash`. Store as `RESUME_PHASE` / `RESUME_RUN`.
 
-   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic work?" → `retry-logic`). Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names. Slug-collision handling is deferred to **Phase 1** (after the cost gate, for deep mode) or handled inline for quick/standard.
+   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words. Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names. Slug-collision handling is deferred to **Phase 1** (after the cost gate, for deep mode) or handled inline for quick/standard. This derivation MUST still run on a resumed invocation — the resume command (below) carries the slug as its bare leading token, so re-deriving from the cleaned question reproduces the same slug; `Z_HARNESS_SLUG` is required by the preflight call in step 3 regardless of resume state.
 
-   If `--slug=` was explicitly provided, skip auto-derivation.
+3. **Preflight ceremony (single call, read-only).** `/z-explore` never edits the codebase — only its own terrain artifacts under `$Z_HARNESS_PLAN_DIR/` — so it runs the lifecycle **minus the claim** (SKILL-STYLE.md §2):
+   ```bash
+   PREFLIGHT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-preflight.sh" \
+     --command /z-explore --slug "$Z_HARNESS_SLUG" --no-claim \
+     --intent "<cleaned question — max 240 chars; not the command name alone>")"
+   PREFLIGHT_RC=$?
+   [ "$PREFLIGHT_RC" -eq 0 ] && eval "$PREFLIGHT_OUT"
+   ```
+   `--no-claim` skips the claim step entirely (script header) — `plan-claim.sh acquire` is never invoked, so contention/corrupt-lock exits (10/11) cannot occur here. A nonzero `PREFLIGHT_RC` on a `--no-claim` call means a genuine setup failure (bad invocation or path resolution); surface the stderr diagnostic and exit — nothing was ever created or registered. On success, `RUN`, `Z_HARNESS_PLAN_DIR`, `CURRENT_ARCHIVE_DIR`, `Z_HARNESS_SESSION_ID`, and `KERNEL_PATH` are exported (script header is the source of truth).
 
-3. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
+4. **Resume-run override.** If `RESUME_RUN` is set, this invocation is continuing a prior deep-mode run rather than starting a fresh one: `RUN="$RESUME_RUN"; CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"`. The preflight call above still minted a fresh throwaway run id/archive dir as a side effect (registration only, harmless); this override redirects all subsequent artifact paths to the resumed run. `mkdir -p "$CURRENT_ARCHIVE_DIR/transcripts"` defensively.
 
-4. Pick a run id: `RUN="${RESUME_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-<slug>}"` so checkpoint resumes validate the original archive path instead of a fresh run directory.
-
-5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
-
-6. Capture the z-harness plugin version stamp and log the explore run start (merge version blob into the payload):
+5. Log the explore run start (domain-specific fields the generic wrapper `run_start` event doesn't carry):
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
    v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]; v["depth"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>" "$EXPLORE_DEPTH")"
+   ' "$VERSION_BLOB" "<cleaned question>" "$EXPLORE_DEPTH")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" explore_run_start "$START_PAYLOAD"
    ```
 
-7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
-
+6. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set (this run was dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload this skill emits directly (the wrapper's own `run_start`/`run_end` do not carry these — a known wrapper gap, not fixed here):
    ```bash
    bash log-event.sh "$RUN" some_event "$(python3 -c 'import json,os,sys; p=json.loads(sys.argv[1]);
    pid=os.environ.get("Z_HARNESS_PARENT_RUN_ID"); pcmd=os.environ.get("Z_HARNESS_PARENT_COMMAND");
@@ -66,12 +65,11 @@ Strict, multi-phase. Do not skip phases. `/z-explore` produces a terrain note on
    if pcmd: p["parent_command"]=pcmd;
    print(json.dumps(p))' "$ORIG_PAYLOAD")"
    ```
+   If env vars absent, emit events as today (no attribution fields).
 
-   If env vars absent → emit events as today (no attribution fields). Backward compatible.
+7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
-8. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
-
-9. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 2 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
+8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 2 will dispatch `doc-fetcher` (Haiku).
 
 **Setup does NOT mutate `$Z_HARNESS_PLAN_DIR/MAP.md` or any sibling artifact.**
 
@@ -81,58 +79,44 @@ Strict, multi-phase. Do not skip phases. `/z-explore` produces a terrain note on
 - `$Z_HARNESS_PLAN_DIR/surface-map.json`
 - `$Z_HARNESS_PLAN_DIR/archive/<run-id>/...`
 
-## Shared context checkpoint hook/check contract for deep terrain mode
+### Halt funnel
 
-`/z-explore --depth=deep` owns the active terrain checkpoint seams inherited by the legacy `/z-map` wrapper. It MUST NOT keep workflow-local acknowledgement files or direct `handoff.json` writers. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
-
-Standard seam call pattern:
+Every controlled non-complete exit after preflight funnels through this one function — never a bare `exit` (SKILL-STYLE.md §2, single exception: a checkpoint-seam PAUSE, which is not an exit):
 
 ```bash
-run_workflow_compaction_seam() {
-  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
-  shift 4 || true
-  export Z_HARNESS_PLAN_DIR
-  export Z_HARNESS_SLUG
-  export Z_HARNESS_CHECKPOINT_STATUS="context_pressure"
-  export Z_HARNESS_CHECKPOINT_PRODUCER="${Z_HARNESS_CHECKPOINT_PRODUCER:-z-explore}"
-  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
-  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
-  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
-  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/MAP.md" "$completed_artifact" "$@" <<'PYEOF'
-import hashlib, sys
-h = hashlib.sha256()
-for path in sys.argv[1:]:
-    try:
-        with open(path, "rb") as fh:
-            h.update(path.encode("utf-8") + b"\0" + fh.read() + b"\0")
-    except FileNotFoundError:
-        h.update(path.encode("utf-8") + b"\0missing\0")
-print(h.hexdigest())
-PYEOF
-)"
-  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
-  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-explore --depth=deep ${Z_HARNESS_SLUG:-<topic>} --resume-phase=$seam_id --resume-run=$RUN"
-  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-explore --depth=deep from $Z_HARNESS_PLAN_DIR; ${next_step}"
-  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(python3 - "$seam_id" "$RUN" "$completed_artifact" <<'PYEOF'
-import json, sys
-print(json.dumps({"command": "z-explore", "compatibility_alias": "z-map", "seam": sys.argv[1], "run": sys.argv[2], "completed_artifact": sys.argv[3]}))
-PYEOF
-)"
+explore_halt() {
+  local reason="$1"
+  local rb="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+  bash "$rb" set-section --run "$RUN" --section outcome --value "Halted: ${reason}"
+  bash "$rb" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review the halt reason and re-run /z-explore", "command": null}
+JSON
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-explore --status aborted
+  exit 1
+}
+```
 
-  COMPACTION_TRIGGERED=0
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
-  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
-    CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
-    printf '%s\n' "$CHECKPOINT_OUT"
-    case "$CHECKPOINT_OUT" in
-      STATUS:\ clear_checkpoint_fast_forward*) ;;
-      STATUS:\ clear_checkpoint*) exit 0 ;;
-      *) exit 1 ;;
-    esac
-  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
-    # Execute halt finalize with reason "context pressure estimate failed in strict mode at $seam_id", then exit 1.
-    exit 1
-  fi
+`z-teardown.sh` finalizes the brief (auto-synthesizing `approach` from the `Halted: ...` outcome when no artifact exists — `run-brief.sh`'s own downgrade rule), releases the never-held claim (best-effort no-op), deregisters, and emits `run_end`.
+
+## Shared context checkpoint hook/check contract for deep terrain mode
+
+`/z-explore --depth=deep` owns the active terrain checkpoint seams. It MUST NOT keep workflow-local acknowledgement files or direct `handoff.json` writers. Do not write `handoff.json` directly.
+
+Every durable-boundary checkpoint seam is one call to `scripts/checkpoint-seam.sh` (SKILL-STYLE.md §2), wrapped here since deep mode has five call sites:
+
+```bash
+explore_checkpoint_seam() {
+  local seam_id="$1" artifact="$2" next_step="$3"; shift 3 || true
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/checkpoint-seam.sh" \
+    "$seam_id" "$artifact" "/z-explore --depth=deep $Z_HARNESS_SLUG --resume-phase=$seam_id --resume-run=$RUN" \
+    --producer z-explore --next-step "$next_step" "$@"
+  local rc=$?
+  case "$rc" in
+    0) return 0 ;;  # below threshold, or already fast-forwarded — continue
+    1) exit 0 ;;     # new checkpoint written — pause here, not an error; next invocation resumes
+    2) explore_halt "context pressure estimate failed in strict mode at $seam_id" ;;
+  esac
 }
 ```
 
@@ -146,18 +130,13 @@ Registered deep terrain seams:
 | `map-phase5-pre-final-review` | after `MAP.md` is written and promotion/citation metadata is durable, before final review/finalize checks | `$Z_HARNESS_PLAN_DIR/MAP.md` | resume at final review |
 | `map-phase5-pre-user-report` | after final review accepts `MAP.md`, before user-facing report generation | `$Z_HARNESS_PLAN_DIR/MAP.md` | resume at final user-facing report |
 
-Skipped candidate seams: no check before a deep-mode durable artifact exists; no check while Explore or consultant workers are in flight; no check after terminal halt because halt finalize owns that state.
-
-The shared hook emits `compaction_pause` through `check-compaction.sh` only when the configured percentage threshold is crossed; under-threshold fallthrough continues without checkpoint side effects, and stale-state handling is delegated to `write-clear-checkpoint.sh`.
+Skipped candidate seams: no check before a deep-mode durable artifact exists; no check while Explore or consultant workers are in flight; no check after terminal halt because the halt funnel owns that state.
 
 ### Deep-mode resume-phase gate
 
-If `$ARGUMENTS` includes `--resume-phase=<seam_id>`, strip that flag from the cleaned exploration question before slug/input-hash derivation. Validate the corresponding `$Z_HARNESS_PLAN_DIR/.clear-checkpoint-<seam_id>.json` before route/cost/doc/explore dispatch, recompute the fast-forward guard from the current durable artifacts, and then jump directly to the recorded next phase. Never rerun earlier Explore or consultant work silently on a checkpoint resume.
+If `RESUME_PHASE` (Setup step 2) is set, validate the corresponding `$Z_HARNESS_PLAN_DIR/.clear-checkpoint-<seam_id>.json` before route/cost/doc/explore dispatch, recompute the fast-forward guard from the current durable artifacts, and jump directly to the recorded next phase. Never rerun earlier Explore or consultant work silently on a checkpoint resume.
 
 ```bash
-RESUME_PHASE="$(printf '%s\n' "$ARGUMENTS" | python3 -c 'import re,sys; text=sys.stdin.read(); m=re.search(r"--resume-phase=([^\\s]+)", text); print(m.group(1) if m else "")')"
-RESUME_RUN="$(printf '%s\n' "$ARGUMENTS" | python3 -c 'import re,sys; text=sys.stdin.read(); m=re.search(r"--resume-run=([^\\s]+)", text); print(m.group(1) if m else "")')"
-if [ -n "$RESUME_RUN" ]; then RUN="$RESUME_RUN"; fi
 if [ -n "$RESUME_PHASE" ]; then
   case "$RESUME_PHASE" in
     map-phase4-pre-critique) RESUME_TARGET="critique"; REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/archive/$RUN/research-draft.md" ;;
@@ -165,7 +144,7 @@ if [ -n "$RESUME_PHASE" ]; then
     map-phase4-pre-map-write) RESUME_TARGET="map-write"; REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/archive/$RUN/research-draft.md" ;;
     map-phase5-pre-final-review) RESUME_TARGET="final-review"; REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/MAP.md" ;;
     map-phase5-pre-user-report) RESUME_TARGET="user-report"; REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/MAP.md" ;;
-    *) echo "Unknown /z-explore resume phase: $RESUME_PHASE" >&2; exit 1 ;;
+    *) explore_halt "unknown /z-explore resume phase: $RESUME_PHASE" ;;
   esac
   STATE_FILE="$Z_HARNESS_PLAN_DIR/.clear-checkpoint-${RESUME_PHASE}.json"
   CURRENT_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/MAP.md" "$REQUIRED_ARTIFACT" <<'PYEOF'
@@ -180,7 +159,7 @@ for path in sys.argv[1:]:
 print(h.hexdigest())
 PYEOF
 )"
-  python3 - "$STATE_FILE" "$RESUME_PHASE" "$REQUIRED_ARTIFACT" "$CURRENT_GUARD" <<'PYEOF' || exit 1
+  python3 - "$STATE_FILE" "$RESUME_PHASE" "$REQUIRED_ARTIFACT" "$CURRENT_GUARD" <<'PYEOF' || explore_halt "stale or invalid /z-explore checkpoint state for $RESUME_PHASE"
 import json, sys
 from pathlib import Path
 state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -254,7 +233,7 @@ Depth-dependent cost handling:
      reply before any subagent dispatch. Silent omission is forbidden. -->
 - **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores + cross-LLM critique.
 - **Reduce to 1 Explore** — single Explore, lighter spend (~700k-1M tokens).
-- **Abandon** — exit cleanly, write nothing.
+- **Abandon** — exit cleanly, write nothing beyond what's already registered.
 
 Log the user's pick:
 
@@ -263,17 +242,15 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"choice":"%s"}' "<proceed|reduce|abandon>")"
 ```
 
-If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
+If `abandon`: `explore_halt "user abandoned deep-mode cost gate"`. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
 
 For **deep** mode: after the cost gate, run Phase 0.5 slug + artifact collision handling (check existing `$Z_HARNESS_PLAN_DIR/` dirs and `MAP.md`, prompt user for archive-and-start-fresh / continue / abort).
-
-Checkpoint: `phase1-cost-gate.md`.
 
 ## Phase 2 — Doc grounding
 
 If `Z_EXPLORE_RESUME_TARGET` is set, skip Phase 2.
 
-If Setup step 9 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
+If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
      requirement to the user and skip the Agent() call. The doc-fetcher phase
@@ -297,8 +274,6 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 **No Explore here.** Phase 2 is doc-fetcher only. Explore happens in Phase 3.
 
 For `quick` mode, if doc-fetcher returns synthesis, use it directly to inform the inline output — do not dispatch additional Explores unless synthesis is empty or `STATUS: partial`.
-
-Checkpoint: `phase2-doc-grounding.md`.
 
 ## Phase 3 — Surface discovery
 
@@ -382,8 +357,6 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ```
 
 The final frontmatter uses `EXPLORES_SUCCEEDED` for `explore_calls:`. If `EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED > 0`, emit an additional `explore_failures: <N>` field.
-
-Checkpoint: `phase3-explores.md` (synthesis of all Explore returns).
 
 ## Phase 4 — Synthesis
 
@@ -477,11 +450,10 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
 
    After `research-draft.md` is durable, checkpoint before bundled consultant critique:
    ```bash
-   run_workflow_compaction_seam \
-     "map-phase4-pre-critique" \
-     "Phase 4 research draft before critique" \
+   explore_checkpoint_seam map-phase4-pre-critique \
      "$Z_HARNESS_PLAN_DIR/archive/$RUN/research-draft.md" \
-     "continue at bundled consultant critique dispatch"
+     "continue at bundled consultant critique dispatch" \
+     --hash "$Z_HARNESS_PLAN_DIR/MAP.md"
    ```
 
 2. **Bundled consultant critique** — review the draft for terrain gaps/errors. Spawn **both** consultants in parallel:
@@ -497,26 +469,24 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
      prompt="MODE: research-review\n\n..."
    )
    ```
-   Per-consultant failure policy: retry once, then log failed. Require at least one successful critique before revising; if both fail, use the both-consultants-failed `ask_user` gate before proceeding.
+   Per-consultant failure policy: retry once, then log failed. Require at least one successful critique before revising; if both fail, use the both-consultants-failed `ask_user` gate before proceeding — **abort** funnels through `explore_halt "both consultant critiques failed"`.
 
    After critique transcripts are archived, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/critique-manifest.json`, then checkpoint before revised-draft synthesis:
    ```bash
-   run_workflow_compaction_seam \
-     "map-phase4-post-critique" \
-     "Phase 4 critiques archived before revision" \
+   explore_checkpoint_seam map-phase4-post-critique \
      "$Z_HARNESS_PLAN_DIR/archive/$RUN/critique-manifest.json" \
-     "continue at research-draft revision"
+     "continue at research-draft revision" \
+     --hash "$Z_HARNESS_PLAN_DIR/MAP.md"
    ```
 
 3. **Revise** — update research-draft.md with critique, add `## Cross-LLM review notes` section.
 
    After the revised draft is durable, checkpoint before final MAP.md synthesis/write:
    ```bash
-   run_workflow_compaction_seam \
-     "map-phase4-pre-map-write" \
-     "Phase 4 revised draft before MAP.md write" \
+   explore_checkpoint_seam map-phase4-pre-map-write \
      "$Z_HARNESS_PLAN_DIR/archive/$RUN/research-draft.md" \
-     "continue at MAP.md synthesis and atomic write"
+     "continue at MAP.md synthesis and atomic write" \
+     --hash "$Z_HARNESS_PLAN_DIR/MAP.md"
    ```
 
 4. **Write MAP.md** — final deep-mode terrain output format:
@@ -535,14 +505,10 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
 
    After `MAP.md` is atomically written, checkpoint before final review/finalize checks:
    ```bash
-   run_workflow_compaction_seam \
-     "map-phase5-pre-final-review" \
-     "Phase 5 MAP.md written before final review" \
+   explore_checkpoint_seam map-phase5-pre-final-review \
      "$Z_HARNESS_PLAN_DIR/MAP.md" \
      "continue at MAP.md final review and citation checks"
    ```
-
-Checkpoint: `phase4-synthesis.md` (or `phase4-draft.md` → `phase4-critiques.md` → `phase4-revised.md` for deep mode).
 
 ## Phase 5 — Finalize
 
@@ -565,7 +531,7 @@ Write the final output artifact based on depth:
 
 - **quick**: inline findings in the response (no persistent file artifact beyond archive).
 - **standard**: update `EXPLORE.md` frontmatter with `input_hash:` and `surface-map.json` with `input_hash`.
-- **deep**: write `$Z_HARNESS_PLAN_DIR/MAP.md` with complete frontmatter.
+- **deep**: `MAP.md` was written in Phase 4 step 4.
 
 - **Citation enforcement:** Findings without a `file:line` match are demoted to `## Gaps` by the synthesis phase. Count demoted findings as `GAP_COUNT` and cited findings as `CITATION_COUNT` for telemetry. Both counts are included in the `explore_run_end` payload.
 
@@ -577,47 +543,45 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$Z_HARNESS_SLUG" "$EXPLORE_DEPTH" "${EXPLORES_DISPATCHED:-0}" "${EXPLORES_SUCCEEDED:-0}" "${EXPLORES_SUCCEEDED:-0}" "$(( ${EXPLORES_DISPATCHED:-0} - ${EXPLORES_SUCCEEDED:-0} ))" "${CITATION_COUNT:-0}" "${GAP_COUNT:-0}" "${MAP_WRITTEN:-false}" "${CRITIQUE_STATUS:-none}" "<complete|complete_no_critique|scout>")"
 ```
 
-After final review accepts `MAP.md` and `explore_run_end` telemetry is durable, checkpoint before user-facing report generation:
+After final review accepts `MAP.md` (deep mode) and `explore_run_end` telemetry is durable, checkpoint before user-facing report generation:
 ```bash
-run_workflow_compaction_seam \
-  "map-phase5-pre-user-report" \
-  "Phase 5 MAP.md accepted before user report" \
+explore_checkpoint_seam map-phase5-pre-user-report \
   "$Z_HARNESS_PLAN_DIR/MAP.md" \
   "continue at final user-facing report"
 ```
 
-Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
+**Run Brief + teardown funnel.** Set outcome/next, then tear down (releases the never-held claim, deregisters, emits `run_end`):
 
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "<one sentence, e.g. 'Deep terrain mapped: MAP.md written, 12 cited findings, 2 gaps.'>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "<pick the single strongest next step for this depth>", "command": "<e.g. /z-plan, or null for quick scouts>"}
+JSON
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-explore --status complete
 ```
-Explore complete. Depth: <depth>.
 
-Recommended next step:
-  /z-explore <topic> --depth=deep — full MAP.md with cross-LLM critique
-  /z-explain <topic> — targeted explanation of a specific code path
-  /z-learn <topic>  — progressive codebase tutoring
-  /z-plan <task>    — go straight to planning if terrain is clear enough
+If policy allows (`config.py should-notify --event phase_end` = `yes`), push the run-brief-rendered summary — never author independent push prose:
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+  PUSH_BODY="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  PushNotification("$PUSH_BODY")
+fi
 ```
 
----
+The assistant's own chat response (not the push) still surfaces the full, depth-specific `## Next` menu from the artifact/inline output above — that routing judgment is preserved verbatim; only the async push notification renders from run-brief.
 
-## Operating principles
+## Hard rules
 
 - **Terrain mapping, not direction picking.** The `## No-recommendation` section is invariant for deep and standard modes. Quick mode explicitly states the scout nature.
 - **Citations are non-negotiable.** No `file:line` → not a finding.
 - **Depth discipline.** Respect the selected depth. Quick means fast and lightweight; deep means thorough with critique.
 - **Cost discipline.** Quick mode skips the cost gate entirely. Deep mode has the full gate. Exceeding 2M tokens logs a `cost_warning`.
-- **Log everything.** Every Explore dispatch, consultant call, demotion — via `scripts/log-event.sh`.
+- **Log everything.** Every Explore dispatch, consultant call, demotion, halt — via `scripts/log-event.sh`.
+- **No exit past the funnel.** Complete → Finalize's teardown call; everything else after preflight → `explore_halt`.
 
 ---
 
-## Runtime contract conformance
-
-| Feature | Used | Gates |
-|---------|------|-------|
-| `subagent` | yes | All `Agent(...)` calls (doc-fetcher Phase 2, Explore Phase 3, consultant-primary + consultant-secondary Phase 4 deep) |
-| `ask_user` | yes | Empty-question gate, route check, cost gate Phase 1 (deep), slug-collision + MAP.md collision Phase 1 (deep), both-consultants-failed (deep) |
-| `skill_invoke` | no | — |
-
-Driver support requirements: see frontmatter `driver_features_required`.
-
-Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site is annotated with a `<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+Driver support requirements: see frontmatter `driver_features_required`. Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site carries its own `<!-- RUNTIME-GATE: ... -->` comment immediately before the call; that is the single source of truth (SKILL-STYLE.md §1 — the closing conformance table is retired for rewritten skills).

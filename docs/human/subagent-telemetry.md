@@ -1,6 +1,6 @@
 # subagent-telemetry
 
-> Last updated: 2026-07-09
+> Last updated: 2026-07-11
 > Covers source: scripts/detect-host.sh, scripts/log-event.sh, scripts/log-subagent.sh, scripts/estimate-tokens.py, scripts/test_subagent_logging.sh, skills/z-stats/SKILL.md
 
 ## Overview
@@ -20,11 +20,11 @@ Do not conflate this retrospective surface with pre-run forecasts. `subagent-cos
 - `scripts/log-subagent.sh:1` — non-fatal helper for emitting `subagent_call` events with role/type/model and prompt/response sizes.
 - `scripts/log-subagent.sh:107` — payload builder; optional provider token fields are included only when non-empty.
 - `scripts/log-subagent.sh:154` — delegates the actual event write to `log-event.sh`.
-- `scripts/estimate-tokens.py:376` — `_compute_event_cost()` — computes input/output tokens and cost for one `subagent_call` event.
-- `scripts/estimate-tokens.py:444` — `subagent_costs()` — groups cost by host and subagent type from repo-wide metrics.
-- `scripts/estimate-tokens.py:1496` — `_format_subagent_costs_table()` — human-readable `/z-stats` table formatter.
+- `scripts/estimate-tokens.py:373` — `_compute_event_cost()` — computes input/output tokens and cost for one `subagent_call` event.
+- `scripts/estimate-tokens.py:441` — `subagent_costs()` — groups cost by host and subagent type from repo-wide metrics.
+- `scripts/estimate-tokens.py:1493` — `_format_subagent_costs_table()` — human-readable `/z-stats` table formatter.
 - `scripts/test_subagent_logging.sh:1` — drift-guard for role-bearing dispatch logging.
-- `skills/z-stats/SKILL.md:97` — Phase 3b user surface for `subagent-costs`.
+- `skills/z-stats/SKILL.md:77` — Phase 6 ("Per-host, per-subagent cost breakdown") — user surface for `subagent-costs`.
 <!-- AUTO-END: entry-points -->
 
 ## How it interacts with others
@@ -33,7 +33,7 @@ Do not conflate this retrospective surface with pre-run forecasts. `subagent-cos
 - `z-execute` — orchestrator-side implementer dispatch logging is a pinned drift-guard site.
 - `cost-estimation` — `estimate-tokens.py` owns both pre-run estimates/plan+execute forecasts and observed post-run subagent-cost read-side pricing; the surfaces share rates but not semantics.
 - `plan-path` / external base — `subagent_call` events land in the repo-wide metrics file at the resolved base, not per-plan metrics.
-- `z-stats` — displays per-host/per-type cost and labels `[char-est]`, `[real tokens]`, or `[mixed: provider+chars]`.
+- `z-stats` — displays per-host/per-type cost and labels `[char-est]`, `[real tokens]`, or `[mixed: provider+chars]`. `skills/z-stats/SKILL.md` was rewritten (266→156 lines) to absorb the former `/z-where` command as its unconditional Phase 1 header and to delegate every other computed section (progress, wall time, tokens, coordination tallies, halts, next-command) to the new `scripts/stats.py` subcommands instead of inline jq/awk. **Phase 6 (subagent-costs) is the only section this concept still owns** — the rewrite left it untouched, still shelling out directly to `scripts/estimate-tokens.py subagent-costs`. `scripts/stats.py` itself is out of scope for this concept (it is not one of the tracked source files); see its own concept doc for the absorbed `/z-where` and progress/walltime/tokens machinery.
 - `scripts/report-context.py` — a second, undocumented-as-concept consumer that shells out to `estimate-tokens.py subagent-costs --json` to fold cost data into its own report; see NOTES.
 
 ## detect-host.sh
@@ -78,7 +78,9 @@ Provider token fields are optional and appear only for external CLIs that expose
 - Consultant dispatches from orchestrators must not double-log; consultant agents self-log.
 - `/z-stats` resolves the base dir explicitly for subagent costs because repo-wide metrics may live outside the plan dir.
 - `/z-plan` pre-run cost forecasts are not reconciled inline with `subagent-costs`; compare them after the run via `/z-stats` if calibration is needed.
-- Line-number anchors for `log-subagent.sh` and `estimate-tokens.py` had drifted significantly from the previous doc revision (the file grew a `forecast`/`estimate` subcommand family); this refresh re-verified every anchor against the current source.
+- `skills/z-stats/SKILL.md` phase numbering shifted in the 2026-07 rewrite: subagent-costs moved from the old "Phase 3b" label to "Phase 6" because Phase 1 now absorbs the former `/z-where` header and Phase 2 handles slug discovery before the preflight `Setup` step. Re-verify the phase number on every future refresh — it is not pinned to this concept and can renumber independently as `scripts/stats.py` gains or loses subcommands.
+- Line-number anchors for `log-subagent.sh` and `estimate-tokens.py` drift with file growth; this refresh re-verified every anchor (`estimate-tokens.py` anchors shifted by -3 lines since the previous doc revision) and the `skills/z-stats/SKILL.md` anchor against the current 156-line rewrite.
+- No persona-related event kinds (`persona_attempt_outcome`, `persona_bound`, `persona_random_selected`) belong to this concept — those are emitted by the (now-excised) persona-rotation subsystem and documented, where still relevant, under `scripts.json`/`watchdog.json`, not here.
 
 ## Memories
 

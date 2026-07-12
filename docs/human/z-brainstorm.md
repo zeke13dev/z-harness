@@ -30,7 +30,7 @@ Current Phase 0 behavior is intentionally conversational but no longer a wrapper
 
 - `doc-fetcher` — Phase 1 uses docs before Explore so ideators share current, compact repo context.
 - `z-sharpen`/`GRILL.md` — Phase 0 reuses the shared z-sharpen component when `GRILL.md` is absent; prior or newly written sharpening context is included in scaffolding and in `input_hash`. `z-sharpen` is now tracked as its own concept doc; this doc treats it purely as a dependency.
-- `/z-explore --depth=deep`/`MAP.md` — current terrain/MAP.md production belongs to `/z-explore --depth=deep`; `/z-brainstorm` consumes that artifact as optional terrain context. `/z-research` composes terrain plus brainstorm outputs, and `/z-map` is legacy only. Legacy `RESEARCH.md` is accepted only when terrain-like, not approach synthesis.
+- `/z-explore --depth=deep`/`MAP.md` — current terrain/MAP.md production belongs to `/z-explore --depth=deep`; `/z-brainstorm` consumes that artifact as optional terrain context. `/z-research` composes terrain plus brainstorm outputs. Legacy `RESEARCH.md` is accepted only when terrain-like, not approach synthesis.
 - `scope-probe` and `scope-reconciler-brainstorm` — non-fast-path scope classification and HEAVY chunk reconciliation.
 - `personas-and-roles` — `brainstorm.personas` controls ideator persona draws; underflow slots run vanilla and are recorded as `<none>`.
 - `cost-estimation` — wide mode uses an inline conversational cost estimate and waits for explicit user confirmation before extra ideators dispatch.

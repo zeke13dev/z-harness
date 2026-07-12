@@ -189,7 +189,7 @@
   ],
   "gotchas": [
     "_inspect_all_json delegates to config.py inspect-all via subprocess; if config.py unavailable, returns None and subcommands fail gracefully",
-    "Wizard providers and docs sections are suggest-only: detect gaps and print tip, do NOT invoke /z-providers-discover or /z-init-docs",
+    "Wizard docs section is suggest-only: detect gaps and print tip, do NOT invoke /z-init-docs; the providers section runs scripts/discover-providers.py for role-binding discovery",
     "Memories wizard section is read-only display; use /z-suggest-memory --kind routing-preference to add or edit",
     "POSTURE_PRESETS env vars are emitted as shell snippet to stdout or --env-file; they are never written to any config file",
     "apply --yes skips confirmation prompt; use only where user consent is established upstream",

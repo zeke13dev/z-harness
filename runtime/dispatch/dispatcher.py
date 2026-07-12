@@ -341,16 +341,9 @@ class Dispatcher:
         caller_args: list[str],
         provider_config: dict,
         session_id: str | None = None,
-        persona: str | None = None,
         model: str | None = None,
         runtime: str | None = None,
         role: str | None = None,
-        task_id: str | None = None,
-        attempt_id: str | None = None,
-        persona_id: str | None = None,
-        selection_source: str | None = None,
-        draw_id: str | None = None,
-        reviewer_participant: str | None = None,
         model_source: str | None = None,
         model_route: str | None = None,
         model_route_kind: str | None = None,
@@ -366,7 +359,7 @@ class Dispatcher:
         1. Compose ``final_args`` via :func:`_compose_argv` (honors
            ``model_arg_template`` ``{model}`` substitution) + ``caller_args``.
         2. Emit ``dispatch_start`` event.
-        3. Resolve persona/model/runtime overrides; emit override events.
+        3. Resolve model/runtime overrides; emit override events.
         4. Build subprocess env via :func:`~runtime.dispatch.env.build_env`,
            passing the resolved effective_model so ``model_env_var`` is set.
         5. Call ``driver.dispatch(command_id, final_args, env)`` → handle.
@@ -397,39 +390,17 @@ class Dispatcher:
                 ``"args_template"`` (list of str).  May contain
                 ``"timeout_s"`` (int, default 300) and ``"auth_env"`` (str).
             session_id: Optional session identifier for resumable dispatches.
-            persona: Optional persona name override.  When set, wins over any
-                TOML binding; emits ``persona_override_used`` with
-                ``override_field="persona"``.
             model: Optional model name override.  When set, wins over any
-                TOML binding; emits ``persona_override_used`` with
+                TOML binding; emits ``persona_override_used`` (legacy event
+                name; the persona axis was removed) with
                 ``override_field="model"``.
             runtime: Optional runtime name override.  When set, wins over any
                 TOML binding; emits ``persona_override_used`` with
                 ``override_field="runtime"``.
-            role: Optional role identifier (e.g. ``"reviewer"``).  When
-                provided, included in the ``persona_bound`` event payload.
-                Not used for resolution — the caller resolves the role before
-                calling ``run()`` (see SPEC §D resolution-ownership note).
-            task_id: Optional task identifier for the current task attempt
-                (e.g. ``"T007"``).  Included in ``persona_bound`` when provided.
-            attempt_id: Optional attempt identifier (e.g. ``"T007-v1"``).
-                Included in ``persona_bound`` when provided.
-            persona_id: Optional persona identifier from the draw result
-                (i.e. the ``name`` field from ``random-for-role`` JSON).
-                Always present in ``persona_bound`` — falls back to the
-                resolved persona name, or ``null`` when neither is available.
-            selection_source: Optional selection source tag from the draw
-                (e.g. ``"random_role_pool"``, ``"forced_control"``,
-                ``"fixed_panel"``, ``"fallback_empty_pool"``).  Included in
-                ``persona_bound`` when provided.
-            draw_id: Optional draw identifier from ``random-for-role`` or
-                ``forced-control``.  Included in ``persona_bound`` when
-                provided.  Acts as the join key between draw and outcome
-                events.
-            reviewer_participant: Optional discriminator for reviewer role
-                dispatches — must be one of ``"base_codex"`` or ``"random_arm"``
-                when provided.  Included in ``persona_bound`` when provided.
-                Raises :exc:`ValueError` on an invalid value.
+            role: Optional role identifier (e.g. ``"reviewer"``).  Used only to
+                set ``Z_HARNESS_PROVIDER_ROLE`` in the subprocess env and for
+                preflight telemetry.  Not used for resolution — the caller
+                resolves the role before calling ``run()``.
             model_source: Optional routing source label for model telemetry,
                 e.g. ``"model_routing.native_agents.explore"`` or
                 ``"frontmatter"``.  Defaults to the legacy override/provider
@@ -497,20 +468,13 @@ class Dispatcher:
             "session_id": session_id,
         })
 
-        # 3a. Resolve persona/model/runtime overrides and emit events.
+        # 3a. Resolve model/runtime overrides and emit events.
         # Determine the original (provider_config-derived) values for each axis.
-        _pc_persona: str | None = provider_config.get("persona")
         _pc_model: str | None = provider_config.get("model")
         _pc_runtime: str | None = provider_config.get("runtime")
 
-        # Emit persona_override_used for each axis that was explicitly overridden.
-        if persona is not None:
-            self._emit("persona_override_used", {
-                "command": command_id,
-                "override_field": "persona",
-                "value": persona,
-                "original": _pc_persona,
-            })
+        # Emit persona_override_used (legacy event name) for each axis that was
+        # explicitly overridden.
         if model is not None and model_source is None:
             self._emit("persona_override_used", {
                 "command": command_id,
@@ -534,8 +498,7 @@ class Dispatcher:
                 return "provider_config"
             return "none"
 
-        # Build the resolved triple (explicit kwargs win over provider_config).
-        _resolved_persona = persona if persona is not None else _pc_persona
+        # Build the resolved model/runtime pair (explicit kwargs win over provider_config).
         _resolved_model = model if model is not None else _pc_model
         _resolved_runtime = runtime if runtime is not None else _pc_runtime
 
@@ -555,50 +518,6 @@ class Dispatcher:
         if role:
             env["Z_HARNESS_PROVIDER_ROLE"] = role
 
-
-        # Validate reviewer_participant before emitting into telemetry.
-        _REVIEWER_PARTICIPANT_VALUES = {"base_codex", "random_arm"}
-        if reviewer_participant is not None and reviewer_participant not in _REVIEWER_PARTICIPANT_VALUES:
-            raise ValueError(
-                f"reviewer_participant must be one of {sorted(_REVIEWER_PARTICIPANT_VALUES)!r},"
-                f" got {reviewer_participant!r}"
-            )
-
-        # persona_id in the attribution tuple: use the explicitly-supplied
-        # persona_id (from the draw result) if given; otherwise fall back to
-        # the resolved persona name.  Always present — emits null when neither
-        # kwarg nor resolved persona is available so downstream joins are robust.
-        _effective_persona_id = persona_id if persona_id is not None else _resolved_persona
-
-        _persona_bound_payload: dict = {
-            "run_id": self._run_id,
-            "command": command_id,
-            "persona": _resolved_persona,
-            "persona_id": _effective_persona_id,
-            "model": _resolved_model,
-            "runtime": _resolved_runtime,
-            "source": {
-                "persona": _axis_source(persona, _pc_persona),
-                "model": _resolved_model_source,
-                "runtime": _axis_source(runtime, _pc_runtime),
-            },
-            "model_override_applied": model_override_applied,
-            "model_override_support": _resolved_model_support,
-        }
-        # Attribution tuple fields — include only when provided by the caller.
-        if role is not None:
-            _persona_bound_payload["role"] = role
-        if task_id is not None:
-            _persona_bound_payload["task_id"] = task_id
-        if attempt_id is not None:
-            _persona_bound_payload["attempt_id"] = attempt_id
-        if selection_source is not None:
-            _persona_bound_payload["selection_source"] = selection_source
-        if draw_id is not None:
-            _persona_bound_payload["draw_id"] = draw_id
-        if reviewer_participant is not None:
-            _persona_bound_payload["reviewer_participant"] = reviewer_participant
-        self._emit("persona_bound", _persona_bound_payload)
 
         _model_resolved_payload = {
             "command": command_id,

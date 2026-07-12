@@ -146,7 +146,7 @@
       "line": 1,
       "symbol": "planning-router",
       "kind": "module",
-      "summary": "Haiku advisory router; primary routes now /z-do, /z-plan, /z-plan-split, /z-brainstorm, /z-sharpen (/z-map, /z-plan-light, /z-research dropped from primary target set); adds exact-vs-historical artifact matching, active-registry/worktree overlap signals, and post-artifact recommendation gate."
+      "summary": "Haiku advisory router; primary routes now /z-plan, /z-plan-split, /z-brainstorm, /z-sharpen (/z-plan-light, the legacy terrain-mapping wrapper, and /z-research dropped from primary target set); adds exact-vs-historical artifact matching, active-registry/worktree overlap signals, and post-artifact recommendation gate."
     },
     {
       "file": "agents/pre-reviewer.md",
@@ -243,7 +243,6 @@
   "depends_on": [
     "scripts",
     "lookup-contract",
-    "personas-and-roles",
     "adaptive-intent"
   ],
   "consumed_by": [
@@ -257,8 +256,7 @@
     "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
     "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
     "Proxy agents emit consult_start before provider calls so liveness checks can detect hangs.",
-    "consultant-primary and consultant-secondary declare expected_contract: freeform; binding a persona with contract: review-verdict or contract: strict-json to either role fails resolve-persona.py validate.",
-    "reviewer and self-reviewer declare expected_contract: review-verdict; binding a persona with contract: freeform to either role fails resolve-persona.py validate.",
+    "consultant-primary and consultant-secondary declare expected_contract: freeform; reviewer and self-reviewer declare expected_contract: review-verdict.",
     "Personas that omit the contract field are treated as 'any' and pass all role contract checks.",
     "consultant-primary/secondary plan-review mode is mode-aware: intent mode reads INTENT.md+TASKS.md+decisions; full mode reads SPEC.md+PLAN.md+TASKS.md+decisions; the caller supplies planning_mode and concrete artifact paths.",
     "consultant-primary/secondary light-fix mode now serves /z-fix and /z-debug Phase 6 only; /z-plan-light was deleted from the codebase.",
@@ -266,8 +264,8 @@
     "doc-updater must never edit docs/llm/INDEX.json directly; it returns concept JSON (including a required top-level `summary` field) for /z-maintain-docs to apply.",
     "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
     "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
-    "planning-router primary route targets are /z-do, /z-plan, /z-plan-split, /z-brainstorm, and /z-sharpen; /z-plan-light, /z-map, and /z-research are no longer primary route targets (deleted, downgraded to a legacy delegation wrapper, or reachable only by direct user invocation, respectively).",
-    "planning-router reason code needs_research is a deprecated alias that now returns STATUS: ask_user with needs_terrain_grounding on the prod surface; it does not route to /z-map.",
+    "planning-router primary route targets are /z-plan, /z-plan-split, /z-brainstorm, and /z-sharpen; /z-plan-light, the legacy terrain-mapping wrapper, and /z-research are no longer primary route targets (deleted, or reachable only by direct user invocation).",
+    "planning-router reason code needs_research is a deprecated alias that now returns STATUS: ask_user with needs_terrain_grounding on the prod surface; it does not route to a terrain-mapping command.",
     "planning-router treats an exact finished plan (artifact_exact_slug_match && artifact_finished_plan_match, or legacy has_existing_plan without contradictory artifact signals) as the only state that unlocks /z-amend or /z-audit-plan; historical-similar candidates are warning-only (existing_artifact_similar) and never unlock those contextual exits.",
     "planning-router treats INTENT.md + canonical TASKS.md (parseable task headings/status markers) as a finished plan-family artifact set even when SPEC.md/PLAN.md are absent (artifact_plan_mode: intent, canonical_tasks_present: true).",
     "planning-router: an exact finished plan with neither plan_amend_intent nor plan_validation_intent returns STATUS: ask_user (existing_artifact_exact, ambiguous_route) rather than silently starting a new plan over a finished slug.",
@@ -316,7 +314,7 @@
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing.",
-    "research-judge's Evidence-gaps section suggests targeted /z-explore --depth=deep investigation topics (mechanical, derived from constraint class) instead of the legacy /z-map re-run suggestion; the dispatch_decision.map field name is retained only for legacy terrain-wrapper compatibility.",
+    "research-judge's Evidence-gaps section suggests targeted /z-explore --depth=deep investigation topics (mechanical, derived from constraint class); the dispatch_decision.map field name is retained only for legacy terrain-wrapper compatibility.",
     "reviewer **FOLLOWUPS:** block is optional; when present it MUST appear after ### Major and MUST contain exactly one fenced json array.",
     "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped.",
     "reviewer validates implementer RATIONALE for plausibility, DEVIATIONS against diff, and TRIED for code consistency.",
@@ -351,7 +349,7 @@
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",
-    "planning-router needs_research reason code is a deprecated alias only -- on the prod surface it now returns STATUS: ask_user with needs_terrain_grounding, it does NOT route to /z-map (which is itself a legacy compatibility wrapper delegating to /z-explore --depth=deep).",
+    "planning-router needs_research reason code is a deprecated alias only -- on the prod surface it now returns STATUS: ask_user with needs_terrain_grounding, it does NOT route to any terrain-mapping command (deep terrain discovery is /z-explore --depth=deep).",
     "planning-router: /z-plan-light was deleted from the codebase entirely; planning-router's primary route list, decision rules, and reason codes no longer reference it.",
     "planning-router historical_similar artifact matches (artifact_match_basis containing historical_similar, or a non-empty artifact_similar_candidates array) never satisfy has_existing_plan -- they are duplicate-work warnings (existing_artifact_similar) surfaced alongside whatever the primary-route rules decide, not a route unlock for /z-amend or /z-audit-plan.",
     "planning-router worktree_overlap is warning-only: it must be included in a compatible result and may lower confidence, but a standalone worktree overlap must never by itself return ask_user or write a route decision (that's reserved for active_registry_overlap).",
@@ -400,8 +398,7 @@
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
-    "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate.",
-    "expected_contract mismatch: binding a persona with contract: freeform to reviewer or self-reviewer role fails resolve-persona.py validate.",
+    "expected_contract roles: consultant_primary and consultant_secondary require contract: freeform; reviewer and self-reviewer require contract: review-verdict.",
     "Personas that omit the contract field pass all role contract checks -- contract is optional in persona definitions.",
     "scope-extractor: brace-expanded paths like commands/{z-plan,z-fix}.md are expanded to explicit entries (the old z-plan-light example is gone since that command was deleted); paths with * or ? are emitted as broad confidence.",
     "axiom-extractor: --historical mode is CPU/token-heavy; only invoke when the caller explicitly passed mode: historical.",

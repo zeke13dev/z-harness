@@ -55,10 +55,6 @@ fi
 
 printf '\nux-smoke: prod export filter for cursor\n'
 python3 -m z_harness_cli export --host cursor --surface prod --out "$OUT_DIR/cursor" --force
-if [ -d "$OUT_DIR/cursor/.cursor/skills/z-map" ]; then
-  echo 'ux-smoke: ERROR z-map leaked into prod cursor export' >&2
-  exit 1
-fi
 if [ -d "$OUT_DIR/cursor/.cursor/skills/z-explore" ]; then
   echo 'ux-smoke: ERROR z-explore leaked into prod cursor export' >&2
   exit 1

@@ -1,7 +1,7 @@
 {
   "concept": "z-review-all",
-  "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review.",
-  "last_updated": "2026-07-09",
+  "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals via inline /z-amend invocation, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review.",
+  "last_updated": "2026-07-11",
   "covers_spec": "none",
   "source_file": [
     "skills/z-review-all/SKILL.md",
@@ -49,7 +49,7 @@
       "line": 910,
       "symbol": "Phase 6.5 auto-amend",
       "kind": "module",
-      "summary": "Unconditionally auto-applies amendable spec_gap amendment_proposal tasks via /z-amend --skip-user-gate."
+      "summary": "Unconditionally auto-applies amendable spec_gap amendment_proposal tasks by invoking /z-amend inline; relies on /z-amend's own empty touched-completed-tasks gate to auto-proceed."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
@@ -118,6 +118,7 @@
   ],
   "gotchas": [
     "Phase 6.5 header says severity-based but current rule applies blocker/major/minor amendment proposals alike.",
+    "Phase 6.5 does not pass a --skip-user-gate flag to /z-amend (removed corpus-wide); the no-prompt effect instead comes from Phase 6.5's own step 3, which already filters out amendments touching [x] completed tasks before calling /z-amend, so /z-amend's Phase 4 gate always finds an empty Touched-but-completed-tasks list here and auto-proceeds.",
     "A clean review writes shipped.md and omits REVIEW-TASKS; Phase 6.5/6.6 then have nothing to do.",
     "amendment-brief.md lives under archive/$RRUN, not $BASE.",
     "Phase 7 memory review can dispatch axiom-extractor alongside review-agent when AXIOM_READY is present; axiom-extractor proposes only, never auto-approves.",

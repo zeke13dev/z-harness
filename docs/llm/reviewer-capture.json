@@ -116,8 +116,6 @@
     "z-fix",
     "z-audit",
     "z-mr-review",
-    "z-uplift",
-    "z-skill-fix",
     "z-improve",
     "z-amend",
     "z-maintain-docs",
@@ -126,11 +124,9 @@
     "z-brainstorm",
     "z-research",
     "z-style-init",
-    "z-providers-discover",
     "z-test-prune",
     "z-audit-plan",
     "z-audit-plan-style",
-    "z-personas",
     "subagent-telemetry"
   ],
   "invariants": [

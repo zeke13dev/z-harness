@@ -193,14 +193,10 @@ class HostAdapter(Protocol):
 
         Must write host-native config/prompt files to *dest* and return
         an ExportResult describing what was written.  Must never duplicate
-        the upstream exporter logic — delegates to:
-          1. ``runtime/drivers/<host>/export.py::export()`` for commands,
-             agents, and skills.
-          2. ``runtime/drivers/<host>/persona_export.py::export_persona()``
-             for each persona in ``personas/``.
-        Both results are merged into a single ExportResult.  Non-empty
-        warnings from the runtime export must be surfaced as RuntimeError
-        (legacy validation hard-gate).
+        the upstream exporter logic — delegates to
+        ``runtime/drivers/<host>/export.py::export()`` for commands, agents,
+        and skills.  Non-empty warnings from the runtime export must be
+        surfaced as RuntimeError (legacy validation hard-gate).
         """
         ...
 

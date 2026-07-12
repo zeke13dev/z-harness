@@ -193,8 +193,6 @@ _KIND_TO_COMMAND: dict[str, str] = {
     "brainstorm_run_end": "z-brainstorm",
     "audit_run_start": "z-audit",   # confirmed: commands/z-audit.md:83
     "audit_run_end": "z-audit",
-    "uplift_run_start": "z-uplift",
-    "uplift_run_end": "z-uplift",
     "plan_split_run_start": "z-plan-split",
     "plan_split_run_end": "z-plan-split",
     "debug_run_start": "z-debug",   # confirmed: commands/z-debug.md:39
@@ -206,7 +204,6 @@ _TERMINAL_KINDS: frozenset[str] = frozenset({
     "run_end",
     "brainstorm_run_end",
     "audit_run_end",
-    "uplift_run_end",
     "plan_split_run_end",
     "debug_run_end",
 })

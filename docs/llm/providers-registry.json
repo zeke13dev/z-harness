@@ -7,7 +7,6 @@
     "scripts/resolve-provider.py",
     "scripts/resolve-provider.sh",
     "scripts/discover-providers.py",
-    "skills/z-providers-discover/SKILL.md",
     "docs/human/PROVIDERS.md",
     "runtime/compat.py",
     "runtime/contract/provider.schema.json",
@@ -125,7 +124,6 @@
   "consumed_by": [
     "agents",
     "commands",
-    "personas-and-roles",
     "reviewer-capture"
   ],
   "invariants": [
@@ -136,7 +134,7 @@
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process (PPID-keyed stamp file).",
     "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically and memoized per (process, file path).",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved (kind, command, args_template, stdin, timeout_s, model_label, model_arg_template, model_env_var, default_model, auth_env types).",
-    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through /z-providers-discover with explicit user confirmation and atomic tmpfile+rename.",
+    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through the /z-setup wizard's provider-discovery step with explicit user confirmation and atomic tmpfile+rename.",
     "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model. When model_arg_template is null (v1 legacy), returns args_template immediately without model resolution.",
     "providers.json.roles is the legacy fallback for role binding, below both TOML role-runtime override and legacy [models.<role>]. Using providers.json.roles emits legacy_provider_roles_used on every lookup through that path.",
     ".z-harness/providers.json v2 ships both old names (codex/gemini/claude/cursor/agy) and new -cli names (codex-cli/gemini-cli/claude-cli/cursor-cli/agy-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries.",
@@ -153,7 +151,7 @@
     "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
     "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
-    "Role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
+    "Role with no bound provider causes immediate halt with actionable error pointing to the /z-setup provider-discovery step.",
     "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
     "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
     "_resolve_models_override enforces consultant distinctness across ALL combinations of TOML role-runtime and legacy paths via _peek_consultant_provider, which checks the TOML role-runtime binding first, then [models] override, then legacy roles map, when looking up the peer consultant's provider.",

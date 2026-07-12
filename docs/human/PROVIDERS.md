@@ -1,7 +1,7 @@
 # PROVIDERS — Runtime Registry Guide
 
 > Last updated: 2026-07-09
-> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, skills/z-providers-discover/SKILL.md, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json, scripts/omp-consult.sh
+> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json, scripts/omp-consult.sh
 
 ## Overview
 
@@ -10,9 +10,9 @@ invoked — the executable name, argument template, model flag format, and
 timeout. A provider is a runtime descriptor only; it does not dictate which
 persona to use or which model to select.
 
-Those choices live in the **role-binding layer**. See
-[PERSONAS.md](PERSONAS.md) for how persona, model, and runtime are bound to
-roles per command. Resolution walks four layers in priority order: the
+Those choices live in the **role-binding layer** — `[roles.<command>.<role>]`
+stanzas in `config.toml` bind a `runtime` (and optional `model`) to each role
+per command. Resolution walks four layers in priority order: the
 `Z_HARNESS_CONSULT=off` sentinel short-circuit, `config.toml`
 `[roles.<command>.<role>].runtime` / `[roles.default.<role>].runtime`
 overrides, the legacy `[models.<role>]` provider selector, and finally the
@@ -32,7 +32,7 @@ returned.
 - `scripts/resolve-provider.py:604` — `_preflight_provider()` — validates command-on-PATH, argv/model composition, and OMP auth readiness (`omp token <provider>`); emits `provider_preflight_ok`/`provider_preflight_failed`.
 - `scripts/resolve-provider.py:801` — `_peek_consultant_provider()` — resolves the peer consultant's canonical provider (checking TOML override, then `[models]`, then legacy roles) without emitting alias telemetry, used to enforce the distinctness invariant.
 - `scripts/discover-providers.py:58` — `discover()` — probes PATH for known CLIs (`codex`, `gemini`, `claude`, `ollama`, `agy`, `gpt`) and returns a proposed **v1** registry; never writes files.
-- `skills/z-providers-discover/SKILL.md:1` — `/z-providers-discover` — interactive discovery + role-binding + atomic write command.
+- `scripts/discover-providers.py:1` — provider discovery + role-binding + atomic write helper (invoked from the `/z-setup` wizard's provider-discovery step).
 - `runtime/compat.py:15` — `resolve_provider()` — Python runtime wrapper that shells out to `resolve-provider.py`.
 - `runtime/contract/provider.schema.json:1` — `ProviderRegistry` — draft-07 schema for `.z-harness/providers.json`, accepting versions 1 (deprecated) and 2, `kind` enum `["cli","sdk"]` (resolver only handles `"cli"`).
 - `scripts/log-providers.sh:34` — none-sentinel guard — handles the plaintext `none` before any JSON parse and emits `provider_resolution_skipped`.
@@ -44,7 +44,7 @@ returned.
 - `config` (config.toml) — `[roles.<command>.<role>].runtime` / `[roles.default.<role>].runtime` are the preferred external-provider binding overrides, above legacy `[models.<role>]` and `providers.json.roles`.
 - `reviewer-capture` / `agents` (`consultant-primary.md`, `consultant-secondary.md`, `reviewer.md`, `pre-reviewer.md`, `self-reviewer.md`) — call `resolve-provider.sh` (or `runtime/compat.py:resolve_provider`) to get the invocation descriptor for their role; `self-reviewer` never calls it (native self-review path when `runtime.consult=off`).
 - `personas-and-roles` — persona/model contract validation is a separate axis from provider resolution; the registry supplies only the runtime (command/argv/auth) axis.
-- `commands` (`/z-plan`, `/z-execute`, `/z-brainstorm`, `/z-test-prune`, `/z-debug`, `/z-mr-review`, `/z-research`, `/z-review-all`, `/z-uplift`) — call `scripts/log-providers.sh` at start-up for a one-line resolution summary and `provider_resolved`/`provider_resolution_skipped` telemetry.
+- `commands` (`/z-plan`, `/z-execute`, `/z-brainstorm`, `/z-test-prune`, `/z-debug`, `/z-mr-review`, `/z-research`, `/z-review-all`) — call `scripts/log-providers.sh` at start-up for a one-line resolution summary and `provider_resolved`/`provider_resolution_skipped` telemetry.
 - `runtime/dispatch/dispatcher.py` and `z_harness_cli/mcp/server.py` / `z_harness_cli/env_bundle.py` — additional native-runtime and MCP-surface callers of provider resolution outside the shell-script agents.
 - `capabilities-matrix` — keeps OMP consult-provider compatibility (`omp-antigravity-pro`, `omp-codex`) separate from first-class OMP host fidelity; consultant provider entries do not imply `OmpAdapter` support or native command-family tiers.
 
@@ -355,15 +355,16 @@ config files.
 }
 ```
 
-Role binding is configured separately in `config.toml` — see
-[PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
+Role binding is configured separately in `config.toml` via
+`[roles.<command>.<role>]` / `[roles.default.<role>]` stanzas.
 
 ---
 
 ## Discovery command
 
-Run `/z-providers-discover` to auto-detect installed LLM CLIs and generate a
-starter `providers.json`.  The command probes your `PATH` for `codex`,
+Run the `/z-setup` wizard's provider-discovery step (which invokes
+`scripts/discover-providers.py`) to auto-detect installed LLM CLIs and generate a
+starter `providers.json`.  It probes your `PATH` for `codex`,
 `gemini`, `claude`, `ollama`, `agy`, and `gpt`; shows the proposed config; and
 asks which roles to bind before writing.
 
@@ -379,7 +380,6 @@ above.
 2. Put it on your `PATH` (or supply an absolute path as `command`).
 3. Add a stanza under `providers` in your `~/.config/z-harness/providers.json`.
 4. Bind a role in `config.toml` with `[roles.<command>.<role>]` or `[roles.default.<role>]` and `runtime = "<name>"`.
-   See [PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
 
 Example wrapper skeleton:
 
@@ -399,7 +399,7 @@ my-llm-api call --prompt "$PROMPT"
 - Schema at `runtime/contract/provider.schema.json` permits `kind="sdk"` and optional `auth_env`/`session_resumable`/`allow_cross_vendor_env`, but `resolve-provider.py` validates only `kind="cli"` — an SDK entry passes schema but causes exit 2 if resolved.
 - `Z_HARNESS_REPO_PROVIDERS` overrides the repo config path entirely, bypassing git-based discovery of the repo root.
 - The shadow de-dup stamp file is keyed on `os.getppid()`, not PID — the warning fires once per parent process tree, not once per subshell.
-- A role with no bound provider halts immediately with an actionable error pointing at `/z-providers-discover`.
+- A role with no bound provider halts immediately with an actionable error pointing at the `/z-setup` provider-discovery step.
 - A CLI missing from `PATH` causes exit 1 even if the config entry is otherwise valid.
 - `discover-providers.py` still emits `version: 1` and old-style names (`codex`, `gemini`, `claude`, `ollama`, `agy`, `gpt`) — intentional; the resolver upgrades v1 registries transparently in memory.
 - `resolve()` unconditionally passes `is_legacy=True` when resolving from `providers.json.roles`, so `legacy_provider_roles_used` fires on every lookup through that path, alias or not; when an alias is also matched, both `legacy_provider_roles_used` and `provider_alias_used` fire for one resolution.
@@ -412,7 +412,7 @@ my-llm-api call --prompt "$PROMPT"
 
 | Message | Cause | Fix |
 |---------|-------|-----|
-| `[providers] provider_preflight_failed: role=<r> ... role is unbound` | No runtime bound for role | Add a `[roles.<command>.<r>]` or `[roles.default.<r>]` entry to `config.toml`, or run `/z-providers-discover`. |
+| `[providers] provider_preflight_failed: role=<r> ... role is unbound` | No runtime bound for role | Add a `[roles.<command>.<r>]` or `[roles.default.<r>]` entry to `config.toml`, or run the `/z-setup` provider-discovery step. |
 | `[providers] provider_preflight_failed: role=<r>, provider=<p> ... command=<c> not on PATH` | CLI missing from shell `PATH` | Install the CLI or update `PATH`. |
 | `[providers] schema version must be 1 or 2` | `version` field wrong or missing | Set `"version": 2` in your config. |
 | `[providers] consultant_primary and consultant_secondary must resolve to DISTINCT providers` | Both consultant roles point to the same provider | Bind them to different providers. |
@@ -437,9 +437,8 @@ used, `omp-consult.sh` emits `provider_fallback_used` with role, provider,
 attempted model, auth backend, and fallback provider; token values, env values,
 and stderr dumps are never logged.
 
-For full role resolution details (including persona and model), see the
-`persona_bound` and `model_resolved` events documented in
-[PERSONAS.md — Telemetry events](PERSONAS.md#telemetry-events).
+For full role resolution details, see the `model_resolved` event emitted at
+role-dispatch time.
 
 ## Examples
 

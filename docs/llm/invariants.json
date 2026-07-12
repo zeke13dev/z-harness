@@ -21,20 +21,6 @@
       "symbol": "Invariant Entry schema",
       "kind": "module",
       "summary": "Required fields, tag enum, severity enum (blocker/major/minor), source enum for each entry."
-    },
-    {
-      "file": "scripts/validate-invariants.py",
-      "line": 1,
-      "symbol": "validate-invariants.py",
-      "kind": "fn",
-      "summary": "CLI validator: id uniqueness, tag-set subset, fixture_schema/defaults consistency, severity/source enums."
-    },
-    {
-      "file": "scripts/invariant-check.sh",
-      "line": 1,
-      "symbol": "invariant-check.sh",
-      "kind": "fn",
-      "summary": "CI gate: runs tests, exits non-zero on uncovered blocker invariants or mandatory-test failure."
     }
   ],
   "depends_on": [

@@ -266,7 +266,7 @@ def validate_recommended_command(cmd: str) -> str | None:
     if not cmd_pattern.match(cmd):
         return (
             f"--recommended-command must start with '/z-' followed by kebab-case word "
-            f"(e.g. /z-do, /z-execute), got: {cmd!r} (rule 1)"
+            f"(e.g. /z-plan, /z-execute), got: {cmd!r} (rule 1)"
         )
 
     # Rule 6: shell parseability sanity check (shlex.split raises on malformed quoting)

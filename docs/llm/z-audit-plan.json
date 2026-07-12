@@ -1,7 +1,7 @@
 {
   "concept": "z-audit-plan",
   "summary": "Read-only, claim-first, contract-level pre-implementation plan audit: low-risk plans skip via a fast-path; otherwise reality-check + design audit + optional pre-review + adversarial cross-LLM review feed a Class-tagged (spec_gap|premise_failure) PLAN_AUDIT_REPORT.md, then Phase 5 auto-amends spec_gap findings via /z-amend and surfaces premise_failure concerns as a prose brief, with a Phase 9 preference-elevation proposal.",
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-11",
   "covers_spec": "none",
   "source_file": [
     "skills/z-audit-plan/SKILL.md",
@@ -49,7 +49,7 @@
       "line": 679,
       "symbol": "auto_split branch",
       "kind": "module",
-      "summary": "Auto-amends spec_gap via /z-amend --skip-user-gate, renders premise_failure as prose brief."
+      "summary": "Auto-amends spec_gap via /z-amend (no flag; completed-task guard lets its Phase 4 gate auto-proceed), renders premise_failure as prose brief."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
@@ -112,7 +112,8 @@
     "PLAN_AUDIT_REPORT.md must exist and be parseable before Phase 5 extraction, else audit_artifact_missing + exit 1.",
     "premise_failure findings may have no single affected task/file; amendment-brief.py's affected field is omitted, not left empty.",
     "On any post-claim halt, release must run before deregister; release only if CLAIM_RC==0, deregister only if REG_RC==0.",
-    "--command /z-audit-plan is required on every plan-claim.sh call — omitting it breaks --expected-holder identity comparisons."
+    "--command /z-audit-plan is required on every plan-claim.sh call — omitting it breaks --expected-holder identity comparisons.",
+    "/z-amend has no --skip-user-gate flag (removed corpus-wide). auto_split's /z-amend calls carry no flag at all; the completed-task guard in Phase 5 step 2a (skip spec_gap findings whose task is already [x]) is what guarantees /z-amend's own Phase 4 gate finds an empty Touched-but-completed-tasks list and auto-proceeds (amend_user_gate_autoproceed)."
   ],
   "memories": []
 }

@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # lint-frontmatter.sh — Validate all frontmatter-bearing .md files
 #
-# Checks every file under agents/, skills/, personas/, and scripts/pi_assets/
+# Checks every file under agents/, skills/, and scripts/pi_assets/
 # for YAML frontmatter that is parseable by a strict
 # YAML 1.2 parser. Catches unquoted colons in description values
 # (e.g. "file:line", "tasks: [...]") that the custom regex frontmatter
 # parser silently accepts.
 #
-# With --strict: also validates that every SKILL.md under skills/ has
-# required fields (origin: and tags:) with non-empty values.
+# With --strict: also validates that every SKILL.md under skills/ has the
+# two fields SKILL-STYLE.md §1 requires every skill to declare (name:,
+# description:) with non-empty values, and that audience: (when present) is
+# one of user|maintainer|internal. Every other frontmatter field —
+# argument-hint, audience itself when absent, driver_features_required, and
+# the omitted-at-default fields disable-model-invocation/runtime/
+# unsupported_driver_behavior — is OPTIONAL: its absence passes, it is never
+# a failure. (The pre-SKILL-STYLE origin:/tags: convention some unconverted
+# skills still carry is likewise no longer required or checked.)
 #
 # Exits 0 if all pass, 1 on any failure.
 
@@ -33,7 +40,7 @@ errors=0
 total=0
 
 # Directories to scan (relative to REPO_ROOT)
-scan_dirs=("agents" "skills" "personas" "scripts/pi_assets")
+scan_dirs=("agents" "skills" "scripts/pi_assets")
 
 # Build a Python one-liner that validates frontmatter
 # We try yaml (YAML 1.2) first, fall back to PyYAML, skip if neither available.
@@ -108,38 +115,45 @@ repo_root = Path(os.environ.get('REPO_ROOT', '.'))
 skills_dir = repo_root / "skills"
 errors = 0
 
+VALID_AUDIENCE = {"user", "maintainer", "internal"}
+
 if not skills_dir.is_dir():
     print("lint-frontmatter (strict): skills/ directory not found — skipping required-field check")
     sys.exit(0)
 
 for md_file in sorted(skills_dir.rglob("SKILL.md")):
     text = md_file.read_text(encoding="utf-8")
+    rel = md_file.relative_to(repo_root)
     if not text.startswith("---\n"):
-        rel = md_file.relative_to(repo_root)
         print(f"FAIL: {rel} — missing frontmatter fence")
         errors += 1
         continue
     end_idx = text.find("\n---", 3)
     if end_idx == -1:
-        rel = md_file.relative_to(repo_root)
         print(f"FAIL: {rel} — unclosed frontmatter")
         errors += 1
         continue
     yaml_string = text[4:end_idx]
 
-    # Check for required fields
-    has_origin = re.search(r'^origin:\s*\S', yaml_string, re.MULTILINE)
-    # Accept inline [a, b] or block-list format (tags:\n  - item).
-    # Both must have at least one entry.
-    has_tags = (re.search(r'^tags:\s*\[[^\]]', yaml_string, re.MULTILINE) or
-                re.search(r'^tags:\s*\n\s*-', yaml_string, re.MULTILINE))
+    # Required fields (SKILL-STYLE.md §1): name: and description: only.
+    has_name = re.search(r'^name:\s*\S', yaml_string, re.MULTILINE)
+    has_description = re.search(r'^description:\s*\S', yaml_string, re.MULTILINE)
 
-    rel = md_file.relative_to(repo_root)
-    if not has_origin:
-        print(f"FAIL: {rel} — missing or empty 'origin:' field")
+    if not has_name:
+        print(f"FAIL: {rel} — missing or empty 'name:' field")
         errors += 1
-    if not has_tags:
-        print(f"FAIL: {rel} — missing or empty 'tags:' field")
+    if not has_description:
+        print(f"FAIL: {rel} — missing or empty 'description:' field")
+        errors += 1
+
+    # audience: is optional, but when present must be one of the three
+    # SKILL-STYLE.md §1 values.
+    audience_m = re.search(r'^audience:\s*(\S+)', yaml_string, re.MULTILINE)
+    if audience_m and audience_m.group(1) not in VALID_AUDIENCE:
+        print(
+            f"FAIL: {rel} — invalid 'audience:' value {audience_m.group(1)!r} "
+            f"(must be one of user|maintainer|internal)"
+        )
         errors += 1
 
 if errors:

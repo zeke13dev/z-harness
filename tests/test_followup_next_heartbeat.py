@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -43,6 +44,16 @@ def _run_lock(*args: str) -> subprocess.CompletedProcess:
 def _read_lock_json(lock_path: Path) -> dict:
     content = lock_path.read_text(encoding="utf-8").strip()
     return json.loads(content)
+
+
+def _pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
 
 
 def _iso_to_epoch(ts: str) -> float:
@@ -69,6 +80,7 @@ class TestHeartbeatLoop(unittest.TestCase):
             lock_data = _read_lock_json(lock_path)
             self.assertIn("last_heartbeat", lock_data)
             last_hb_before = _iso_to_epoch(lock_data["last_heartbeat"])
+            daemon_pid = lock_data.get("pid")
 
             # Step 2: Start heartbeat loop with 1s sleep (instead of 30s) for test speed.
             # This mirrors the Phase 5 bash snippet from z-followup-next.md, using a
@@ -87,6 +99,23 @@ class TestHeartbeatLoop(unittest.TestCase):
 
             # Step 3: Wait 3 seconds for at least two heartbeat cycles
             time.sleep(3)
+
+            # Precondition check (attributability, not a race workaround): confirm
+            # the holder daemon this test itself started via `acquire` is still
+            # alive right before the timing assertion. That daemon is a forked,
+            # detached background process outside this test's or sink-lock.sh's
+            # heartbeat-loop control; under heavy concurrent load it has been
+            # observed dying (see LEDGER T105/T118), which would surface below as
+            # a missing/empty lock file rather than a heartbeat-loop defect.
+            if daemon_pid is not None and not _pid_alive(daemon_pid):
+                print(
+                    f"NOTE: test_heartbeat_advances_last_heartbeat precondition: "
+                    f"holder daemon (pid={daemon_pid}) is not alive ahead of the "
+                    f"timing assertion; any failure below is attributable to "
+                    f"scripts/sink-lock.sh's daemon lifetime, not the heartbeat "
+                    f"loop under test.",
+                    file=sys.stderr,
+                )
 
             # Step 5: Read lock JSON and check last_heartbeat advanced
             self.assertTrue(lock_path.exists(), "Lock file must still exist after 3s")

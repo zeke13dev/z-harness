@@ -1,13 +1,9 @@
 ---
 name: z-fix
-disable-model-invocation: false
 description: Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult ("does the proposed cause explain all symptoms?"), inline implementation, non-negotiable Codex review. Optional post-mortem (auto-suggested if review needed >1 retry). Early gate recommends /z-debug if user signals unknown root cause.
 argument-hint: <symptom or proposed fix description>
-runtime: c1
-driver_features_required:
-  - subagent
-  - ask_user
-unsupported_driver_behavior: explicit_gate
+audience: user
+driver_features_required: [subagent, ask_user]
 ---
 
 You are running **z-harness `/z-fix`** — a fast path for bugs where you already know the root cause. Target: ≤15 min wall time end-to-end.
@@ -50,7 +46,7 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
-   - `halt`: emit `fix_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+   - `halt`: emit `fix_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`. Pre-preflight: nothing is registered yet, so this is a plain exit, not a teardown:
      ```bash
      if [[ "$RESULT" == "halt" ]]; then
        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-fix}" fix_halt \
@@ -61,10 +57,33 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
      ```
 
    **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
-2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
-3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
-4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
-5. **Version stamp + log:**
+
+2. **Preflight ceremony (single call).** `scripts/z-preflight.sh` owns resolve/session-id/RUN-stamp/claim/register/run-brief-init/run_start/kernel-resolve, in that fixed order (contract: script header; LEDGER T005). `/z-fix` is a WRITE command — it claims (no `--no-claim`):
+   ```bash
+   # Capture BEFORE eval — $? after eval loses the script's exit-code contract.
+   PREFLIGHT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-preflight.sh" \
+     --command /z-fix --slug "$Z_HARNESS_SLUG" \
+     --intent "<symptom + hypothesis from \$ARGUMENTS — max 240 chars; not the command name alone>")"
+   PREFLIGHT_RC=$?
+   [ "$PREFLIGHT_RC" -eq 0 ] && eval "$PREFLIGHT_OUT"
+   ```
+   On success, `RUN`, `Z_HARNESS_PLAN_DIR`, `CURRENT_ARCHIVE_DIR`, `Z_HARNESS_SESSION_ID`, `CLAIM_HELD`, `REG_RC`, `KERNEL_PATH` are exported (script header is the source of truth). Run-brief is initialized as part of this call — registry `/z-fix`, profile `full`, artifact `FIX.md`:
+   ```bash
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
+   When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of both Phase 3 consultant dispatches; omit the line when empty (the agent's static fallback self-resolves).
+
+   **Standard contention/corrupt-lock/register-failure menu** (documented once in the `z-preflight.sh` header; `/z-plan` Setup step 2 is the canonical writer instance — this is z-fix's deviations only, SKILL-STYLE.md §2):
+   - **Contention (`PREFLIGHT_RC==10`)** — nothing was created. `AskUserQuestion` — proceed anyway / abort / use a new slug.
+     - proceed anyway → re-run the SAME preflight call with `--no-claim` appended and continue uncoordinated; log a `fix_claim_override` event.
+     - abort → `exit 1`. (Nothing was ever created.)
+     - use a new slug → re-derive a slug once (loop-guard: at most 1 re-derive; if the new slug also contends, abort) and re-run the original claiming preflight call on it.
+   - **Corrupt lock (`PREFLIGHT_RC==11`)** — same shape; manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry). `AskUserQuestion` — abort (default) / proceed UNCOORDINATED (`--no-claim`; log a `fix_claim_corrupt_proceed` event).
+   - **Register failure (`REG_RC != 0` on `PREFLIGHT_RC==0`)** — graduated, not a hard stop (z-preflight.sh already warned on stderr); `RUN`/`Z_HARNESS_PLAN_DIR`/run-brief already exist. `AskUserQuestion` — proceed without coordination (continue; the claim is still held; skip heartbeats/deregister later) / abort (run **Run Brief — halt finalize** below with reason `active-plan registry register failed`, status `escalated`).
+
+3. **Log fix run start** (domain-specific fields the generic wrapper `run_start` event doesn't carry):
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
@@ -74,20 +93,9 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
    ```
-
-   **Run Brief init (immediately after `fix_run_start`).** Registry: `/z-fix`, profile `full`, artifact `FIX.md`.
-   ```bash
-   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
-   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
-   FIX_INTENT="$(python3 -c 'import json,sys; t=json.loads(sys.argv[1]).get("task","").strip(); print(("Fix: "+t)[:240] if t else "Fix known diagnosis")' "$START_PAYLOAD")"
-   bash "$RB_SH" init --run "$RUN" --command /z-fix --slug "$Z_HARNESS_SLUG" --profile full --intent "$FIX_INTENT"
-   export RUN_BRIEF_PROFILE=full
-   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
-   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
-   ```
-6. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
-7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
-8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
+4. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+5. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
+6. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
 
 ## Auto-bail thresholds (check throughout)
 
@@ -98,7 +106,7 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple modules, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Do not proceed to implementation. Per **Run Brief — halt finalize** with reason `scope grew past fix-mode thresholds`, log `fix_run_end` with `{status: "escalated"}`, then exit.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Do not proceed to implementation. Run **Run Brief — halt finalize** (below) with reason `scope grew past fix-mode thresholds` and status `escalated`.
 
 ## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
 
@@ -111,7 +119,7 @@ Before any exploration, ask via `AskUserQuestion`:
 > - `no — recommend /z-debug` (will exit)
 > - `modify hypothesis — let me refine it first` (free-text follow-up, then loop back to this question)
 
-If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then run **Run Brief — halt finalize** with reason `wrong tool — no hypothesis`, log `fix_run_end` with `{status: "wrong_tool"}`, and exit. Do not continue.
+If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then run **Run Brief — halt finalize** (below) with reason `wrong tool — no hypothesis` and status `wrong_tool`. Do not continue.
 
 This gate is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis.
 
@@ -156,7 +164,7 @@ If there are >2 truly non-obvious decisions (new dep, public API change, algorit
 
 ## Phase 3 — Bundled `light-fix` consult
 
-Spawn both consultants in parallel in a single message. The consult question is framed around the user's hypothesis — NOT a generic "what's the best fix?" framing:
+Spawn both consultants in parallel in a single message. The consult question is framed around the user's hypothesis — NOT a generic "what's the best fix?" framing. When `KERNEL_PATH` is non-empty (Setup step 2), add `kernel_path: <KERNEL_PATH>` as a line in each prompt below.
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip both Agent() calls. The consultant results inform Phase 4 synthesis; drivers that skip them should warn the user that cross-LLM consult is unavailable and hard rules require both Gemini and Codex consultants. -->
 ```
@@ -195,7 +203,7 @@ Present the brief synthesis (3-5 bullets) as a conversational reply — **not** 
 
 For any flagged shortcut: surface it in the same reply — the shortcut, its tradeoff vs the robust path, and your recommendation — and ask for explicit approval conversationally (default to the robust path if not approved).
 
-If user picks **Abandon** → write nothing more; run **Run Brief — halt finalize** with reason `user abandoned fix`, log `fix_run_end` with `{status: "abandoned"}`, and exit.
+If user picks **Abandon** → write nothing more; run **Run Brief — halt finalize** (below) with reason `user abandoned fix` and status `abandoned`.
 
 ## Phase 6 — Write FIX.md
 
@@ -263,7 +271,7 @@ If you applied any fix from the checklist, reflect it in the run-brief outcome w
 **Mid-implementation scope growth — halt, do not continue.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP immediately. Do NOT offer to continue or spawn a subagent — auto-bail is non-negotiable:
 
 1. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found (which new files or decisions surfaced and why they exceed fix-mode thresholds).
-2. Run **Run Brief — halt finalize** with reason `scope grew mid-implementation`, log `fix_run_end` with `{status: "escalated"}`, and exit. The user must restart with `/z-plan`.
+2. Run **Run Brief — halt finalize** (below) with reason `scope grew mid-implementation` and status `escalated`. The user must restart with `/z-plan`.
 
 Hard limit: if you find yourself touching >7 files inline, halt regardless — that's no longer a fix-mode change.
 
@@ -286,16 +294,14 @@ Agent(
 )
 ```
 
-When `personas.review_eval` is ON (default ON), an advisory persona reviewer also runs in parallel with the Codex reviewer above, per the [Advisory eval-reviewer shared snippet in skills/z-execute/SKILL.md](skills/z-execute/SKILL.md#ADVISORY-EVAL-REVIEWER). The advisory arm uses `reviewer_participant=random_arm` and is logged for telemetry only — its verdict never changes pass/fail and never triggers a retry. Only the base Codex reviewer outcome determines whether Phase 8 passes or retries.
-
 Increment `REVIEW_CYCLES` by 1.
 
 Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
-- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once. Increment `REVIEW_CYCLES` by 1.
+- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), run **Run Brief — halt finalize** (below) with reason `no_change_on_retry` and status `escalated`. Otherwise re-spawn `reviewer` once. Increment `REVIEW_CYCLES` by 1.
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
-- **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
+- **Second failure**: `AskUserQuestion` — proceed anyway / patch manually / abandon. On **abandon**, run **Run Brief — halt finalize** (below) with reason `user abandoned after second review failure` and status `abandoned`. On proceed anyway or patch manually, continue inline (no halt).
 
 **No blockers/majors** → accept.
 
@@ -347,22 +353,18 @@ If user picks **no** → skip; nothing written.
 ## Phase 10 — Finalize
 
 1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.
-2. **Run Brief finalize (registry Phase 10).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment before `fix_run_end`. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+2. **Run Brief finalize (registry Phase 10).** Set registry artifact env, pre-seed outcome/next, then include the shared fragment before `fix_run_end`. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
 
    Build `$NEXT_JSON` from FIX.md: when **Docs touched** is non-empty, use `{"label":"Refresh affected docs","command":"/z-maintain-docs"}`; otherwise `{"label":"Done — no follow-up required","command":null}`.
 
    ```bash
-   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
    export RUN_BRIEF_PROFILE="full"
    export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
    export RUN_BRIEF_ARTIFACT_FALLBACKS=""
-   export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
-   export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
 
    RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
    bash "$RB_SH" set-section --run "$RUN" --section outcome \
      --value "Fix shipped. ${N_FILES} files changed; review passed (${REVIEW_CYCLES} review cycle(s))."
-   bash "$RB_SH" set-section --run "$RUN" --section status --value "shipped"
    NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
    printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
    bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
@@ -371,22 +373,23 @@ If user picks **no** → skip; nothing written.
 
    <!-- include: _fragments/run-brief-finalize.md -->
 
-3. Mark the run done (after brief `--require` gate):
+3. Log the domain-specific run end, then tear down (after the brief's `--require` gate; releases the claim, deregisters, emits the generic `run_end`):
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
      "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"postmortem_written":%s}' \
         "$N_FILES" "$REVIEW_CYCLES" "$POSTMORTEM_WRITTEN")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+     --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-fix --status complete
    ```
    Where `$POSTMORTEM_WRITTEN` is `true` or `false`.
 
 ## Run Brief — halt finalize
 
-Before logging `fix_run_end` on any terminal halt after `run-brief.sh init`. Substitute `<reason>` in the outcome line. When `FIX.md` is missing, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+Every terminal halt after Setup step 2's `z-preflight.sh` call has succeeded (i.e. `RUN` is exported) funnels through this same procedure — never a bespoke cleanup path (SKILL-STYLE.md §2). Set `<reason>` (outcome text) and `<status>` (`wrong_tool` | `escalated` | `abandoned`) at the call site, then run:
 
 ```bash
-CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
 export RUN_BRIEF_PROFILE=full
-export RUN_BRIEF_ARTIFACT="${Z_HARNESS_PLAN_DIR}/FIX.md"
+export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
 export RUN_BRIEF_ARTIFACT_FALLBACKS=""
 RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
 bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
@@ -397,6 +400,17 @@ JSON
 
 <!-- include: _fragments/run-brief-finalize.md -->
 
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
+  "$(printf '{"status":"%s","files_changed":%d,"review_cycles":%d,"postmortem_written":false}' \
+     "<status>" "${N_FILES:-0}" "${REVIEW_CYCLES:-0}")"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-fix --status aborted
+exit 1
+```
+
+When `FIX.md` is missing (most halts, since it's written in Phase 6), the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
 ## Hard rules
 
 - **Never skip Codex review.** Fix mode cuts planning overhead, not correctness.
@@ -406,6 +420,7 @@ JSON
 - **No emojis** anywhere in artifacts.
 - **Phase 0 is non-skippable.** If the user cannot name a hypothesis, the command exits with a `/z-debug` recommendation, even if an argument was passed.
 - **Single bundled `light-fix` consult only.** Parallel Gemini + Codex, framed around "does this cause explain all symptoms?" — not a multi-round hypothesis generation flow.
+- **No exit past the funnel.** Complete → Phase 10's teardown call; everything else after preflight → **Run Brief — halt finalize** above.
 
 ### Git history-rewrite safety
 
@@ -413,16 +428,4 @@ Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or inte
 
 ---
 
-## Runtime contract conformance
-
-| Feature | Used | Gates |
-|---------|------|-------|
-| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer (base codex gate + optional advisory eval-reviewer when personas.review_eval ON) |
-| `ask_user` | yes | Empty-args question; Phase 0 wrong-tool gate; Phase 1 clarification (premise check); Phase 5 approval + shortcut approval; Phase 8 second-failure decision; Phase 9 post-mortem decision |
-| `skill_invoke` | no | — |
-
-Driver support requirements: see frontmatter `driver_features_required`.
-
-Non-supporting drivers **must surface and skip** any gated block — silent
-omission is forbidden. Each gated call site is annotated with a
-`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+Driver support requirements: see frontmatter `driver_features_required`. Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site carries its own `<!-- RUNTIME-GATE: ... -->` comment immediately before the call; that is the single source of truth (SKILL-STYLE.md §1 — the closing conformance table is retired for rewritten skills).

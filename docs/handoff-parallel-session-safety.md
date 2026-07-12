@@ -154,8 +154,8 @@ awareness registry + session-id stamp. C (worktrees) and D (snapshot) were defer
 3. Migration: do we relocate the existing in-repo plans, or start fresh externally?
    → **Answered:** `scripts/migrate-plan-layout.sh --all` handles bulk migration with live-run barrier.
 4. Discoverability: users (and docs) expect `z-harness/<slug>/`. If artifacts move out of the repo,
-   how do we surface "where are my plans?" (a `z-stats`/`z-where` pointer?).
-   → **Answered:** `/z-where` command shows resolved base + tier + active-plan registry list.
+   how do we surface "where are my plans?" (a `z-stats` pointer?).
+   → **Answered:** `/z-stats` shows resolved base + tier + active-plan registry list.
 5. Should `/z-overnight` / `/z-execute` refuse to start (or loudly warn) if they detect another
    active session or an in-repo (clean-vulnerable) base dir?
    → **Answered:** Phase 0 registry check does this; Z_HARNESS_STRICT_OVERLAP=1 makes it a hard halt.

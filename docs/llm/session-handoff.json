@@ -168,7 +168,7 @@
     "git diff --stat only — never capture full hunks; full hunks can be arbitrarily large and blow the SESSION.md ceiling immediately.",
     "INTENT BFS .bfs_level_state checkpoint also uses done_set_hash; a hash mismatch there restarts BFS from level 0 (safe but potentially redundant work).",
     "execute_clear_checkpoint_protocol re-verifies the curator's returned done_ids_hash against a fresh done_set_hash read before trusting it; a mismatch (TASKS.md changed between dispatch and return) is treated as a checkpoint failure (done_ids_hash_mismatch), not a success — do not shortcut this re-check.",
-    "write-clear-checkpoint.sh and check-compaction.sh are now shared across many commands beyond /z-execute (z-plan, z-audit, z-test, z-explore, z-debug, z-uplift, z-research, z-review-all, z-handoff, z-clear-checkpoint, z-maintain-docs); those two scripts are out of this concept's source_file scope and may warrant their own concept doc."
+    "write-clear-checkpoint.sh and check-compaction.sh are now shared across many commands beyond /z-execute (z-plan, z-audit, z-test, z-explore, z-debug, z-research, z-review-all, z-handoff, z-maintain-docs); those two scripts are out of this concept's source_file scope and may warrant their own concept doc."
   ],
   "memories": []
 }

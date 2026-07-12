@@ -34,7 +34,7 @@ Return exactly this parseable shape and no prose before or after:
 
 ```text
 STATUS: routed | ask_user | bad_input
-RECOMMENDED: /z-do | /z-plan | /z-plan-split | /z-brainstorm | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | /z-sharpen | ask_user
+RECOMMENDED: /z-plan --quick | /z-plan | /z-plan-split | /z-brainstorm | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | /z-sharpen | ask_user
 ROUTE_CLASS: primary | contextual | none
 CONFIDENCE: high | medium | low
 REASON_CODES: <comma-separated stable reason codes>
@@ -51,7 +51,7 @@ REASON: <one line, <=160 chars>
 
 Primary route targets:
 
-- `/z-do`
+- `/z-plan --quick`
 - `/z-plan`
 - `/z-plan-split`
 - `/z-brainstorm` (approach-framing route for "what should we do?" prompts, unsettled alternatives, architecture choices, reversibility uncertainty, or post-artifact approach gaps)
@@ -207,7 +207,7 @@ Apply these rules in order:
    - If `cluster_seams < 2`, recommend `/z-plan` with `too_few_clusters`.
    - If `cluster_seams` is between 2 and 6 and `cluster_seams_independently_plannable` is true, recommend `/z-plan-split`.
    - If `cluster_seams` is between 2 and 6 but independent plannability is false or unknown, do not recommend `/z-plan-split`; prefer `/z-plan` or return `STATUS: ask_user` with `ambiguous_route` if `/z-plan` and `/z-plan-split` remain tied.
-21. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
+21. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-plan --quick`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-plan --quick`; choose a safer planning route or `ask_user` with lower confidence.
 22. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
 23. Otherwise recommend `/z-plan`.
 
@@ -360,7 +360,7 @@ Expected output:
 
 ```text
 STATUS: routed
-RECOMMENDED: /z-do
+RECOMMENDED: /z-plan --quick
 ROUTE_CLASS: primary
 CONFIDENCE: low
 REASON_CODES: inventory_partial,inventory_truncated,tiny_task

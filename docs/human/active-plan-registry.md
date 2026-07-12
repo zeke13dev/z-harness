@@ -245,7 +245,7 @@ The `reap` subcommand (and its inline counterpart `_reap_inline()`) has a specif
 
 There is **no automatic preemption**. By design — preemption would require a distributed lock or compare-and-delete, which the lockless registry does not have.
 
-**Diagnosis:** run `/z-where`. The output shows each plan's `held_paths`, `waiting_on`, and heartbeat age. Wait-edges are rendered as `A ──waits──▶ B`. A senior with stale heartbeat and live held_paths is the culprit.
+**Diagnosis:** run `/z-stats`. The output shows each plan's `held_paths`, `waiting_on`, and heartbeat age. Wait-edges are rendered as `A ──waits──▶ B`. A senior with stale heartbeat and live held_paths is the culprit.
 
 **Resolution (manual):**
 
@@ -309,7 +309,7 @@ for each task T:
      On halt mid-task: rely on deregister/reap (do not release a partial edit)
 ```
 
-### `/z-plan`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
+### `/z-plan`, `/z-debug`, `/z-audit`, `/z-plan-split`
 
 All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `register` happens right after a successful plan-claim acquire (before scope is known); `scope-extractor` runs later, immediately after TASKS.md and complexity stamps are finalized (Phase 8), to seed scope for overlap detection. `/z-plan` also does a non-fatal, read-only `list --json` "awareness read" right after claim+register purely as an FYI to the user — it never gates any subsequent phase.
 
@@ -382,9 +382,9 @@ For full env-knob documentation including the base fallback chain and revert met
 
 ---
 
-## Discoverability: `/z-where`
+## Discoverability: `/z-stats`
 
-Run `/z-where` at any time to see:
+Run `/z-stats` at any time to see:
 - Resolved base (+ tier)
 - Repo-id
 - Active plans from `active-plan-registry.py list` (slug, command, phase, branch, current_task, heartbeat age, overlap-with-me)
@@ -416,7 +416,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 
 - `plan-claim` — orthogonal hard slug-level mutex; uses `claims_dir()` from plan-path.sh. The lockless registry is advisory; plan-claim is the hard gate. Hermes cross-plan paths acquire plan-claim locks before operating.
 - `hermes-orchestration` — calls `session-id` at workstream start; depends on registry for concurrent plan awareness.
-- `commands` (z-execute, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
+- `commands` (z-execute, z-plan, z-stats, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
 - `artifact-scout` — consumes registry records through `artifact-scout-inventory.py` for duplicate/collision warnings. It is advisory and cannot mutate records or replace `overlaps`/lease enforcement.
 - `followup-sink` — shares `<base>` via `followups_dir()`; must not participate in per-entry→global lock ordering of `followup_common.py`.
 - `plan-layout-migration` — `migrate-plan-layout.sh` gates on `list --json` to refuse when any run is live.

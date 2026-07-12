@@ -67,6 +67,24 @@ Print the output to the user. No confirmation needed.
 
 ## Wizard form (`/z-setup wizard [--scope <name>]`)
 
+Before launching the interactive wizard, run a provider-discovery pass and fold its result into the role-binding flow the wizard already surfaces:
+
+```bash
+DISCOVERY_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/discover-providers.py")"
+printf '%s' "$DISCOVERY_JSON" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+providers = sorted(data.get("providers", {}))
+roles = data.get("roles", {})
+cli_list = ", ".join(providers) or "(none)"
+print(f"  Discovered CLIs: {cli_list}")
+for role, provider in roles.items():
+    print(f"  Suggested {role} = {provider}")
+'
+```
+
+Print that output to the user. `scripts/setup.py wizard` (launched below) displays the currently-bound `consultant_primary` / `consultant_secondary` / `reviewer` roles from `providers.json` and flags any gap; if a role is unbound and discovery above suggested a binding for it, tell the user to add that stanza to `providers.json` — the skill never writes configuration directly (see Invariants).
+
 The wizard runs interactively as a subprocess — the user interacts with it directly via the terminal. For v1, the skill's role is to launch it and report the outcome.
 
 ```bash

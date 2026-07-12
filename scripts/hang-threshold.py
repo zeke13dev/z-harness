@@ -11,14 +11,13 @@ median, so the median would false-alarm on half of healthy runs (plan F-finding)
 
 Class key is built from fields that ACTUALLY exist per event source (audit F4,
 corrected against real data):
-  - persona_attempt_outcome -> agent:<role>/<complexity_tier>   (native agents)
   - <kind> with subagent_model -> <kind>:<subagent_model>       (e.g. implement_end:opus)
   - other *_end -> <kind>
 Test-noise classes (longrun_end, mytest_end, test-/smoke- runs) are excluded.
 
 Usage:
   hang-threshold.py dump [--metrics FILE]
-  hang-threshold.py for --kind implement_end [--model opus] [--role ..] [--tier ..] [--metrics FILE]
+  hang-threshold.py for --kind implement_end [--model opus] [--metrics FILE]
      -> prints the threshold in whole seconds (global fallback when the class is sparse)
 
 Tuning (env): HANG_PCTILE (default 90), HANG_MARGIN (default 1.5),
@@ -43,9 +42,7 @@ def _is_noise(ev):
     return run.startswith("test") or run.startswith("smoke")
 
 
-def class_key(kind, model=None, role=None, tier=None):
-    if kind == "persona_attempt_outcome":
-        return f"agent:{role or ''}/{tier or '-'}"
+def class_key(kind, model=None):
     if model:
         return f"{kind}:{model}"
     return kind
@@ -55,8 +52,6 @@ def _event_key(ev):
     return class_key(
         ev.get("kind", ""),
         model=ev.get("subagent_model"),
-        role=ev.get("role"),
-        tier=ev.get("complexity_tier"),
     )
 
 
@@ -141,8 +136,6 @@ def main():
     f = sub.add_parser("for")
     f.add_argument("--kind", required=True)
     f.add_argument("--model")
-    f.add_argument("--role")
-    f.add_argument("--tier")
     f.add_argument("--metrics")
     args = ap.parse_args()
 
@@ -156,7 +149,7 @@ def main():
         print(json.dumps(table, indent=2, sort_keys=True))
         return 0
 
-    key = class_key(args.kind, model=args.model, role=args.role, tier=args.tier)
+    key = class_key(args.kind, model=args.model)
     entry = table.get(key)
     if entry:
         print(entry["threshold_secs"])

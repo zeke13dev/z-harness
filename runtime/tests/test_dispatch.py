@@ -419,7 +419,7 @@ def _capture_events(monkeypatch):
 
 
 def test_run_no_kwargs_backward_compat(monkeypatch, tmp_path):
-    """Existing callers (no new kwargs) compile and run unchanged; persona_bound emitted."""
+    """Existing callers (no new kwargs) compile and run unchanged."""
     captured = _capture_events(monkeypatch)
 
     driver = _MinimalDriver()
@@ -433,30 +433,9 @@ def test_run_no_kwargs_backward_compat(monkeypatch, tmp_path):
     kinds = [k for k, _ in captured]
     assert "dispatch_start" in kinds
     assert "dispatch_end" in kinds
-    assert "persona_bound" in kinds
     assert "model_resolved" in kinds
     # No override event when no kwargs passed.
     assert "persona_override_used" not in kinds
-
-
-def test_run_persona_override_emits_event(monkeypatch, tmp_path):
-    """Passing persona='X' emits persona_override_used with override_field='persona'."""
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "original-persona"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(driver, "z-ask", [], provider_config, persona="custom-persona")
-
-    override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
-    assert len(override_events) == 1, f"Expected 1 persona_override_used, got {override_events}"
-    _, payload = override_events[0]
-    assert payload["override_field"] == "persona"
-    assert payload["value"] == "custom-persona"
-    assert payload["original"] == "original-persona"
-    assert payload["command"] == "z-ask"
 
 
 def test_run_model_override_emits_event(monkeypatch, tmp_path):
@@ -478,112 +457,8 @@ def test_run_model_override_emits_event(monkeypatch, tmp_path):
     assert payload["original"] == "sonnet"
 
 
-def test_run_persona_bound_payload_reflects_resolved_triple(monkeypatch, tmp_path):
-    """persona_bound payload contains all three resolved fields after overrides."""
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {
-        "args_template": [],
-        "persona": "old-persona",
-        "model": "haiku",
-        "runtime": "codex-cli",
-    }
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(
-        driver, "z-implement", [], provider_config,
-        persona="new-persona",
-        model="opus",
-    )
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1, f"Expected 1 persona_bound, got {bound_events}"
-    _, payload = bound_events[0]
-
-    # Override wins for persona and model.
-    assert payload["persona"] == "new-persona"
-    assert payload["model"] == "opus"
-    # runtime was not overridden — falls back to provider_config.
-    assert payload["runtime"] == "codex-cli"
-    assert payload["command"] == "z-implement"
-    # Source per axis.
-    assert payload["source"]["persona"] == "override"
-    assert payload["source"]["model"] == "override"
-    assert payload["source"]["runtime"] == "provider_config"
-
-
-def test_run_persona_bound_no_override_source_is_provider_config(monkeypatch, tmp_path):
-    """When no kwargs passed, persona_bound source reflects provider_config for set axes."""
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "base-persona", "model": "haiku"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(driver, "z-review", [], provider_config)
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert payload["source"]["persona"] == "provider_config"
-    assert payload["source"]["model"] == "provider_config"
-    assert payload["source"]["runtime"] == "none"
-
-
-def test_run_role_kwarg_appears_in_persona_bound_payload(monkeypatch, tmp_path):
-    """Passing role='reviewer' includes role in the persona_bound payload.
-
-    Failure class: If the role kwarg is ignored or not forwarded into the
-    persona_bound event, payload['role'] will be absent — this test catches
-    that regression.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "base-persona", "model": "haiku"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(driver, "z-review", [], provider_config, role="reviewer")
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1, f"Expected 1 persona_bound, got {bound_events}"
-    _, payload = bound_events[0]
-    assert "role" in payload, f"Expected 'role' key in persona_bound payload; got {payload}"
-    assert payload["role"] == "reviewer", (
-        f"Expected role='reviewer', got {payload['role']!r}"
-    )
-    assert payload["command"] == "z-review"
-
-
-def test_run_role_kwarg_absent_when_not_passed(monkeypatch, tmp_path):
-    """persona_bound payload omits 'role' key when role kwarg is not passed.
-
-    Failure class: If role is always included (e.g. as None), the SPEC
-    requirement that 'role is omitted when caller did not supply it' is violated.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": []}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(driver, "z-ask", [], provider_config)  # no role kwarg
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert "role" not in payload, (
-        f"Expected 'role' to be absent from persona_bound when not passed; got {payload}"
-    )
-
-
-def test_run_all_three_overrides(monkeypatch, tmp_path):
-    """Passing all three kwargs emits three persona_override_used events."""
+def test_run_model_and_runtime_overrides_emit_events(monkeypatch, tmp_path):
+    """Passing model + runtime kwargs emits a persona_override_used event per axis."""
     captured = _capture_events(monkeypatch)
 
     driver = _MinimalDriver()
@@ -593,12 +468,12 @@ def test_run_all_three_overrides(monkeypatch, tmp_path):
     dispatcher = _make_dispatcher(tmp_path)
     dispatcher.run(
         driver, "z-ask", [], provider_config,
-        persona="P", model="M", runtime="R",
+        model="M", runtime="R",
     )
 
     override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
     fields = {p["override_field"] for _, p in override_events}
-    assert fields == {"persona", "model", "runtime"}
+    assert fields == {"model", "runtime"}
 
 
 # ---------------------------------------------------------------------------
@@ -1025,212 +900,6 @@ def test_dispatcher_provider_metadata_env_reaches_driver(monkeypatch, tmp_path):
     assert driver._captured_env["Z_HARNESS_RUN_ID"] == "test-run-001"
     assert driver._captured_env["Z_HARNESS_PROVIDER_ROLE"] == "reviewer"
     assert [kind for kind, _payload in captured].count("provider_preflight_ok") == 1
-
-# ---------------------------------------------------------------------------
-# T007: persona_bound attribution tuple extension
-# ---------------------------------------------------------------------------
-
-
-def test_persona_bound_run_id_always_present(monkeypatch, tmp_path):
-    """persona_bound always contains run_id from the Dispatcher constructor.
-
-    Failure class: If run_id is absent from persona_bound (e.g. because it was
-    accidentally gated behind an 'if' condition), downstream join queries on
-    run_id will silently drop all rows for this dispatch.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": []}
-    driver.init(provider_config)
-
-    dispatcher = Dispatcher(repo_root=str(tmp_path), run_id="run-abc-123")
-    dispatcher.run(driver, "z-ask", [], provider_config)
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert "run_id" in payload, f"Expected 'run_id' in persona_bound payload; got {payload}"
-    assert payload["run_id"] == "run-abc-123", (
-        f"Expected run_id='run-abc-123', got {payload['run_id']!r}"
-    )
-
-
-def test_persona_bound_attribution_tuple_all_fields(monkeypatch, tmp_path):
-    """persona_bound carries the full attribution tuple when all new kwargs are supplied.
-
-    Failure class: If any of task_id/attempt_id/persona_id/selection_source/draw_id/
-    reviewer_participant are omitted from the payload, the join query in
-    persona-stats.py will fail to correlate draw and outcome events.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "terse-pragmatist", "model": "haiku"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(
-        driver, "z-implement", [], provider_config,
-        role="implementer",
-        task_id="T007",
-        attempt_id="T007-v1",
-        persona_id="terse-pragmatist",
-        selection_source="random_role_pool",
-        draw_id="T007-impl-T007-v1-abc",
-    )
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-
-    assert payload["task_id"] == "T007", f"task_id missing or wrong: {payload}"
-    assert payload["attempt_id"] == "T007-v1", f"attempt_id missing or wrong: {payload}"
-    assert payload["persona_id"] == "terse-pragmatist", f"persona_id missing or wrong: {payload}"
-    assert payload["selection_source"] == "random_role_pool", (
-        f"selection_source missing or wrong: {payload}"
-    )
-    assert payload["draw_id"] == "T007-impl-T007-v1-abc", (
-        f"draw_id missing or wrong: {payload}"
-    )
-    assert payload["role"] == "implementer", f"role missing or wrong: {payload}"
-    assert payload["run_id"] == "test-run-001", f"run_id missing or wrong: {payload}"
-
-
-def test_persona_bound_reviewer_participant_included(monkeypatch, tmp_path):
-    """persona_bound includes reviewer_participant when passed for reviewer dispatches.
-
-    Failure class: If reviewer_participant is not forwarded into the payload,
-    the analysis layer cannot segment reviewer rows by arm (base_codex vs
-    random_arm), defeating the dual-reviewer attribution scheme.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "codex-default-reviewer"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(
-        driver, "z-review", [], provider_config,
-        role="reviewer",
-        task_id="T007",
-        attempt_id="T007-v1",
-        draw_id="T007-reviewer-base-d4e5f6",
-        reviewer_participant="base_codex",
-    )
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert payload.get("reviewer_participant") == "base_codex", (
-        f"Expected reviewer_participant='base_codex'; got {payload}"
-    )
-
-
-def test_persona_bound_attribution_fields_absent_when_not_passed(monkeypatch, tmp_path):
-    """New attribution fields are absent from persona_bound when not passed (additive-only).
-
-    Failure class: If any attribution field defaults to a non-None sentinel value
-    instead of being omitted, existing parsers that treat key-presence as a signal
-    (e.g. 'does this event have draw_id?') would misinterpret legacy events.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": []}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    # Call with no new attribution kwargs — simulates an existing caller.
-    dispatcher.run(driver, "z-ask", [], provider_config)
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-
-    for field in ("task_id", "attempt_id", "selection_source", "draw_id", "reviewer_participant"):
-        assert field not in payload, (
-            f"Field '{field}' should be absent when not passed; found in payload: {payload}"
-        )
-
-
-def test_persona_bound_persona_id_falls_back_to_resolved_persona(monkeypatch, tmp_path):
-    """persona_id in persona_bound falls back to the resolved persona name when not explicitly passed.
-
-    Failure class: If persona_id is always omitted when the kwarg is not passed
-    (instead of falling back to _resolved_persona), the persona_id field would
-    be absent on all legacy callers, making it impossible to join on persona_id
-    without also checking the 'persona' field.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": [], "persona": "boring-anchor"}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    # No persona_id kwarg; persona resolves from provider_config.
-    dispatcher.run(driver, "z-implement", [], provider_config)
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert payload.get("persona_id") == "boring-anchor", (
-        f"Expected persona_id='boring-anchor' (fallback from _resolved_persona); got {payload}"
-    )
-
-
-def test_persona_bound_persona_id_always_present_as_null(monkeypatch, tmp_path):
-    """persona_id is always present in persona_bound — emits null when neither kwarg nor resolved persona exists.
-
-    Failure class: If persona_id is omitted when both the kwarg and the resolved
-    persona are None, downstream join queries on persona_id will silently drop
-    all rows for dispatches that have no persona configured.
-    """
-    captured = _capture_events(monkeypatch)
-
-    driver = _MinimalDriver()
-    # provider_config has no 'persona' key, and no persona_id kwarg is passed.
-    provider_config = {"args_template": []}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    dispatcher.run(driver, "z-ask", [], provider_config)
-
-    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
-    assert len(bound_events) == 1
-    _, payload = bound_events[0]
-    assert "persona_id" in payload, (
-        f"Expected 'persona_id' key always present in persona_bound; got keys: {list(payload)}"
-    )
-    assert payload["persona_id"] is None, (
-        f"Expected persona_id=None when no persona is configured; got {payload['persona_id']!r}"
-    )
-
-
-def test_reviewer_participant_invalid_value_raises(monkeypatch, tmp_path):
-    """reviewer_participant with an invalid value raises ValueError before emitting.
-
-    Failure class: If the enum guard is absent, a typo like 'base_codex_arm'
-    would be silently emitted into telemetry, making arm-segmentation queries
-    return nonsense results that are hard to diagnose post-hoc.
-    """
-    monkeypatch.setattr(
-        "runtime.dispatch.dispatcher.log_event",
-        lambda run_id, kind, payload, repo_root, slug=None: None,
-    )
-
-    driver = _MinimalDriver()
-    provider_config = {"args_template": []}
-    driver.init(provider_config)
-
-    dispatcher = _make_dispatcher(tmp_path)
-    with pytest.raises(ValueError, match="reviewer_participant"):
-        dispatcher.run(
-            driver, "z-review", [], provider_config,
-            reviewer_participant="base_codex_arm",  # typo / invalid value
-        )
 
 
 # ---------------------------------------------------------------------------

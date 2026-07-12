@@ -261,7 +261,6 @@
   "depends_on": [
     "commands",
     "agents",
-    "personas-and-roles",
     "central-config",
     "runtime-drivers",
     "scripts",

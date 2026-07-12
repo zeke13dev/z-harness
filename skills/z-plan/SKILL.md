@@ -1,13 +1,9 @@
 ---
 name: z-plan
-disable-model-invocation: false
 description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce INTENT.md + initial TASKS.md (or SPEC.md / PLAN.md / TASKS.md in --full legacy mode).
-argument-hint: <feature or task description>
-runtime: c1
-driver_features_required:
-  - subagent
-  - ask_user
-unsupported_driver_behavior: explicit_gate
+argument-hint: "<feature or task description> [--full] [--quick] [--standard] [--deep]"
+audience: user
+driver_features_required: [subagent, ask_user]
 ---
 
 You are running the **z-harness `/z-plan`** pipeline.
@@ -89,160 +85,59 @@ Amend/resume routing remains phase-specific: scope or goal changes resume at **S
      ```
 
    **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
-2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents — this is what namespaces every output path.
-3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
-4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
-4a. Export run id, archive dir, and resolve config:
-    ```bash
-    export Z_HARNESS_RUN="$RUN"
-    export CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
-    eval "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" export-env)"
-    ```
-5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
+2. **Preflight ceremony (single call).** `scripts/z-preflight.sh` owns resolve/session-id/RUN-stamp/claim/register/run-brief-init/run_start/kernel-resolve, in that fixed order (contract: script header; LEDGER T005). `/z-plan` is a WRITE command — it claims, so it never passes `--no-claim`:
    ```bash
-   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
-   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
-   START_PAYLOAD="$(python3 -c '
-   import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-plan"
-   print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
+   PREFLIGHT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-preflight.sh" \
+     --command /z-plan --slug "$Z_HARNESS_SLUG" \
+     --intent "<task description from $ARGUMENTS — max 240 chars; not the command name alone>")"
+   PREFLIGHT_RC=$?
+   [ "$PREFLIGHT_RC" -eq 0 ] && eval "$PREFLIGHT_OUT"
    ```
-   Output lands under `$Z_HARNESS_PLAN_DIR/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
-
-   **Session-id persist (export-once + persist, invariant 7).** Immediately after run_start, persist the session id so a crash-resume can restore it before the claim acquire:
+   On success (`PREFLIGHT_RC==0`), `RUN`, `Z_HARNESS_RUN`, `Z_HARNESS_PLAN_DIR`, `CURRENT_ARCHIVE_DIR`, `Z_HARNESS_SESSION_ID`, `CLAIM_HELD`, `REG_RC`, and `KERNEL_PATH` are all exported (script header is the source of truth for the exact contract). When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every consultant-primary/consultant-secondary dispatch this run; omit the line when empty (the agent's static fallback self-resolves). Also resolve config and log provider resolution once, guarded against re-emission:
    ```bash
-   # Export-once guard: Z_HARNESS_SESSION_ID was set above; persist it now.
-   printf '%s\n' "$Z_HARNESS_SESSION_ID" > "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id"
-   ```
-
-   **Session-id restore on resume (invariant 7).** On a resume (the shell env is a fresh process), restore the persisted session id BEFORE the claim acquire so the self-reentry guard fires correctly:
-   ```bash
-   if [[ -z "$Z_HARNESS_SESSION_ID" && -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id" ]]; then
-     export Z_HARNESS_SESSION_ID="$(cat "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id")"
-   fi
-   ```
-
-   **Claim acquire (claim-first ordering, invariant 2).** This runs BEFORE Run-Brief init, BEFORE register, BEFORE the docs/precontext scans, and BEFORE any artifact write. Pass `--command /z-plan` so the HOLDER string is `<session>::<run>::/z-plan` (required for heartbeat/release identity checks per T003 note):
-   ```bash
-   CLAIM_RC=0
-   CLAIM_OUTPUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" acquire \
-     --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-     --command /z-plan)" || CLAIM_RC=$?
-   ```
-
-   Branch on `$CLAIM_RC` — every path is surfaced, no silent fall-through:
-
-   - **`CLAIM_RC == 0`** (acquired, self-reentry, or `Z_HARNESS_CLAIM_DISABLE=1`) → proceed normally.
-
-   - **`CLAIM_RC == 1`** (live peer holds the slug) → show the holder details from `$CLAIM_OUTPUT` (session / run / command / heartbeat age).
-     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this contention question
-          via their native channel and await a response. Silent omission is forbidden. -->
-     - **Interactive** (not `Z_HARNESS_NO_ASK`): `AskUserQuestion` — **proceed anyway / abort / use a new slug**.
-       - `proceed anyway` → continue (uncoordinated; log a `plan_claim_override` event).
-       - `abort` → exit 1. (No release — we never held the lock.)
-       - `use a new slug` → re-derive a slug and re-run the acquire **once** (loop-guard: at most 1 re-derive prompt; if the new slug also contends, abort). After a successful re-derive: re-export `Z_HARNESS_SLUG`, `Z_HARNESS_PLAN_DIR`, `RUN`, and `CURRENT_ARCHIVE_DIR` for all subsequent calls; re-persist `$Z_HARNESS_SESSION_ID` to the new archive path; re-run claim acquire with the new slug (same `CLAIM_RC` + `CLAIM_OUTPUT` pattern); branch on the new `CLAIM_RC` normally (no further re-derive).
-     - **Unattended** (`Z_HARNESS_NO_ASK`): abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed anyway (log override). (No release — we never held the lock.)
-
-   - **`CLAIM_RC == 2`** (stale-takeover — **we now hold the lock**) → show prior holder + idle age from `$CLAIM_OUTPUT`.
-     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this stale-takeover
-          question via their native channel and await a response. Default is abort.
-          Silent omission is forbidden. -->
-     - **Interactive**: `AskUserQuestion` — **proceed / abort** (default: **ABORT** — a partial SPEC/PLAN may exist from the prior holder).
-       - `proceed` → continue.
-       - `abort` → **call `plan-claim.sh release` first** (we hold the lock), then `exit 1`.
-     - **Unattended**: abort (release first, then `exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed anyway.
-     ```bash
-     # On abort at CLAIM_RC==2 (we hold the lock — must release):
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-       --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-       --command /z-plan || true
-     ```
-
-   - **`CLAIM_RC == 3`** (corrupt / invalid args — **we do NOT hold the lock**) → emit a loud error; show manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry).
-     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this corrupt-lock
-          question via their native channel and await a response. Default is abort.
-          Silent omission is forbidden. -->
-     - **Interactive**: `AskUserQuestion` — **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other's artifacts).
-       - `abort` → exit 1. (No release — we never held the lock.)
-       - `proceed UNCOORDINATED` → continue (log a `plan_claim_corrupt_proceed` event).
-     - **Unattended**: abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed uncoordinated. (No release either way.)
-
-   **CLAIM_HELD flag.** The orchestrator MUST set `CLAIM_HELD` to exactly `1` or `0` immediately after the acquire branch resolves. All downstream heartbeat guards (T007) and release guards (T008) evaluate `${CLAIM_HELD:-0}`; if `CLAIM_HELD` is never set, every guard silently evaluates to false, the lock leaks, and heartbeats never fire. This assignment is not optional.
-
-   | Outcome | CLAIM_HELD |
-   |---------|-----------|
-   | `CLAIM_RC==0`, output is `acquired` or `self-reentry` | `1` — we hold the lock |
-   | `CLAIM_RC==0`, output is `disabled` (`Z_HARNESS_CLAIM_DISABLE=1`) | `0` — no lock |
-   | `CLAIM_RC==2`, user chose **proceed** (stale-takeover accepted) | `1` — we hold the lock |
-   | `CLAIM_RC==2`, user chose **abort** (we released above) | `0` — lock released |
-   | `CLAIM_RC==1` or `CLAIM_RC==3` (never acquired) | `0` — never held |
-
-   ```bash
-   # DEFINITIVE CLAIM_HELD assignment — orchestrator must execute this after the branch above.
-   # Every downstream heartbeat and release guard depends on this value being set correctly.
-   if [[ "$CLAIM_RC" -eq 0 && "$CLAIM_OUTPUT" != "disabled" ]] || \
-      [[ "$CLAIM_RC" -eq 2 && "$_CLAIM_USER_CHOICE" == "proceed" ]]; then
-     CLAIM_HELD=1
-   else
-     CLAIM_HELD=0
-   fi
-   ```
-
-   (`$_CLAIM_USER_CHOICE` is the local variable set to `"proceed"` or `"abort"` in the CLAIM_RC==2 branch above — replace with however the orchestrator captured the user's answer.)
-
-   **Run Brief init (after claim acquire, before register).** Create `run-brief.json` for this run (registry profile `full`):
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh" init \
-     --run "$RUN" --command /z-plan --slug "$Z_HARNESS_SLUG" --profile full \
-     --intent "<task description from $ARGUMENTS — max 240 chars; not the command name alone>"
-   ```
-
-   **Active-plan registration (after claim acquire).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
-   ```bash
-   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
-     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --phase plan \
-     --session "$Z_HARNESS_SESSION_ID"
-   REG_RC=$?
-   ```
-   - `REG_RC == 0` → registered; proceed.
-   - `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event, then branch:
-     - **Interactive** (not `Z_HARNESS_NO_ASK`) → `AskUserQuestion`: *proceed without coordination* / *abort*.
-       - **proceed** → continue; skip heartbeats and deregister later (no record to update). The claim is still held.
-       - **abort** → **release the claim first** (we hold it — register failed AFTER a successful acquire), do **NOT** call deregister (no record exists), push-notify, then `exit 1`:
-         ```bash
-         if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
-           bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-             --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-             --command /z-plan || true
-         fi
-         exit 1
-         ```
-     - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1` → **release the claim** (same snippet as above) and halt (`exit 1`). No deregister either way (no record).
-   - **Any OTHER nonzero** → treat as `REG_RC == 3`.
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
-     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
-   ```
-
-   **FINALIZE_STATUS / deregister rule (single source of truth for the entire run):**
-   > On any run-ending halt that occurs AFTER `REG_RC == 0` (a record exists), execute **Run Brief — halt finalize** (below) before `deregister --status aborted`. On normal completion (Phase 9), leave `FINALIZE_STATUS` unset so Phase 9 deregisters with `complete`. If register failed (no record), do NOT deregister anywhere.
-
-   **Kernel path resolution (once per run, immediately after run_start):**
-   ```bash
-   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
-   ```
-   Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (consultant-primary, consultant-secondary). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
-
-   Then log provider resolution (once per run, guarded against re-emission):
-   ```bash
+   eval "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" export-env)"
    if [ ! -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
-     mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN"
      touch "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged"
    fi
    ```
+
+   **Contention (`PREFLIGHT_RC==10`, a live peer holds the slug).** Nothing was created — the script exits before its claim step completes any write. Standard menu (SKILL-STYLE.md §2):
+   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this contention question
+        via their native channel and await a response. Silent omission is forbidden. -->
+   - **Interactive** (not `Z_HARNESS_NO_ASK`): `AskUserQuestion` — **proceed anyway / abort / use a new slug**.
+     - `proceed anyway` → re-run the SAME preflight call with `--no-claim` appended (still resolves/registers/run-brief-inits/logs run_start/resolves kernel — only the lock step is skipped) and continue uncoordinated; log a `plan_claim_override` event.
+     - `abort` → exit 1. (Nothing was ever created.)
+     - `use a new slug` → re-derive a slug **once** (loop-guard: at most 1 re-derive; if the new slug also contends, abort) and re-run the original (claiming) preflight call on it; branch on the new `PREFLIGHT_RC` normally — no further re-derive.
+   - **Unattended**: abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → re-run with `--no-claim` (log override).
+
+   **Corrupt lock (`PREFLIGHT_RC==11`).** Same shape as contention; manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry).
+   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this corrupt-lock
+        question via their native channel and await a response. Default is abort.
+        Silent omission is forbidden. -->
+   - **Interactive**: `AskUserQuestion` — **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other's artifacts).
+     - `abort` → exit 1.
+     - `proceed UNCOORDINATED` → re-run with `--no-claim`; log a `plan_claim_corrupt_proceed` event.
+   - **Unattended**: abort unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed uncoordinated (`--no-claim`).
+
+   **Note — stale-takeover is resolved inside the wrapper, not asked here.** When the prior holder's TTL has expired, `plan-claim.sh acquire` (called by z-preflight.sh) takes the lock over silently: `CLAIM_HELD=1`, no ask, a `NOTE:` line on stderr only (see the script header rationale: refusing the takeover would just release it right back for no benefit). This supersedes the pre-wrapper design where stale-takeover was its own interactive gate.
+
+   **Register failure (`REG_RC != 0` on a `PREFLIGHT_RC==0` success).** Graduated failure, not a hard stop — z-preflight.sh already emitted the warning to stderr.
+   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this registry-failure
+        question via their native channel and await a response. Silent omission is forbidden. -->
+   - **Interactive**: `AskUserQuestion` — *proceed without coordination* / *abort*.
+     - **proceed** → continue; skip heartbeats and deregister later (no record to update). The claim is still held.
+     - **abort** → push-notify, then halt through the funnel — z-preflight.sh's run-brief-init step already ran regardless of register's outcome, so the same `RB_HALT_REASON` + fragment + `z-teardown.sh` shape applies (teardown's deregister step is a harmless no-op when no record exists; its release step still frees the claim we hold):
+       ```bash
+       RB_HALT_REASON="active-plan registry register failed"
+       # include: _fragments/run-brief-halt-finalize-plan.md
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+         --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
+       exit 1
+       ```
+   - **Unattended**: proceed without coordination (log prominently) unless `Z_HARNESS_STRICT_OVERLAP=1` → run the same abort funnel above and halt.
+
+   **Teardown funnel (single source of truth for the entire run).** Every controlled exit after a successful preflight funnels through one call — `scripts/z-teardown.sh --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status complete|aborted` — never a bespoke release/deregister sequence (SKILL-STYLE.md §2). On any halt: set `RB_HALT_REASON`, include `_fragments/run-brief-halt-finalize-plan.md` (sets outcome/next, finalizes/renders/requires the brief), then call teardown with `--status aborted`. On normal completion (Phase 9), call it with `--status complete`. Teardown's release and deregister steps are both best-effort no-ops when nothing was ever held/registered, so the same call is safe on every halt path regardless of how far setup got. The one exception: a checkpoint-seam PAUSE is not an exit — no teardown; the next invocation resumes.
 6. **Plan-start awareness read (after claim + register; non-fatal read-only).** After a successful claim and register, read the lockless registry to surface concurrent peers as an FYI — never a hard gate (Invariant 1):
    ```bash
    AWARENESS_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json 2>/dev/null)"
@@ -386,7 +281,7 @@ Run this route check after Setup step 10's precontext/docs gates and before Phas
 **Sharpen-first invariant:** the pre-Phase-0/pre-gate invocation MUST NOT route or recommend `/z-brainstorm`. If `approach_uncertain`, `asks_what_should_we_do`, `alternatives_unsettled`, `architecture_decision`, or `reversibility_uncertain` is present before sharpen, record those signals as `brainstorm_recommendation_deferred_until_after_sharpen` and continue to Phase 0.5. Brainstorm is only offered by the post-sharpen Brainstorm ask gate, after `GRILL.md` exists.
 
 Deterministic routes:
-- Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
+- Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-plan --quick`.
 - Route small targeted fixes (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-fix`; if the task is an unknown bug symptom, use contextual `/z-debug`.
 - Stay in `/z-plan` for coherent medium changes, especially `expected_tasks <= 25` with no clear independent cluster seams.
 - Route large or independently separable work to `/z-plan-split` when `expected_tasks > 25` or `cluster_seams` is in `2..6`.
@@ -397,16 +292,16 @@ Call `planning-router` only when deterministic signals conflict and no hard thre
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
-**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-fix`, or `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
+**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-plan --quick`, `/z-fix`, or `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
 
 ```bash
 # Callsite 1 — route-down shortcut surface (route-DOWN routes only).
-# RUN is already set/exported in Setup step 3 (RUN=<ts>-<slug>; export Z_HARNESS_RUN="$RUN").
+# RUN is already set/exported by Setup step 2's z-preflight.sh call.
 # surface-shortcut.sh reads the RUN env var to attribute the event, so export it here.
 export RUN="$RUN"
 SURFACE_RC=0
 case "$to_command" in
-  /z-do|/z-fix|/z-debug)
+  "/z-plan --quick"|/z-fix|/z-debug)
     # Route-DOWN: declining full /z-plan for a lighter command — a genuine shortcut.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
       --chosen "$to_command" \
@@ -435,7 +330,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 
 ## Explicit planning mode gate (before hard cost gate)
 
-Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs are recommendations for the visible Intent-vs-Full SDD gate, not a silent final decision unless an unattended driver must use the recommended default. Normalize `workflow.intent_level` before the cost gate: only `quick`, `standard`, `deep`, and `auto` are recognized; any unknown value is treated as `auto` for dispatch estimation and later classifier resolution.
+Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 2's `config.py export-env` call). These two knobs are recommendations for the visible Intent-vs-Full SDD gate, not a silent final decision unless an unattended driver must use the recommended default. Normalize `workflow.intent_level` before the cost gate: only `quick`, `standard`, `deep`, and `auto` are recognized; any unknown value is treated as `auto` for dispatch estimation and later classifier resolution.
 
 ```bash
 PLANNING_MODE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.planning_mode 2>/dev/null || echo "intent")"
@@ -604,157 +499,25 @@ This gate runs after the cheap setup, claim/register, freshness checks, determin
 
 Compute explicit dispatch counts using only the documented `z-plan` keys from `scripts/token-cost-profiles.json`: `planning_mode_full`, `intent_level_depth`, `doc_fetcher`, `explore`, `phase3_consultants`, `phase7_consultants`, and `task_tree_generator`. Counts are conservative pre-gate upper bounds; unknown future fan-out stays at the fail-closed default rather than being guessed downward.
 
-```bash
-# Explicit z-plan dispatch counts replace profile defaults for these keys.
-# Keep this key list in sync with scripts/token-cost-profiles.json profiles["z-plan"].dispatch_contract.accepted_keys.
-ZPLAN_DISPATCH_PLANNING_MODE_FULL=0
-if [[ "$PLANNING_MODE" == "full" ]]; then
-  ZPLAN_DISPATCH_PLANNING_MODE_FULL=1
-fi
+Dispatch-count computation, the `pre-run-cost-gate.sh` call, `GATE_JSON` normalization/parsing, and the sanitized-error mapping are mechanical plumbing delegated to `scripts/zplan-cost-gate-runtime.sh` (SKILL-STYLE.md §2 — a second consumer, the reduction re-estimate below, reuses the same `call-gate` subcommand, so this is a script, not inline bash). Nothing here reimplements `pre-run-cost-gate.sh` or `config.py`'s disposition logic:
 
-# intent_level_depth: 0=quick, 1=standard, 2=deep.
-# Forced config/flag levels are known before the gate because flag parsing syncs
-# INTENT_LEVEL_CONFIG above. Charge their exact depth. Only auto/unknown charges
-# deep conservatively because the classifier and level override have not run yet.
-ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0
-if [[ "$PLANNING_MODE" == "intent" ]]; then
-  case "${INTENT_LEVEL_CONFIG:-auto}" in
-    quick)    ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0 ;;
-    standard) ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=1 ;;
-    deep)     ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=2 ;;
-    *)        ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=2 ;;
-  esac
-fi
-ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH"
+```bash
+ZPLAN_COST_GATE_RUNTIME="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/zplan-cost-gate-runtime.sh"
+
+eval "$(bash "$ZPLAN_COST_GATE_RUNTIME" compute-dispatch \
+  --planning-mode "$PLANNING_MODE" \
+  --intent-level-config "${INTENT_LEVEL_CONFIG:-auto}" \
+  --docs-index-exists "${DOCS_LLM_INDEX_EXISTS:-unknown}")"
 export ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX
 
-# Setup step 8 records whether docs/llm/INDEX.json exists; use that cheap signal only.
-# If the driver did not persist a boolean, fail closed with 1 because docs may exist.
-case "${DOCS_LLM_INDEX_EXISTS:-unknown}" in
-  0|false|False|no|No) ZPLAN_DISPATCH_DOC_FETCHER=0 ;;
-  *)                   ZPLAN_DISPATCH_DOC_FETCHER=1 ;;
-esac
-
-# Explore is capped by workflow.max_explore (default 3). Use the configured cap because
-# Phase 1 skip conditions are not guaranteed until after the gate.
-ZPLAN_DISPATCH_EXPLORE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.max_explore 2>/dev/null || echo 3)"
-case "$ZPLAN_DISPATCH_EXPLORE" in
-  ''|*[!0-9]*) ZPLAN_DISPATCH_EXPLORE=3 ;;
-esac
-
-# Phase 3 may still run unless a later, post-gate level decision/user choice skips it.
-# Charge the full panel conservatively except when a pre-known L1 Quick level makes
-# Phase 3 structurally unreachable before the gate.
-ZPLAN_DISPATCH_PHASE3_CONSULTANTS=5
-if [[ "$PLANNING_MODE" == "intent" && "${INTENT_LEVEL_CONFIG:-auto}" == "quick" ]]; then
-  ZPLAN_DISPATCH_PHASE3_CONSULTANTS=0
-fi
-
-# Phase 7 remains a possible final-review panel before the gate; keep the conservative panel count.
-ZPLAN_DISPATCH_PHASE7_CONSULTANTS=5
-
-ZPLAN_DISPATCH_TASK_TREE_GENERATOR=0
-if [[ "$PLANNING_MODE" == "intent" ]]; then
-  ZPLAN_DISPATCH_TASK_TREE_GENERATOR=1
-fi
-
-GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
-  z-plan hard "$RUN" \
-  --dispatch \
-    planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
-    intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
-    doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
-    explore="$ZPLAN_DISPATCH_EXPLORE" \
-    phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
-    phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
-    task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR" \
-  2>/dev/null)" || GATE_JSON=""
-
-# Parse and normalize the helper's single JSON object. The raw helper output is never logged.
-# If the helper invocation failed, the JSON is malformed, or required estimate fields are
-# missing, convert that condition into a sanitized ask/halt branch rather than emitting the
-# raw payload.
-GATE_HELPER_STATUS=ok
-GATE_PARSE_STATUS=ok
-GATE_FIELDS_STATUS=ok
-GATE_SANITIZED_ERROR=""
-GATE_NORMALIZED_JSON="$(python3 - "$GATE_JSON" <<'PY'
-import json, sys
-raw = sys.argv[1]
-try:
-    d = json.loads(raw)
-except Exception:
-    print(json.dumps({"ok": False, "error": "malformed_helper_json"}))
-    raise SystemExit(0)
-
-def as_int(value, default=0):
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-est = d.get("estimate")
-missing = []
-if not isinstance(est, dict):
-    est = {}
-    missing.extend(["estimated_tokens", "confidence", "basis", "range_high"])
-for key in ("estimated_tokens", "confidence", "basis"):
-    if key not in est or est.get(key) in (None, ""):
-        missing.append(key)
-if "range_high" not in est and "range_high" not in d:
-    missing.append("range_high")
-invalid = []
-for key in ("estimated_tokens", "range_high"):
-    value = est.get(key, d.get(key))
-    if value not in (None, "") and as_int(value, None) is None:
-        invalid.append(key)
-
-out = {
-    "ok": True,
-    "disposition": d.get("disposition") or "ask",
-    "human_block": d.get("human_block") or "Token estimate unavailable.",
-    "estimated_tokens": as_int(est.get("estimated_tokens"), 0),
-    "confidence": est.get("confidence") or "low",
-    "basis": est.get("basis") or "unknown",
-    "rule_id": d.get("rule_id") or d.get("rule", {}).get("id"),
-    "range_high": est.get("range_high", d.get("range_high")),
-    "missing_fields": sorted(set(missing + invalid)),
-}
-print(json.dumps(out, separators=(",", ":")))
-PY
-)"
-if [[ -z "$GATE_JSON" ]]; then
-  GATE_HELPER_STATUS=failed
-  GATE_SANITIZED_ERROR="helper_invocation_failure"
-fi
-if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("ok"))' "$GATE_NORMALIZED_JSON" 2>/dev/null)" != "True" ]]; then
-  GATE_PARSE_STATUS=malformed
-  GATE_SANITIZED_ERROR="${GATE_SANITIZED_ERROR:-malformed_helper_json}"
-fi
-
-GATE_DISPOSITION="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("disposition","ask"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo ask)"
-GATE_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block","Token estimate unavailable."))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo "Token estimate unavailable.")"
-GATE_EST_TOKENS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("estimated_tokens",0))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo 0)"
-GATE_CONFIDENCE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("confidence","low"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo low)"
-GATE_BASIS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("basis","unknown"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo unknown)"
-GATE_RULE_ID="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get("rule_id"); print("" if v is None else v)' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
-GATE_RANGE_HIGH="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get("range_high"); print("" if v is None else v)' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
-GATE_MISSING_FIELDS="$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1]).get("missing_fields",[])))' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
-if [[ -n "$GATE_MISSING_FIELDS" ]]; then
-  GATE_FIELDS_STATUS=missing
-  GATE_SANITIZED_ERROR="${GATE_SANITIZED_ERROR:-missing_estimate_fields}"
-fi
-
-# Helper problems degrade to the ask path when a user can decide. In no-ask/non-interactive
-# drivers they are terminal halts: do not proceed after an untrusted or incomplete estimate.
-if [[ "$GATE_HELPER_STATUS" != ok || "$GATE_PARSE_STATUS" != ok || "$GATE_FIELDS_STATUS" != ok ]]; then
-  if [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
-    GATE_DISPOSITION="halt"
-  else
-    GATE_DISPOSITION="ask"
-    GATE_HUMAN_BLOCK="Token estimate unavailable or incomplete (${GATE_SANITIZED_ERROR}). Proceed with /z-plan, or abandon before any expensive planning subagents run?"
-  fi
-fi
+eval "$(bash "$ZPLAN_COST_GATE_RUNTIME" call-gate --run "$RUN" \
+  --dispatch planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
+  --dispatch intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
+  --dispatch doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
+  --dispatch explore="$ZPLAN_DISPATCH_EXPLORE" \
+  --dispatch phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
+  --dispatch phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
+  --dispatch task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR")"
 
 printf '%s\n' "$GATE_HUMAN_BLOCK"
 ```
@@ -763,19 +526,9 @@ printf '%s\n' "$GATE_HUMAN_BLOCK"
 
 ### Cost gate telemetry contract
 
-`cost_gate_decision` is reserved for **exactly one terminal `/z-plan` cost-gate decision per run**. It is emitted before any expensive Agent dispatch and never emitted again on later success paths. Every terminal branch uses the same payload builder and includes these fields when known:
+`cost_gate_decision` is reserved for **exactly one terminal `/z-plan` cost-gate decision per run**. It is emitted before any expensive Agent dispatch and never emitted again on later success paths. Every terminal branch uses the same payload builder.
 
-- `command: "z-plan"`
-- `choice`: one of `auto_proceed`, `proceed`, `abandon`, `halt`, or `interrupted`
-- `estimated_tokens`, `confidence`, `basis`
-- `disposition`: normalized helper disposition that led to the branch (`auto_proceed`, `ask`, `halt`, `unhandled_gate`, or the sanitized fallback disposition)
-- `rule_id`
-- `range_high`
-- `choice_source`: `helper`, `user`, `policy`, `sanitized_helper_error`, or `driver_interrupt`
-- `attempt_count`: terminal count of cost reduction / re-estimate attempts
-- optional `reason`: sanitized reason such as `gate_policy_halt`, `unhandled_gate`, `helper_invocation_failure`, `malformed_helper_json`, `missing_estimate_fields`, `user_abandoned`, or `user_wait_interrupted`
-
-Nonterminal reduction / re-estimate attempts MUST NOT emit `cost_gate_decision`. They emit `cost_gate_reestimate_attempt` instead, with: `command`, `run_id`, `gate_id`, `attempt_index`, changed driver(s) (for example `changed_drivers`), `prior_range_high`, `new_range_high`, `disposition`, and terminal-correlation fields (`terminal_event_kind: "cost_gate_decision"` plus the same `gate_id`).
+Nonterminal reduction / re-estimate attempts MUST NOT emit `cost_gate_decision`. They emit `cost_gate_reestimate_attempt` instead. Full field-by-field shape for both event kinds: `_fragments/zplan-cost-gate-reference.md` — "Cost gate telemetry field reference" (included below at the terminal cleanup helper, the section that actually consumes it).
 
 Use this logging shape in each terminal branch; bind `ZPLAN_COST_CHOICE`, `ZPLAN_COST_CHOICE_SOURCE`, and optional `ZPLAN_COST_REASON` once, then call it **once**:
 
@@ -788,39 +541,10 @@ emit_zplan_cost_gate_decision_once() {
   if [[ "${ZPLAN_COST_DECISION_EMITTED:-0}" -eq 1 ]]; then
     return 0
   fi
-  ZPLAN_COST_DECISION_JSON="$(python3 - \
+  ZPLAN_COST_DECISION_JSON="$(bash "$ZPLAN_COST_GATE_RUNTIME" build-decision-json \
     "$ZPLAN_COST_CHOICE" "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS" \
     "$GATE_DISPOSITION" "$GATE_RULE_ID" "$GATE_RANGE_HIGH" "$ZPLAN_COST_CHOICE_SOURCE" \
-    "$ZPLAN_COST_ATTEMPT_COUNT" "${ZPLAN_COST_REASON:-}" "$ZPLAN_COST_GATE_ID" <<'PY'
-import json, sys
-def as_int(value, default=0):
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-choice, est, confidence, basis, disposition, rule_id, range_high, source, attempts, reason, gate_id = sys.argv[1:12]
-payload = {
-    "command": "z-plan",
-    "choice": choice,
-    "estimated_tokens": as_int(est, 0),
-    "confidence": confidence,
-    "basis": basis,
-    "disposition": disposition,
-    "choice_source": source,
-    "gate_id": gate_id,
-}
-if rule_id:
-    payload["rule_id"] = rule_id
-if range_high:
-    payload["range_high"] = as_int(range_high, 0)
-if attempts:
-    payload["attempt_count"] = as_int(attempts, 0)
-if reason:
-    payload["reason"] = reason
-print(json.dumps(payload, separators=(",", ":")))
-PY
-)"
+    "$ZPLAN_COST_ATTEMPT_COUNT" "${ZPLAN_COST_REASON:-}" "$ZPLAN_COST_GATE_ID")"
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "$RUN" cost_gate_decision "$ZPLAN_COST_DECISION_JSON"
   ZPLAN_COST_DECISION_EMITTED=1
@@ -869,76 +593,29 @@ Reduction attempt limit reached (2). Choose a terminal action:
 2. Abandon before expensive planning subagents
 ```
 
-Reduction state mutations are authoritative run state, not display-only. The downgrade MUST update the variables consumed by later mode/consult phases and the dispatch variables passed into the next helper call:
+Reduction state mutations are authoritative run state, not display-only: the downgrade MUST update the variables consumed by later mode/consult phases and the dispatch variables passed into the next helper call. Each reduction token's (`force_l2_standard` / `force_l1_quick`) state mutation is mechanical — no judgment — so it lives in `scripts/zplan-cost-gate-runtime.sh apply-reduction` (SKILL-STYLE.md §2). This thin wrapper keeps the same name and `return 2` contract for the calling loop:
 
 ```bash
 zplan_apply_cost_reduction() {
-  _ZPLAN_COST_REDUCTION="$1"
-  ZPLAN_COST_CHANGED_DRIVERS_JSON="[]"
-
-  case "$_ZPLAN_COST_REDUCTION" in
-    force_l2_standard)
-      # Explicit L3/auto -> L2 downgrade. This is the only way the cost gate may
-      # reduce deep semantics to standard semantics.
-      PLANNING_MODE="intent"
-      INTENT_LEVEL="standard"
-      INTENT_LEVEL_CONFIG="standard"   # Step 1 skips intent-classifier later.
-      INTENT_LEVEL_SOURCE="user-cost-reduction"
-      INTENT_LEVEL_REASON="cost gate reduction: user forced L2 Standard"
-      INTENT_CONSULT_POLICY="optional" # Step 3/Phase 3 later read the same policy.
-      ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=1
-      ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX=1
-      # L2 consult is optional later, but the pre-gate estimate stays conservative
-      # and keeps charging the Phase-3 panel until the user explicitly skips it there.
-      ZPLAN_DISPATCH_PHASE3_CONSULTANTS=5
-      ZPLAN_COST_CHANGED_DRIVERS_JSON='["intent_level_depth","intent_level","intent_consult_policy"]'
-      ;;
-
-    force_l1_quick)
-      # Explicit downgrade to L1 Quick. This is the only cost-gate path that
-      # changes Phase-3 consult dispatch to zero before Phase 3.
-      PLANNING_MODE="intent"
-      INTENT_LEVEL="quick"
-      INTENT_LEVEL_CONFIG="quick"      # Step 1 skips intent-classifier later.
-      INTENT_LEVEL_SOURCE="user-cost-reduction"
-      INTENT_LEVEL_REASON="cost gate reduction: user forced L1 Quick"
-      INTENT_CONSULT_POLICY="skip"     # Phase 3 structural guard consumes this.
-      ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0
-      ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX=0
-      ZPLAN_DISPATCH_PHASE3_CONSULTANTS=0
-      ZPLAN_COST_CHANGED_DRIVERS_JSON='["intent_level_depth","intent_level","intent_consult_policy","phase3_consultants"]'
-      ;;
-
-    *)
-      return 2
-      ;;
-  esac
-
-  export PLANNING_MODE INTENT_LEVEL INTENT_LEVEL_CONFIG INTENT_LEVEL_SOURCE INTENT_LEVEL_REASON INTENT_CONSULT_POLICY
-  export ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH ZPLAN_DISPATCH_PHASE3_CONSULTANTS ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX
+  eval "$(bash "$ZPLAN_COST_GATE_RUNTIME" apply-reduction "$1")" || return 2
 }
 ```
 
-Re-estimate pseudocode (reuse the exact helper invocation and normalization rules from the initial estimate; raw helper output is still never logged):
+Re-estimate pseudocode (reuse the exact helper invocation and normalization rules from the initial estimate via the same `call-gate` subcommand; raw helper output is still never logged):
 
 ```bash
 zplan_reestimate_cost_gate_after_reduction() {
   _ZPLAN_PRIOR_RANGE_HIGH="$GATE_RANGE_HIGH"
 
-  GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
-    z-plan hard "$RUN" \
-    --dispatch \
-      planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
-      intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
-      doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
-      explore="$ZPLAN_DISPATCH_EXPLORE" \
-      phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
-      phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
-      task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR" \
-    2>/dev/null)" || GATE_JSON=""
-
-  # Re-run the same parse/normalize block used above, then refresh:
-  # GATE_DISPOSITION, GATE_HUMAN_BLOCK, GATE_EST_TOKENS, GATE_CONFIDENCE,
+  eval "$(bash "$ZPLAN_COST_GATE_RUNTIME" call-gate --run "$RUN" \
+    --dispatch planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
+    --dispatch intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
+    --dispatch doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
+    --dispatch explore="$ZPLAN_DISPATCH_EXPLORE" \
+    --dispatch phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
+    --dispatch phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
+    --dispatch task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR")"
+  # Refreshes: GATE_DISPOSITION, GATE_HUMAN_BLOCK, GATE_EST_TOKENS, GATE_CONFIDENCE,
   # GATE_BASIS, GATE_RULE_ID, GATE_RANGE_HIGH, and GATE_SANITIZED_ERROR.
 
   ZPLAN_COST_ATTEMPT_COUNT=$((ZPLAN_COST_ATTEMPT_COUNT + 1))
@@ -976,85 +653,18 @@ L3/deep semantics are never reduced implicitly. The only cost-gate paths that lo
 
 ### Cost gate terminal cleanup helper
 
-The gate runs after `run-brief.sh init` and after the active-plan register attempt. Every terminal post-register failure (`abandon`, `halt`, `unhandled_gate`, helper failure/malformed/missing-field no-ask halt, or interrupted wait) MUST reuse **Run Brief — halt finalize** semantics. The invariant is finalize/render/require before cleanup, then release-before-deregister:
+The gate runs after preflight (run-brief init + register already happened inside Setup step 2's `z-preflight.sh` call). Every terminal post-register failure (`abandon`, `halt`, `unhandled_gate`, helper failure/malformed/missing-field no-ask halt, or interrupted wait) MUST reuse the same halt-finalize + teardown-funnel sequence as every other halt site in this skill — set outcome/next, finalize/render/require the brief, then release+deregister+run_end via one `z-teardown.sh` call. This sequence (outcome/next + `_fragments/run-brief-finalize.md` + `z-teardown.sh`) is identical mechanics to every other halt site in this file, so it is a `scripts/zplan-cost-gate-runtime.sh halt-finalize` call, not inline bash:
 
 ```bash
 zplan_cost_gate_halt_finalize() {
-  RB_HALT_REASON="$1"
-  export RUN_BRIEF_PROFILE=full
-  export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
-  export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-PLAN.md:SPEC.md}"
-  RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
-  bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: ${RB_HALT_REASON}"
-  bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
-{"label": "Review plan status and retry or escalate", "command": null}
-JSON
-  # Run the standard Run Brief finalize sequence before any claim release or registry deregister.
-  # This is the inline equivalent of `<!-- include: _fragments/run-brief-finalize.md -->`
-  # for the pre-subagent cost gate helper.
-  RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
-  bash "$RB_SH" finalize --run "$RUN"
-  COST_SUMMARY_TEXT=""
-  COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
-  if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
-    COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
-  fi
-  if [[ -n "$COST_SUMMARY_TEXT" ]]; then
-    python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat --cost-summary-text "$COST_SUMMARY_TEXT"
-  else
-    python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
-  fi
-  if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
-    PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
-    PushNotification("$PUSH_BODY")
-  fi
-  if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
-    DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
-    DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
-  fi
-  python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
-  RB_REQUIRE_RC=$?
-  if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
-    echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
-  fi
-  FINALIZE_STATUS=aborted
-  if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-      --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-      --command /z-plan || true
-  fi
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
-  fi
+  bash "$ZPLAN_COST_GATE_RUNTIME" halt-finalize \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --reason "$1"
 }
 ```
 
-Cleanup matrix:
+Cleanup matrix and sanitized helper-error expansion (which terminal event each branch emits, and the allowed outcomes once `GATE_SANITIZED_ERROR` is set): `_fragments/zplan-cost-gate-reference.md` — "Cleanup matrix" and "Sanitized helper-error expansion".
 
-| Branch | Terminal event | Cleanup / next step |
-|---|---|---|
-| `auto_proceed` | `choice=auto_proceed`, `choice_source=helper`, `disposition=auto_proceed` | Continue; no AskUser; no cleanup. |
-| `ask` → Proceed | `choice=proceed`, `choice_source=user`, `disposition=ask` | Continue after `user_wait_end`; no cleanup. |
-| `ask` → Reduce / re-estimate | Nonterminal only: emit `cost_gate_reestimate_attempt`; do **not** emit `cost_gate_decision` | Mutate the authoritative intent/dispatch variables, re-run the helper, print the recomputed human block, and loop until proceed/abandon, cap, interruption, or policy halt. |
-| `ask` → Re-estimate returns `auto_proceed` | `choice=auto_proceed`, `choice_source=helper`, `disposition=auto_proceed`, `attempt_count>0` | Continue immediately; no extra AskUser and no user-proceed terminal event. |
-| `ask` → Re-estimate returns `halt` | `choice=halt`, `choice_source=policy`, `reason=gate_policy_halt`, `attempt_count>0` | Run `zplan_cost_gate_halt_finalize "cost gate policy halt"`; exit 1. |
-| `ask` → Abandon | `choice=abandon`, `choice_source=user`, `reason=user_abandoned` | Run `zplan_cost_gate_halt_finalize "cost gate abandoned by user"`; exit 1. |
-| `halt` | `choice=halt`, `choice_source=policy`, `reason=gate_policy_halt` | Run `zplan_cost_gate_halt_finalize "cost gate policy halt"`; exit 1. |
-| `unhandled_gate` | `choice=halt`, `choice_source=policy`, `disposition=unhandled_gate`, `reason=unhandled_gate` | Run `zplan_cost_gate_halt_finalize "cost gate unhandled disposition"`; exit 1. |
-| Helper invocation failure | Interactive: ask branch with `reason=helper_invocation_failure`; no-ask: terminal `choice=halt` | If terminal, run halt-finalize; if user proceeds, continue only after the terminal `proceed` event. |
-| Malformed helper JSON | Interactive: ask branch with `reason=malformed_helper_json`; no-ask: terminal `choice=halt` | Never log raw helper output; if terminal, run halt-finalize. |
-| Missing estimate fields | Interactive: ask branch with `reason=missing_estimate_fields`; no-ask: terminal `choice=halt` | Never invent confidence/basis beyond safe defaults; if terminal, run halt-finalize. |
-| Interrupted user wait after claim/register | `choice=interrupted`, `choice_source=driver_interrupt`, `reason=user_wait_interrupted` | Emit `user_wait_end` with interrupted disposition, then halt-finalize; release guarded by `CLAIM_HELD`, deregister only when `REG_RC==0`. |
-
-Sanitized helper-error expansion (these are the only allowed outcomes once `GATE_SANITIZED_ERROR` is set):
-
-| Condition | Interactive outcome | No-ask / noninteractive outcome |
-|---|---|---|
-| `helper_invocation_failure` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=helper_invocation_failure`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=helper_invocation_failure`), then halt-finalize. |
-| `malformed_helper_json` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=malformed_helper_json`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. Raw helper text is never logged. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=malformed_helper_json`), then halt-finalize. Raw helper text is never logged. |
-| `missing_estimate_fields` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=missing_estimate_fields`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=missing_estimate_fields`), then halt-finalize. |
+<!-- include: _fragments/zplan-cost-gate-reference.md -->
 
 Branch on normalized `GATE_DISPOSITION` before any Agent dispatch:
 
@@ -1430,7 +1040,8 @@ if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
     AskUserQuestion "URGENT: The claim on slug '$Z_HARNESS_SLUG' was lost (taken over by another session or freed). \
 This run may collide with a peer. Default: abort." \
       ["Abort (safe default)", "Continue uncoordinated (you accept collision risk)"]
-    # On abort → CLAIM_HELD=0; if register succeeded → FINALIZE_STATUS=aborted + deregister; exit 1.
+    # On abort → CLAIM_HELD=0; set RB_HALT_REASON, include the halt-finalize fragment,
+    #            call z-teardown.sh --status aborted, exit 1 (deregister no-ops if unregistered).
     # On continue-uncoordinated → CLAIM_HELD=0 (lock already gone); log plan_claim_override; proceed.
   fi
   # heartbeat_error (exit 0) is a transient read failure — NOT a lost claim; log-event already emitted
@@ -1463,7 +1074,8 @@ if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
     AskUserQuestion "URGENT: The claim on slug '$Z_HARNESS_SLUG' was lost before this gate. \
 Another session may now be planning the same slug. Default: abort." \
       ["Abort (safe default)", "Continue uncoordinated (you accept collision risk)"]
-    # On abort → FINALIZE_STATUS=aborted + deregister; CLAIM_HELD=0; exit 1.
+    # On abort → CLAIM_HELD=0; set RB_HALT_REASON, include the halt-finalize fragment,
+    #            call z-teardown.sh --status aborted, exit 1.
     # On continue-uncoordinated → CLAIM_HELD=0; log plan_claim_override; proceed to gate.
   fi
   # heartbeat_error (exit 0): plan-claim.sh already emitted heartbeat_error event; proceed normally.
@@ -1533,46 +1145,26 @@ If brainstorming was run before this `/z-plan` invocation, consume only the user
 
 ### 0.6 Planning-entry watcher checkpoint seam
 
-After `GRILL.md` and any user-approved `BRAINSTORM.md` choice are stable, evaluate the shared clear-context watcher before entering high-context planning. This seam is an opportunity to checkpoint, not an unconditional `/clear`.
+After `GRILL.md` and any user-approved `BRAINSTORM.md` choice are stable, evaluate the shared clear-context watcher before entering high-context planning via one `checkpoint-seam.sh` call (SKILL-STYLE.md §2). This seam is an opportunity to checkpoint, not an unconditional `/clear`.
 
 ```bash
-export Z_HARNESS_PLAN_DIR
-export Z_HARNESS_SLUG
-export Z_HARNESS_CHECKPOINT_STATUS="context_pressure"
-export Z_HARNESS_CHECKPOINT_PRODUCER="z-plan"
-export Z_HARNESS_CHECKPOINT_PHASE_ID="plan-entry"
-export Z_HARNESS_CHECKPOINT_PHASE_NAME="Post-sharpen / optional-brainstorm planning entry"
-export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$Z_HARNESS_PLAN_DIR/GRILL.md"
-export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/GRILL.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" <<'PYEOF'
-import hashlib, os, sys
-h = hashlib.sha256()
-for path in sys.argv[1:]:
-    if os.path.exists(path):
-        h.update(path.encode()); h.update(b"\0")
-        h.update(open(path, "rb").read()); h.update(b"\0")
-print(h.hexdigest())
-PYEOF
-)"
-export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
-export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-plan $Z_HARNESS_SLUG"
-export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-plan for $Z_HARNESS_SLUG from GRILL.md and optional BRAINSTORM.md; continue conversational planning."
-export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-plan","seam":"plan-entry","run":"%s"}' "$RUN")"
-
-COMPACTION_TRIGGERED=0
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
-if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
-  CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
-  printf '%s\n' "$CHECKPOINT_OUT"
-  case "$CHECKPOINT_OUT" in
-    STATUS:\ clear_checkpoint_fast_forward*) ;;
-    STATUS:\ clear_checkpoint*) exit 0 ;;
-    *) exit 1 ;;
-  esac
-elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
-  RB_HALT_REASON="context pressure estimate failed in strict mode at plan-entry seam"
-  FINALIZE_STATUS=aborted
-  exit 1
-fi
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/checkpoint-seam.sh" \
+  plan-entry "$Z_HARNESS_PLAN_DIR/GRILL.md" "/z-plan $Z_HARNESS_SLUG" \
+  --producer z-plan \
+  --next-step "Resume /z-plan for $Z_HARNESS_SLUG from GRILL.md and optional BRAINSTORM.md; continue conversational planning." \
+  --hash "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+SEAM_RC=$?
+case "$SEAM_RC" in
+  0) ;;  # below threshold, or already fast-forwarded — continue
+  1) exit 0 ;;  # new checkpoint written — pause here, not an error; next invocation resumes
+  2)
+    RB_HALT_REASON="context pressure estimate failed in strict mode at plan-entry seam"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
+    exit 1
+    ;;
+esac
 ```
 
 ---
@@ -1733,18 +1325,16 @@ fi
 ```
 
 Branch on `$RESULT_DECISIONS`:
-- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. This halt occurs after a successful register (`REG_RC==0`), so it MUST go through the **Run Brief — halt finalize** shared block (which includes the `CLAIM_HELD`-guarded release + deregister) before exit. The orchestrator MUST NOT skip to `exit 1` without executing that block:
+- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. This halt occurs after a successful preflight, so it MUST go through the halt-finalize + teardown funnel (below) — never a bare `exit`:
   ```bash
   if [[ "$RESULT_DECISIONS" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
-    # ---- Route through Run Brief — halt finalize (below) ----
-    # Sets RUN_BRIEF_PROFILE, calls run-brief.sh set-section, then:
-    #   if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then plan-claim.sh release ...; fi
-    #   active-plan-registry.py deregister --status aborted
-    # DO NOT jump to exit 1 without executing those steps.
-    # <execute Run Brief — halt finalize with reason "no_ask_blocked on workflow.plan_decisions_approval">
+    RB_HALT_REASON="no_ask_blocked on workflow.plan_decisions_approval"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
   ```
@@ -1859,101 +1449,14 @@ If `CONSULT_PROVIDER == "none"` (i.e. `runtime.consult = "off"` in config):
   ```
 - Proceed directly to Phase 4.
 
-**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
-
-Check the config knobs:
-
-```bash
-PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
-CRITIQUE_PANEL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.critique_panel 2>/dev/null || echo "true")"
-```
-
-If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** instead of the standard 2-consultant dispatch. The panel arms are fixed (no randomness):
-
-| Arm | Provider | Model |
-|---|---|---|
-| gemini | `agy` | (default) |
-| claude-sonnet | `cursor` | `claude-4.6-sonnet` (via `--model claude-4.6-sonnet`) |
-| grok | `cursor` | `grok-4.3` (via `--model grok-4.3`) |
-| composer | `cursor` | `composer-2.5` (via `--model composer-2.5`) |
-| codex-5.5 | `codex-cli` | (default) |
-
-**Persona draw for Phase 3 (when `PERSONA_ROTATION == "true"` AND `CRITIQUE_PANEL == "true"`):**
-
-Draw 5 distinct `consultant` personas and positionally bind one body to each arm. Graceful underflow: if the pool has fewer than 5 members, the shorter array is returned (exit 0) and remaining arm slots stay vanilla. This draw is independent of Phase 7's draw — each phase draws its own set.
-
-```bash
-PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
-
-# Vanilla defaults: empty prefix + "<none>" name for all five arms.
-# Knob-OFF leaves these untouched — dispatch is byte-identical to the pre-feature behavior.
-P3_GEMINI_PREFIX="";     P3_GEMINI_NAME="<none>";     P3_GEMINI_DRAW=""
-P3_SONNET_PREFIX="";     P3_SONNET_NAME="<none>";     P3_SONNET_DRAW=""
-P3_GROK_PREFIX="";       P3_GROK_NAME="<none>";       P3_GROK_DRAW=""
-P3_COMPOSER_PREFIX="";   P3_COMPOSER_NAME="<none>";   P3_COMPOSER_DRAW=""
-P3_CODEX_PREFIX="";      P3_CODEX_NAME="<none>";      P3_CODEX_DRAW=""
-
-if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
-  # Draw up to 5 distinct consultant personas. Underflow → shorter array, exit 0.
-  P3_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
-    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
-
-  # Positional bind: [0]->gemini, [1]->claude-sonnet, [2]->grok, [3]->composer, [4]->codex-5.5
-  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
-    idx="${slot%%:*}"; who="${slot##*:}"
-    name=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
-    path=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
-    draw=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
-    [ -z "$name" ] && continue   # underflow slot — leave vanilla
-    # prepend_persona(path, "") strips frontmatter and returns "<body>\n\n".
-    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
-    eval "P3_${who}_NAME=\$name"
-    eval "P3_${who}_PREFIX=\$prefix"
-    eval "P3_${who}_DRAW=\$draw"
-  done
-fi
-```
-
-Before dispatching each panel member, emit a `persona_bound` event logging the arm. When a persona was drawn for the arm, include `persona_id`, `draw_id`, and use `selection_source=random_role_pool_distinct`; vanilla arms retain `selection_source=fixed_panel`:
-
-```bash
-declare -A P3_ARM_NAMES=([gemini]="$P3_GEMINI_NAME" [claude-sonnet]="$P3_SONNET_NAME" [grok]="$P3_GROK_NAME" [composer]="$P3_COMPOSER_NAME" [codex-5.5]="$P3_CODEX_NAME")
-declare -A P3_ARM_DRAWS=([gemini]="$P3_GEMINI_DRAW" [claude-sonnet]="$P3_SONNET_DRAW" [grok]="$P3_GROK_DRAW" [composer]="$P3_COMPOSER_DRAW" [codex-5.5]="$P3_CODEX_DRAW")
-for ARM in gemini claude-sonnet grok composer codex-5.5; do
-  pname="${P3_ARM_NAMES[$ARM]}"
-  pdraw="${P3_ARM_DRAWS[$ARM]}"
-  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":3}' \
-         "$RUN" "$ARM" "$pname" "$pdraw")"
-  else
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' \
-         "$RUN" "$ARM")"
-  fi
-done
-```
-
-Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Prepend the arm's persona body (from the draw above) to the prompt when available — empty string when vanilla. Cursor-based arms pass their model via `--model <model>`:
-
-- `Agent(subagent_type="agy", description="Phase 3 consult — gemini arm", prompt="<P3_GEMINI_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 3 consult — claude-sonnet arm", prompt="<P3_SONNET_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 3 consult — grok arm", prompt="<P3_GROK_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 3 consult — composer arm", prompt="<P3_COMPOSER_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="codex-cli", description="Phase 3 consult — codex-5.5 arm", prompt="<P3_CODEX_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-
-Each `<P3_*_PREFIX>` is the persona body followed by a blank line (from the draw above), or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt is byte-identical to the pre-feature dispatch.
-
-Five calls total. When all return, synthesize across all five responses.
-
-If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn **both** consultants in parallel in a single message:
+**Consultant dispatch.** Spawn **both** consultants in parallel in a single message:
 
 - `Agent(subagent_type="consultant-primary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 - `Agent(subagent_type="consultant-secondary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 
 Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. Two calls total, regardless of feature size.
 
-When all consultants return (from either the 5-panel or 2-consultant path):
+When all consultants return:
 1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
 2. Synthesize. Make the final call yourself, citing which inputs you weighed.
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
@@ -2012,7 +1515,7 @@ Keep the brief dense and decision-oriented. It should give the user everything n
 
 ```bash
 # Callsite 2 — Phase-5 shortcut surface: one surface-shortcut.sh call per record.
-# RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
+# RUN is already set/exported by Setup step 2; surface-shortcut.sh reads the RUN
 # env var to attribute the shortcut_proposed event, so export it here.
 export RUN="$RUN"
 # Drive this loop from the Shortcuts section the orchestrator just presented:
@@ -2239,7 +1742,7 @@ fi  # end of Phase 6 if/else: intent-mode (INTENT.md writer) vs legacy (SPEC/PLA
      Document the gap in the archive and proceed to Phase 8 without final
      review input. -->
 
-**Pre-dispatch TASKS existence/generation guard.** Phase 7 reviews the primary artifact plus the initial task plan, so the guard below runs before the consult-off branch, persona binding, prompt rendering, or any Phase 7 Agent dispatch. It guarantees the task plan exists and is not an amended-intent stale batch: Phase 8 still owns TASKS sanity, complexity/checkpoint work, scope seeding, workstreams, and handoff sequencing.
+**Pre-dispatch TASKS existence/generation guard.** Phase 7 reviews the primary artifact plus the initial task plan, so the guard below runs before the consult-off branch, prompt rendering, or any Phase 7 Agent dispatch. It guarantees the task plan exists and is not an amended-intent stale batch: Phase 8 still owns TASKS sanity, complexity/checkpoint work, scope seeding, workstreams, and handoff sequencing.
 
 ```bash
 PHASE7_TASKS_PATH="$Z_HARNESS_PLAN_DIR/TASKS.md"
@@ -2262,9 +1765,8 @@ if [[ ! -f "$PHASE7_TASKS_PATH" || "$PHASE7_TASKS_STALE_REASON" == "amended-inte
         '{"reason":"intent_missing_before_phase7_tasks"}' 2>/dev/null || true
       RB_HALT_REASON="intent artifact missing before Phase 7 TASKS guard"
       # include: _fragments/run-brief-halt-finalize-plan.md
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+        --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
       exit 1
     fi
 
@@ -2329,9 +1831,8 @@ task_to_intent_mapping_required: true"
           "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
       RB_HALT_REASON="intent initial task generation failed before Phase 7"
       # include: _fragments/run-brief-halt-finalize-plan.md
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+        --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
       exit 1
     fi
   else
@@ -2340,9 +1841,8 @@ task_to_intent_mapping_required: true"
       "$(printf '{"reason":"full_mode_tasks_missing_before_phase7","path":"%s"}' "$PHASE7_TASKS_PATH")" 2>/dev/null || true
     RB_HALT_REASON="full-mode TASKS.md missing before Phase 7 review"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
 fi
@@ -2365,65 +1865,7 @@ If `CONSULT_PROVIDER_P7 == "none"` (i.e. `runtime.consult = "off"` in config):
   ```
 - Proceed directly to Phase 8.
 
-**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
-
-Reuse the `PERSONA_ROTATION` and `CRITIQUE_PANEL` values resolved in Phase 3 (already set). If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7.
-
-**Persona draw for Phase 7 (when `PERSONA_ROTATION == "true"` AND `CRITIQUE_PANEL == "true"`):**
-
-Draw a fresh, independent set of 5 distinct `consultant` personas for Phase 7 — do NOT reuse the Phase 3 draw. Positional bind and graceful underflow follow the same rules as Phase 3.
-
-```bash
-PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
-
-# Vanilla defaults for Phase 7: empty prefix + "<none>" name for all five arms.
-P7_GEMINI_PREFIX="";     P7_GEMINI_NAME="<none>";     P7_GEMINI_DRAW=""
-P7_SONNET_PREFIX="";     P7_SONNET_NAME="<none>";     P7_SONNET_DRAW=""
-P7_GROK_PREFIX="";       P7_GROK_NAME="<none>";       P7_GROK_DRAW=""
-P7_COMPOSER_PREFIX="";   P7_COMPOSER_NAME="<none>";   P7_COMPOSER_DRAW=""
-P7_CODEX_PREFIX="";      P7_CODEX_NAME="<none>";      P7_CODEX_DRAW=""
-
-if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
-  # Phase 7 gets its own independent draw — do not share with Phase 3.
-  P7_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
-    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
-
-  # Positional bind: [0]->gemini, [1]->claude-sonnet, [2]->grok, [3]->composer, [4]->codex-5.5
-  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
-    idx="${slot%%:*}"; who="${slot##*:}"
-    name=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
-    path=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
-    draw=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
-    [ -z "$name" ] && continue   # underflow slot — leave vanilla
-    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
-    eval "P7_${who}_NAME=\$name"
-    eval "P7_${who}_PREFIX=\$prefix"
-    eval "P7_${who}_DRAW=\$draw"
-  done
-fi
-```
-
-Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3, with `"phase":7`). When a persona was drawn, use `selection_source=random_role_pool_distinct` and include `persona_id` + `draw_id`; vanilla arms use `selection_source=fixed_panel`:
-
-```bash
-declare -A P7_ARM_NAMES=([gemini]="$P7_GEMINI_NAME" [claude-sonnet]="$P7_SONNET_NAME" [grok]="$P7_GROK_NAME" [composer]="$P7_COMPOSER_NAME" [codex-5.5]="$P7_CODEX_NAME")
-declare -A P7_ARM_DRAWS=([gemini]="$P7_GEMINI_DRAW" [claude-sonnet]="$P7_SONNET_DRAW" [grok]="$P7_GROK_DRAW" [composer]="$P7_COMPOSER_DRAW" [codex-5.5]="$P7_CODEX_DRAW")
-for ARM in gemini claude-sonnet grok composer codex-5.5; do
-  pname="${P7_ARM_NAMES[$ARM]}"
-  pdraw="${P7_ARM_DRAWS[$ARM]}"
-  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":7}' \
-         "$RUN" "$ARM" "$pname" "$pdraw")"
-  else
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' \
-         "$RUN" "$ARM")"
-  fi
-done
-```
-
-**Phase 7 mode-aware input contract.** The final-review prompt always includes decisions and the task plan, but the primary planning artifact depends on `PLANNING_MODE`. This block is a runtime-expanded prompt payload, not a placeholder mapping. Every Phase 7 Agent prompt (5-panel and 2-consultant fallback) MUST include `planning_mode: $PLANNING_MODE` plus exactly one concrete artifact set:
+**Phase 7 mode-aware input contract.** The final-review prompt always includes decisions and the task plan, but the primary planning artifact depends on `PLANNING_MODE`. This block is a runtime-expanded prompt payload, not a placeholder mapping. Every Phase 7 Agent prompt MUST include `planning_mode: $PLANNING_MODE` plus exactly one concrete artifact set:
 
 - **Intent mode:** pass `INTENT.md` + `TASKS.md` + decisions. Do **not** ask for or synthesize `SPEC.md`/`PLAN.md` in intent mode.
   ```text
@@ -2469,17 +1911,8 @@ if [[ -n "${KERNEL_PATH:-}" ]]; then
 fi
 ```
 
-All Phase 7 arms receive: "Critique this plan. What's wrong, missing, or fragile?" Prepend the arm's Phase 7 persona body to the prompt when available — empty string when vanilla — then include `$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE`. Cursor arms pass their model via `--model <model>`:
+**Consultant dispatch.** Spawn **both** consultants in parallel with the same rendered `$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE`:
 
-- `Agent(subagent_type="agy", description="Phase 7 final review — gemini arm", prompt="${P7_GEMINI_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
-- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 7 final review — claude-sonnet arm", prompt="${P7_SONNET_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
-- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 7 final review — grok arm", prompt="${P7_GROK_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
-- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 7 final review — composer arm", prompt="${P7_COMPOSER_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
-- `Agent(subagent_type="codex-cli", description="Phase 7 final review — codex-5.5 arm", prompt="${P7_CODEX_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
-
-Each `<P7_*_PREFIX>`/`$P7_*_PREFIX` is the persona body followed by a blank line, or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt differs from vanilla only by the required `planning_mode: $PLANNING_MODE` and artifact-path lines.
-
-If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel with the same rendered `$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE`:
 - `Agent(subagent_type="consultant-primary", ..., prompt="MODE: plan-review\nCritique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
 - `Agent(subagent_type="consultant-secondary", ..., prompt="MODE: plan-review\nCritique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
 
@@ -2498,9 +1931,8 @@ if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; the
       '{"reason":"phase8_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
     RB_HALT_REASON="TASKS.md missing after Phase 7 pre-dispatch guard"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
 
@@ -2514,9 +1946,8 @@ if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; the
       "$(printf '{"reason":"intent_initial_tasks_sanity_failed","errors":%s}' "$TASKS_SANITY_JSON")" 2>/dev/null || true
     RB_HALT_REASON="intent initial task sanity failed"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
 
@@ -2550,9 +1981,8 @@ base: $Z_HARNESS_PLAN_DIR"
         "$WORKSTREAM_GEN_RC" "$WORKSTREAM_GEN_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent workstreams generation failed"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
 
@@ -2606,9 +2036,8 @@ PYEOF
         "$WORKSTREAM_VALIDATE_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent workstreams validation failed"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" workstreams_generated \
@@ -2701,9 +2130,8 @@ PYEOF
         "$WORK_GRAPH_RC" "$WORK_GRAPH_JSON" "$WORK_GRAPH_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent known-work graph generation failed"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" work_graph_written \
@@ -2832,9 +2260,8 @@ PYEOF
         "$EXECUTION_STRATEGY_RC" "$EXECUTION_STRATEGY_JSON" "$Z_HARNESS_PLAN_DIR/execution-strategy.md")" 2>/dev/null || true
     RB_HALT_REASON="intent execution strategy generation failed"
     # include: _fragments/run-brief-halt-finalize-plan.md
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
   fi
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" execution_strategy_written \
@@ -2860,9 +2287,8 @@ if [[ ! -f "$Z_HARNESS_PLAN_DIR/TASKS.md" ]]; then
     '{"reason":"phase8_full_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
   RB_HALT_REASON="full-mode TASKS.md missing after Phase 7 review"
   # include: _fragments/run-brief-halt-finalize-plan.md
-  FINALIZE_STATUS=aborted
-  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-    --run-id "$RUN" --status aborted 2>/dev/null || true
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
   exit 1
 fi
 ```
@@ -3130,46 +2556,26 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ### Pre-execute watcher checkpoint seam
 
-After `HANDOFF.md`, `handoff.json`, `TASKS.md`, and execution-strategy metadata are written and validated, evaluate the shared clear-context watcher before offering `/z-execute`. This replaces unconditional manual `/clear` prose with a watcher-readable checkpoint opportunity.
+After `HANDOFF.md`, `handoff.json`, `TASKS.md`, and execution-strategy metadata are written and validated, evaluate the shared clear-context watcher before offering `/z-execute` via one `checkpoint-seam.sh` call. This replaces unconditional manual `/clear` prose with a watcher-readable checkpoint opportunity.
 
 ```bash
-export Z_HARNESS_PLAN_DIR
-export Z_HARNESS_SLUG
-export Z_HARNESS_CHECKPOINT_STATUS="clean_break"
-export Z_HARNESS_CHECKPOINT_PRODUCER="z-plan"
-export Z_HARNESS_CHECKPOINT_PHASE_ID="pre-execute-handoff"
-export Z_HARNESS_CHECKPOINT_PHASE_NAME="Pre-execute planning handoff"
-export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$Z_HARNESS_PLAN_DIR/HANDOFF.md"
-export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/TASKS.md" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$Z_HARNESS_PLAN_DIR/execution-strategy.md" <<'PYEOF'
-import hashlib, os, sys
-h = hashlib.sha256()
-for path in sys.argv[1:]:
-    if os.path.exists(path):
-        h.update(path.encode()); h.update(b"\0")
-        h.update(open(path, "rb").read()); h.update(b"\0")
-print(h.hexdigest())
-PYEOF
-)"
-export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
-export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-execute $Z_HARNESS_SLUG"
-export Z_HARNESS_CHECKPOINT_NEXT_STEP="Run /z-execute $Z_HARNESS_SLUG from HANDOFF.md, INTENT.md, TASKS.md, concern flags, and execution-strategy metadata."
-export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-plan","seam":"pre-execute-handoff","run":"%s"}' "$RUN")"
-
-COMPACTION_TRIGGERED=0
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
-if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
-  CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
-  printf '%s\n' "$CHECKPOINT_OUT"
-  case "$CHECKPOINT_OUT" in
-    STATUS:\ clear_checkpoint_fast_forward*) ;;
-    STATUS:\ clear_checkpoint*) exit 0 ;;
-    *) exit 1 ;;
-  esac
-elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
-  RB_HALT_REASON="context pressure estimate failed in strict mode at pre-execute handoff seam"
-  FINALIZE_STATUS=aborted
-  exit 1
-fi
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/checkpoint-seam.sh" \
+  pre-execute-handoff "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "/z-execute $Z_HARNESS_SLUG" \
+  --producer z-plan \
+  --next-step "Run /z-execute $Z_HARNESS_SLUG from HANDOFF.md, INTENT.md, TASKS.md, concern flags, and execution-strategy metadata." \
+  --hash "$Z_HARNESS_PLAN_DIR/INTENT.md" --hash "$Z_HARNESS_PLAN_DIR/TASKS.md" --hash "$Z_HARNESS_PLAN_DIR/execution-strategy.md"
+SEAM_RC=$?
+case "$SEAM_RC" in
+  0) ;;  # below threshold, or already fast-forwarded — continue
+  1) exit 0 ;;  # new checkpoint written — pause here, not an error; next invocation resumes
+  2)
+    RB_HALT_REASON="context pressure estimate failed in strict mode at pre-execute handoff seam"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+      --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
+    exit 1
+    ;;
+esac
 ```
 
 ## Phase 8.6 — Final handoff gate
@@ -3266,25 +2672,19 @@ rm -f "$NEXT_JSON_FILE"
 
 <!-- include: _fragments/run-brief-finalize.md -->
 
-**Release the claim and deregister this run** (best-effort, non-fatal). Release BEFORE deregister so the lock frees first (minimizes the window where the registry shows the run gone but the lock is still held). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. Both calls return 0 by design and self-log on internal failure, so call both with `|| true`. If register failed earlier (no record was ever written), the deregister is a harmless no-op.
+**Teardown funnel** (best-effort, non-fatal; release-before-deregister + `run_end` all in one call). Normal completion tears down with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, tear down with `aborted` instead. If register never succeeded (no record was ever written), the deregister/release steps inside the funnel are harmless no-ops.
 ```bash
-# Release BEFORE deregister (invariant 3 — order matters).
-if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-plan || true
-fi
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status "${FINALIZE_STATUS:-complete}"
 ```
 
-After planning, prefer the shared watcher-readable clear checkpoint over manual `/compact`: planning (Explore agents, user intent iteration, concern flags, audit notes, and task DAG drafting) is the heaviest context burner in the harness. The `check-compaction.sh` / `write-clear-checkpoint.sh` seam lets Oh My Pi/Hermes/MCP or the user clear before implementation starts; implementation subagents are fresh-context already, and `/z-execute` owns later durable checkpoint seams.
+After planning, prefer the shared watcher-readable clear checkpoint over manual `/compact`: planning (Explore agents, user intent iteration, concern flags, audit notes, and task DAG drafting) is the heaviest context burner in the harness. The `checkpoint-seam.sh` seam lets Oh My Pi/Hermes/MCP or the user clear before implementation starts; implementation subagents are fresh-context already, and `/z-execute` owns later durable checkpoint seams.
 
 ## Run Brief — halt finalize
 
-Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+Shared halt shape reused by every mid-file halt site (RB_HALT_REASON + `_fragments/run-brief-halt-finalize-plan.md` include + `z-teardown.sh --status aborted`). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next). If register never succeeded, `z-teardown.sh`'s deregister step is a harmless no-op — no separate "register failed" branch is needed here.
 
-**Known gap:** halts before Setup step 5 (`run-brief.sh init`) — e.g. `workflow.slug_confirm` resolver `halt` during slug derivation — skip this block (no brief JSON yet).
+**Known gap:** halts before Setup step 2's `z-preflight.sh` call completes (e.g. the `workflow.slug_confirm` resolver `halt` during slug derivation) skip this block entirely — no brief JSON exists yet, so a bare `exit 0`/`exit 1` is correct there.
 
 ```bash
 export RUN_BRIEF_PROFILE=full
@@ -3300,15 +2700,8 @@ JSON
 <!-- include: _fragments/run-brief-finalize.md -->
 
 ```bash
-FINALIZE_STATUS=aborted
-# Release BEFORE deregister (invariant 3). Guard: only when CLAIM_HELD==1 (i.e. we actually hold the lock).
-if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-plan || true
-fi
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status aborted 2>/dev/null || true
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
 ```
 
 ---
@@ -3332,7 +2725,6 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `doc_drift_acknowledged` | User accepted stale docs in the consolidated 10c gate | `stale_pct`, `stale_concepts` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
 | `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
-| `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
 | `next_step_choice` | Phase 8.6 final handoff gate selection emitted (source: `phase_8_6_final_handoff_gate`) | `choice`, `source` |
 | `sharpen_gate` | Phase 0 mandatory conversational sharpen decision | `decision` (`existing_grill`\|`sharpened`), `recommendation` (`proceed`\|`ask_brainstorm`), `grill_md_existed` |
@@ -3350,6 +2742,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `legacy_mode_active` | `PLANNING_MODE=full` branch entered (from --full flag, config, or SPEC detection) | `slug`, `reason` |
 | `legacy_plan_exists` | Finished legacy plan (SPEC.md + TASKS.md) detected; user prompted to amend/implement/overwrite/abort | `slug`, `has_spec`, `has_tasks` |
 | `work_graph_written` | Phase 8 wrote the initial append-only known-work DAG for intent-mode `/z-execute` | `slug`, `path`, `source`, `mode` (`known_work_graph`) |
+| `run_end` | Emitted by `scripts/z-teardown.sh` at every controlled exit (complete or aborted) — the teardown-funnel adoption in this rewrite closes a gap where the pre-rewrite skill never emitted a terminal `run_end` | `status`, `command` |
 
 ---
 
@@ -3364,16 +2757,4 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 
 ---
 
-## Runtime contract conformance
-
-| Feature | Used | Gates |
-|---------|------|-------|
-| `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls or fixed 5-panel Agent() calls; Phase 7 pre-dispatch task-tree-generator guard when intent TASKS.md is absent; Phase 7 same consultant panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Pre-subagent hard cost gate** (guarded by `workflow.pre_run_cost_gate`, before `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, and task-tree generation); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (single final plan-brief approval gate, covering high-impact decisions, shortcuts, amend, post-draft grill, route back, or stop); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
-| `skill_invoke` | no | — |
-
-Driver support requirements: see frontmatter `driver_features_required`.
-
-Non-supporting drivers **must surface and skip** any gated block — silent
-omission is forbidden. Each gated call site is annotated with a
-`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+Driver support requirements: see frontmatter `driver_features_required`. Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site carries its own `<!-- RUNTIME-GATE: ... -->` comment immediately before the call; that is the single source of truth for what is gated (SKILL-STYLE.md §1 — the closing conformance table is retired for rewritten skills).

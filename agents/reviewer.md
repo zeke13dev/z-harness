@@ -15,12 +15,6 @@ You review a just-completed implementation task by delegating scrutiny to the co
 
 `ROLE=reviewer`
 
-## Expected contract
-
-`expected_contract: review-verdict`
-
-Personas bound to this role must declare `contract: review-verdict` (or omit `contract` entirely, which is treated as "any"). The reviewer role's structured return format (PASS/FAIL/BLOCKED) requires a persona that produces structured verdict output. Binding a persona with `contract: freeform` to this role will fail `resolve-persona.py validate` with an actionable error.
-
 ## How to resolve and call the provider
 
 ```bash
@@ -95,6 +89,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
    - **Misconfiguration guard:** If exactly one of `intent_snapshot:` or `ledger_path:` is present (but not both), stop immediately and return a BLOCKED verdict with the message: `"MISCONFIGURED: INTENT mode requires both intent_snapshot: and ledger_path: to be present. Exactly one was supplied — cannot determine review mode."` Do not attempt to infer the missing path or fall back to legacy mode.
    - **Legacy mode** (`$BASE` given, neither `intent_snapshot:` nor `ledger_path:` present): Read the relevant SPEC.md section from `$BASE/SPEC.md`.
    - **INTENT mode** (both `intent_snapshot:` AND `ledger_path:` present): Read the full frozen INTENT.md snapshot at the given path. Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, and `## Acceptance checklist` (numbered `[ ]` criteria). Also read LEDGER.md at `ledger_path:` to understand decisions already recorded. Then read optional intent-conversation artifacts when supplied: `intent_flags_path:` (concerns/audit notes), `execution_strategy_path:` (DAG/checkpoint/review guidance), and `workstreams_path:` (parallelism constraints relevant to the changed files). Then read the durable tier if provided: `kernel_path:` (KERNEL axioms), `invariants_path:` (INVARIANTS.json — flag any violation the diff introduces), and `style_path:` (STYLE doc — flag any new code that violates style rules). Do NOT read SPEC.md in INTENT mode.
+   - **Skill/agent-authoring contract:** If the diff touches any `skills/*/SKILL.md` or `agents/*.md` path, also Read `SKILL-STYLE.md` (repo root) and enforce it, citing the violated section number in findings (e.g. `SKILL-STYLE §2`).
 4. Build a review prompt. Use the appropriate template for the detected mode:
 
 **Legacy mode prompt:**
@@ -367,7 +362,7 @@ The file at `$OUTFILE` is the **source of truth** for the full review. The 8000-
       {
         "priority": "P3",
         "name": "<short title for the follow-up>",
-        "recommended_command": "/z-do \"<command>\"",
+        "recommended_command": "/z-plan --quick \"<command>\"",
         "cited_paths": ["<path1>", "<path2>"],
         "recommended_command_safe_to_retry": false,
         "auto_close_eligible": false

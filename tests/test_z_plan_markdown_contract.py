@@ -290,7 +290,7 @@ def test_phase7_final_review_inputs_are_mode_aware_for_intent_and_full() -> None
     assert "Phase 8 does not create the first TASKS.md" in phase8_block
     assert 'subagent_type="task-tree-generator"' not in phase8_block
     phase7_prompt_lines = [line for line in block.splitlines() if 'prompt="' in line and "Critique this plan" in line]
-    assert len(phase7_prompt_lines) == 7
+    assert len(phase7_prompt_lines) == 2
     for line in phase7_prompt_lines:
         assert "$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE" in line
     consultant_prompt_lines = [line for line in phase7_prompt_lines if "consultant-" in line]
@@ -340,8 +340,12 @@ def test_intent_compiler_sharpen_brainstorm_and_checkpoint_gates() -> None:
     assert "MUST NOT depend on `/z-sharpen` wrapper-only behavior" in block
     assert "does not auto-dispatch `/z-brainstorm`" in block
     assert "brainstorm-choice.json" in block
-    assert "scripts/check-compaction.sh" in block
-    assert "scripts/write-clear-checkpoint.sh" in block
+    # T106 moved both watcher checkpoint seams onto the shared checkpoint-seam.sh
+    # wrapper (over check-compaction.sh + write-clear-checkpoint.sh); this is a
+    # test update reconciling that prior task's intentional change, not a
+    # product regression.
+    assert "scripts/checkpoint-seam.sh" in block
+    assert "plan-entry" in block
     route_check = text[index_after(text, "## Plan Route Check"):index_after(text, "## Explicit planning mode gate")]
     assert "pre-Phase-0/pre-gate invocation MUST NOT route or recommend `/z-brainstorm`" in route_check
     assert "brainstorm_recommendation_deferred_until_after_sharpen" in route_check
@@ -409,9 +413,12 @@ def test_execution_strategy_and_pre_execute_checkpoint_are_documented() -> None:
     assert "TASKS.md unreadable while writing execution strategy" in execution_strategy_block
     assert "cannot write execution-strategy.md" in execution_strategy_block
     assert "### Pre-execute watcher checkpoint seam" in handoff_block
-    assert "Z_HARNESS_CHECKPOINT_PHASE_ID=\"pre-execute-handoff\"" in handoff_block
-    assert "scripts/check-compaction.sh" in handoff_block
-    assert "scripts/write-clear-checkpoint.sh" in handoff_block
+    # T106 moved this seam onto the shared checkpoint-seam.sh wrapper (seam id
+    # "pre-execute-handoff" is now a positional arg, not a
+    # Z_HARNESS_CHECKPOINT_PHASE_ID env var); test update reconciling that
+    # prior task's intentional change, not a product regression.
+    assert "scripts/checkpoint-seam.sh" in handoff_block
+    assert "pre-execute-handoff" in handoff_block
 
 
 def test_intent_phase8_workstreams_generation_is_not_silent() -> None:

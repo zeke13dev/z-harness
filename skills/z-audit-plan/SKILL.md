@@ -706,22 +706,24 @@ fi
    fi
    ```
 
-   2c. **Auto-amend `spec_gap` findings via `/z-amend --skip-user-gate`:**
+   2c. **Auto-amend `spec_gap` findings via `/z-amend`:**
 
    For an **INTENT-mode target** — batch ALL spec_gap corrections into a single amendment
-   description and invoke `/z-amend --skip-user-gate` ONCE (one contract re-freeze). Build the
+   description and invoke `/z-amend` ONCE (one contract re-freeze). Build the
    combined amendment text as a bullet list of all corrections and call:
    ```
-   /z-amend --skip-user-gate "<combined amendment text listing all spec_gap corrections>"
+   /z-amend "<combined amendment text listing all spec_gap corrections>"
    ```
 
-   For a **legacy-mode target** — invoke `/z-amend --skip-user-gate` once per spec_gap finding:
+   For a **legacy-mode target** — invoke `/z-amend` once per spec_gap finding:
    ```
-   /z-amend --skip-user-gate "<correction title: description>"
+   /z-amend "<correction title: description>"
    ```
 
    In both modes: skip any spec_gap finding whose task is already `[x]` complete in TASKS.md
-   (guard from step 2a). Track the count of amendments actually invoked as `N_AUTO_AMENDED`.
+   (guard from step 2a) — this is the same completed-task guard, so `/z-amend`'s own Phase 4 gate
+   always finds an empty `Touched-but-completed tasks` list here and auto-proceeds without asking.
+   Track the count of amendments actually invoked as `N_AUTO_AMENDED`.
 
    2d. **Render `premise_failure` findings as prose brief.** Build the JSON input for
    `amendment-brief.py` from the two lists. The corrections list uses each spec_gap finding's

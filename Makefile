@@ -32,7 +32,7 @@ conformance-live:
 	python3 -m pytest tests/conformance/ -v --tb=short
 
 conformance-record:
-	python3 tests/conformance/run_conformance.py --command z-do --mode live --record --drivers $(DRIVER)
+	python3 tests/conformance/run_conformance.py --command z-fix --mode live --record --drivers $(DRIVER)
 
 # Strict, fail-loud conformance gate (MF2 / audit-finding F7). A REAL
 # integration check — NOT a placeholder:
@@ -48,7 +48,7 @@ conformance-record:
 # This target is EXPECTED to fail until real fixtures are recorded
 # (run_conformance.py --mode live --record) — that is the point of the gate.
 conformance-strict:
-	python3 tests/conformance/run_strict.py --command z-do $(if $(ALLOW_MISSING),--allow-missing,)
+	python3 tests/conformance/run_strict.py --command z-fix $(if $(ALLOW_MISSING),--allow-missing,)
 	Z_HARNESS_CONFORMANCE_STRICT=1 python3 -m pytest tests/conformance/test_strict.py -v
 
 # AskUserQuestion callsite audit — documentation/audit tooling, NOT runtime enforcement.

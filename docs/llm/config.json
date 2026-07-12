@@ -294,25 +294,13 @@
     "[Model routing] _validate_dynamic_model_config_value soft-warns+skips the key on the global layer and hard-exits 2 on repo/env layer for invalid dynamic model_classes/model_routing values",
     "[brainstorm] brainstorm.personas valid values: true | false; default true; env Z_HARNESS_BRAINSTORM_PERSONAS",
     "[brainstorm] brainstorm.wide_overflow_model valid values: non-empty string; default 'haiku'; env Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL",
-    "[brainstorm] brainstorm.personas controls ideator persona injection in /z-brainstorm ONLY; knob lives in [brainstorm] not [personas] by design",
-    "[personas] personas.critique_panel valid values: true | false; default true; env Z_HARNESS_PERSONAS_CRITIQUE_PANEL",
-    "[personas] personas.audit valid values: true | false; default true; env Z_HARNESS_PERSONAS_AUDIT",
-    "[personas] personas.review_eval valid values: true | false; default true; env Z_HARNESS_PERSONAS_REVIEW_EVAL",
-    "[personas] personas.consult_eval valid values: true | false; default FALSE (off); env Z_HARNESS_PERSONAS_CONSULT_EVAL",
-    "[personas] personas.implementer_retry valid values: same | new; default same; env Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
-    "[personas] there is NO personas.debug knob — it was removed as dead code; do not document or configure it",
-    "[personas] personas.consult_eval=false (default) means the neutral consult arm runs alone at convergent sites — no advisory overhead",
-    "[personas] personas.implementer_retry has no effect when experiment.persona_rotation=false",
-    "[personas] neutral-authority invariant: at all CONVERGENT sites the neutral arm is always the decision of record regardless of knob state",
+    "[brainstorm] brainstorm.personas controls ideator persona injection in /z-brainstorm ONLY; the knob lives in the [brainstorm] section by design",
     "[axioms] axioms.enabled valid values: true | false; default true; env Z_HARNESS_AXIOMS_ENABLED",
     "[axioms] axioms.kernel_budget_chars valid values: positive integer (>=1); default 6000; env Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS",
     "[axioms] axioms.extract_min_recurrence valid values: positive integer (>=1); default 3; env Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE",
     "[axioms] axioms.auto_extract_post_run valid values: true | false; default true; env Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN",
     "[axioms] axioms.enabled=false causes _load_axiom_matches to return [] immediately; envelope is byte-identical to pre-axiom result",
     "[axioms] axiom layer is lowest precedence: config and memory always win; axiom only fills a gap (config at default AND memory silent)",
-    "[experiment] experiment.persona_rotation valid values: true | false; default true; env Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
-    "[experiment] experiment.control_every_n valid values: positive integer; default 5; env Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
-    "[experiment] experiment.persona_rotation = false is a complete no-op: no draw events, no state files, no PERSONA_PREFIX, no persona_attempt_outcome",
     "[cost] cost.token_budget valid values: positive int or null; default null; env Z_HARNESS_COST_TOKEN_BUDGET",
     "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under NO_ASK=halt halts with rule_id: cost_budget_missing",
     "[models] models.* valid values: any string including empty string (empty = use provider default); validated against providers.json at resolve time NOT at config-load time; distinct from model_classes.*/model_routing.* native-agent routing",
@@ -348,28 +336,23 @@
     "[claim-lock] exit-2 from acquire is the normal post-crash recovery path (setsid-detached daemon survives SIGKILL, leaks until TTL); unattended exit-2 default-aborts unless Z_HARNESS_CLAIM_OVERRIDE=1",
     "[claim-lock] heartbeat exit-9 fires ONLY on confirmed ownership change; transient read error is heartbeat_error + exit-0 (NOT exit-9)",
     "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under Z_HARNESS_NO_ASK=halt halts with rule_id: cost_budget_missing for /z-plan and other hard gates",
-    "[Workflow Resolver] workflow.pre_run_cost_gate callsites include scripts/pre-run-cost-gate.sh, z-research, z-uplift, z-plan-split, and z-plan",
+    "[Workflow Resolver] workflow.pre_run_cost_gate callsites include scripts/pre-run-cost-gate.sh, z-research, z-plan-split, and z-plan",
     "[Overnight gate] Hard cost gates under Z_HARNESS_NO_ASK=halt auto_proceed only when range_high <= cost.token_budget; over-budget halts or returns unhandled_gate in policy mode.",
     "[Model precedence] Native-agent model precedence: exact model_routing.native_agents.<agent_id>, then model_routing.native_agents.default when non-empty, then the source agent frontmatter (agents/*.md); CLAUDE.md and .omp/config.yml never participate in this chain",
     "[Model precedence] External-provider role precedence: TOML [models.<role>] override, then .z-harness/providers.json role fallback/default_model"
   ],
   "gotchas": [
-    "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] — do NOT move it; existing configs already have it there",
+    "[brainstorm] brainstorm.personas lives in the [brainstorm] section by design; existing configs already have it there",
     "[brainstorm] brainstorm.wide_overflow_model='cheap-mixed' is accepted by the validator but acts as a no-op until the per-vendor cheap-model mechanism is verified",
-    "[personas] personas.consult_eval defaults OFF (false) — most expensive advisory arm; enabling it adds one extra subagent call at every convergent eval site",
-    "[personas] there is NO personas.debug knob — it was removed as dead; do not configure or document it",
-    "[personas] personas.implementer_retry is a no-op when experiment.persona_rotation=false regardless of its value",
-    "[personas] Global layer violations are soft (warn + default); repo/env layer violations exit 2 (hard fail)",
     "[axioms] axioms.kernel_budget_chars and axioms.extract_min_recurrence must be positive integers; string '0' fails validation (positive means >=1)",
     "[axioms] axiom-store.py is loaded via importlib (not normal import) because the filename has a hyphen; module load failures are silently tolerated",
-    "[experiment] Global layer experiment.* violations are soft; repo/env layer violations exit 2 (hard fail)",
     "[cost] cost.token_budget=null (default) causes check-no-ask to halt with cost_budget_missing under NO_ASK=halt policy; must be explicitly set for overnight cost-gate to auto-proceed",
     "[models] models.* cross-checked against providers.json at RESOLVE time not at config-load time — invalid model strings are caught only when the role is dispatched, not during config load",
     "[export] export.hosts must be non-empty; empty list is rejected; env transport is JSON-encoded array (e.g. '[\"cursor\",\"codex\"]'); default set now includes 'omp' (first-class native host) alongside cursor/codex/agy/pi",
     "[export] export.strategy='' (empty string, default) is the sentinel 'defer to driver default'; do not confuse with unset or missing",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2)",
     "[Deprecation] runtime.env_strict cannot be set via env — the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
-    "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
+    "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (e.g. /z-plan --quick); heavy flows always dispatch doc-fetcher regardless",
     "[Loader API] cmd_set exits 0 silently on success — no stdout output; do not parse stdout from cmd_set",
     "[Loader API] Valid event kinds for should-notify: approval, phase_end, error only. Passing run_complete exits 2; guard with || true if needed",
     "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys — callers must check for null values in JSON output",
@@ -444,11 +427,10 @@
         "callsites": [
           "scripts/pre-run-cost-gate.sh",
           "skills/z-research/SKILL.md",
-          "skills/z-uplift/SKILL.md",
           "skills/z-plan-split/SKILL.md",
           "skills/z-plan/SKILL.md"
         ],
-        "description": "Controls pre-run cost gates for z-research/z-uplift/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
+        "description": "Controls pre-run cost gates for z-research/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
       },
       "workflow.planning_mode": {
         "type": "string",
@@ -498,43 +480,6 @@
       }
     }
   },
-  "personas_section": {
-    "section": "[personas]",
-    "description": "Controls per-surface persona dispatch across all z-harness commands. Each boolean enables/disables persona injection at one dispatch site class. There is NO personas.debug knob — it was removed as dead code.",
-    "keys": {
-      "personas.critique_panel": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_CRITIQUE_PANEL",
-        "description": "Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct consultant personas are drawn and positionally prepended."
-      },
-      "personas.audit": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_AUDIT",
-        "description": "Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct audit_persona is drawn per dimension (correctness/perf/cleanliness/design)."
-      },
-      "personas.review_eval": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_PERSONAS_REVIEW_EVAL",
-        "description": "Enable the advisory persona reviewer at code-review gates — z-execute, z-fix, z-do (CONVERGENT). Advisory only — never changes pass/fail outcome."
-      },
-      "personas.consult_eval": {
-        "type": "bool",
-        "default": false,
-        "env": "Z_HARNESS_PERSONAS_CONSULT_EVAL",
-        "description": "Enable the advisory persona consult arm at convergent evaluation sites — z-audit bundled consult (CONVERGENT). DEFAULT OFF — most expensive and lowest-signal advisory arm."
-      },
-      "personas.implementer_retry": {
-        "type": "string",
-        "default": "same",
-        "valid_values": ["same", "new"],
-        "env": "Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
-        "description": "Controls implementer persona strategy on retry. same=reuse cycle-1 persona for all retries (lifecycle traceability). new=fresh draw excluding prior persona on each retry. No effect when experiment.persona_rotation=false."
-      }
-    }
-  },
   "axioms_section": {
     "section": "[axioms]",
     "description": "Configuration for the axiom extraction pipeline and axiom resolver layer. Axioms are the lowest-precedence signal in resolve-question.",
@@ -562,24 +507,6 @@
         "default": true,
         "env": "Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN",
         "description": "When true, runs axiom extraction pipeline automatically at end of each /z-* run."
-      }
-    }
-  },
-  "experiment_section": {
-    "section": "[experiment]",
-    "description": "Feature-flag knobs for the persona-rotation data-collection experiment. All keys are on by default.",
-    "keys": {
-      "experiment.persona_rotation": {
-        "type": "bool",
-        "default": true,
-        "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
-        "description": "Master on/off switch for persona rotation in z-execute, z-plan, z-debug. false = complete no-op."
-      },
-      "experiment.control_every_n": {
-        "type": "int",
-        "default": 5,
-        "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
-        "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor."
       }
     }
   },

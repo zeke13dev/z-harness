@@ -31,7 +31,7 @@ The CLI reads resolved configuration through `scripts/config.py inspect-all --js
 ## How it interacts with others
 
 - `config` — `setup.py` delegates all effective-state reads and persistent writes to `scripts/config.py`.
-- `providers-registry` — inspect/status/provider wizard sections read provider bindings and direct users to `/z-providers-discover` if roles are missing.
+- `providers-registry` — inspect/status/provider wizard sections read provider bindings and run the provider-discovery step (`scripts/discover-providers.py`) if roles are missing.
 - `docs` — docs initialization is detected by `docs/llm/INDEX.json`; setup suggests `/z-init-docs` but does not run it.
 - `axioms` — the axiom wizard configures axiom keys, installs the global kernel pointer, and offers `.gitignore` entries for generated kernel files.
 - `z_harness_cli/release_surface.py` (undocumented as its own concept as of this refresh) — the public `z-harness setup` command now depends on it for target enumeration (`setup_target_ids`, `explicit_setup_target_ids`), public-host filtering (`public_release_hosts`), and prod/dev-advanced surface resolution (`default_surface`); this is new since the last doc refresh and has no dedicated `docs/llm/*.json` entry yet.

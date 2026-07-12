@@ -219,10 +219,8 @@
     "fix_halt": "{reason, question_id, rule_id}",
     "audit_halt": "{reason, question_id, rule_id}",
     "plan_style_halt": "{reason, question_id, rule_id}",
-    "uplift_halt": "{reason, question_id, rule_id}",
     "debug_halt": "{reason, question_id, rule_id}",
     "light_halt": "{reason, question_id, rule_id}",
-    "map_halt": "{reason, question_id, rule_id}",
     "brainstorm_halt": "{reason, question_id, rule_id}",
     "plan_halt": "{reason, question_id, rule_id}",
     "review_halt": "{reason, question_id, rule_id}",
@@ -247,10 +245,9 @@
     "workflow.slug_confirm": [
       "skills/z-plan/SKILL.md",
       "skills/z-fix/SKILL.md",
-      "skills/z-uplift/SKILL.md",
       "skills/z-debug/SKILL.md",
       "skills/z-brainstorm/SKILL.md",
-      "skills/z-map/SKILL.md"
+      "skills/z-explore/SKILL.md"
     ],
     "workflow.audit_to_amend": [
       "skills/z-audit-plan/SKILL.md",

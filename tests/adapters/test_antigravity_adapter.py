@@ -11,7 +11,7 @@ Covers:
   * command-capability matrix — multi-agent commands degraded, single-agent native.
   * PTY exec is stubbed so tests run without a real terminal.
   * ANTIGRAVITY_PLUGIN_ROOT injected for ephemeral launches (D14).
-  * native skill export writes to .agent/personas/.
+  * export_payload() delegates to the antigravity runtime export driver.
 """
 
 from __future__ import annotations
@@ -233,85 +233,25 @@ class TestExportPayload(unittest.TestCase):
             result = self.adapter.export_payload(dest)
         self.assertEqual(result.fidelity, "high")
 
-    def test_export_warns_when_personas_missing(self):
-        """export_payload() returns a warning when personas/ dir does not exist.
-
-        With the T007 delegation, the runtime export (cmds/agents/skills) runs
-        first.  This test mocks both the runtime export driver AND patches
-        __file__ to a fake harness with no personas/ directory.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "out"
-            dest.mkdir()
-            fake_harness = Path(tmp) / "fake_harness"
-            fake_harness.mkdir()
-
-            import z_harness_cli.adapters.antigravity as _mod
-            from runtime.drivers._export_utils import ExportResult as RE
-
-            # Mock the runtime export driver to return an empty successful result
-            # so we can focus on the personas-missing warning path.
-            mock_export = MagicMock(
-                return_value=RE(dest=dest, files=[], fidelity="high", warnings=[])
-            )
-            mock_agy_export_mod = MagicMock()
-            mock_agy_export_mod.export = mock_export
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(fake_harness / "z_harness_cli" / "adapters" / "antigravity.py"),
-            ), patch.dict(
-                "sys.modules",
-                {
-                    "runtime.drivers.antigravity.export": mock_agy_export_mod,
-                },
-            ):
-                result = self.adapter.export_payload(dest)
-
-            self.assertEqual(result.fidelity, "high")
-            self.assertTrue(
-                any("personas/" in w for w in result.warnings),
-                f"Expected warning about missing personas/, got: {result.warnings}",
-            )
-
-    def test_export_native_skill_layout(self):
-        """Round-trip: persona exported to temp dir lands under .agent/personas/.
-
-        With the T007 delegation, both the runtime export driver (mocked to
-        return an empty result) and the persona exporter are called.  Files
-        from both stages are combined in the returned ExportResult.
-        """
+    def test_export_delegates_to_runtime_export(self):
+        """export_payload() delegates to the runtime export driver and returns its files."""
         with tempfile.TemporaryDirectory() as tmp_root:
             # Resolve to avoid macOS /private/tmp vs /tmp symlink issues.
             tmp_path = Path(tmp_root).resolve()
             dest = tmp_path / "dest"
             dest.mkdir()
-
-            def _fake_export_persona(persona_file, target_root):
-                out = Path(target_root).resolve() / ".agent" / "personas" / "test.md"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(f"# {MAGIC_MARKER}\nfake persona\n", encoding="utf-8")
-                return out.resolve()
-
             fake_harness = tmp_path / "harness"
-            personas_dir = fake_harness / "personas" / "builtin"
-            personas_dir.mkdir(parents=True)
-            persona_file = personas_dir / "default.md"
-            persona_file.write_text("---\nname: default\n---\nHello.\n", encoding="utf-8")
+            fake_harness.mkdir(parents=True)
 
             import z_harness_cli.adapters.antigravity as _mod
             from runtime.drivers._export_utils import ExportResult as RE
 
-            # Mock runtime export driver (cmds/agents/skills) to return empty result.
+            runtime_file = dest / ".agent" / "workflows" / "z-plan.md"
             mock_export = MagicMock(
-                return_value=RE(dest=dest, files=[], fidelity="high", warnings=[])
+                return_value=RE(dest=dest, files=[runtime_file], fidelity="high", warnings=[])
             )
             mock_agy_export_mod = MagicMock()
             mock_agy_export_mod.export = mock_export
-
-            mock_pe = MagicMock()
-            mock_pe.export_persona = _fake_export_persona
 
             with patch.object(
                 _mod,
@@ -321,7 +261,6 @@ class TestExportPayload(unittest.TestCase):
                 "sys.modules",
                 {
                     "runtime.drivers.antigravity.export": mock_agy_export_mod,
-                    "runtime.drivers.antigravity.persona_export": mock_pe,
                 },
             ):
                 adapter = AntigravityAdapter()
@@ -329,14 +268,7 @@ class TestExportPayload(unittest.TestCase):
 
             self.assertEqual(result.fidelity, "high")
             self.assertEqual(result.dest, dest)
-            # The exported persona file must land under .agent/personas/
-            persona_files = [
-                f for f in result.files
-                if ".agent" in str(f) and "personas" in str(f)
-            ]
-            self.assertEqual(len(persona_files), 1, f"Expected 1 persona file, got: {result.files}")
-            self.assertIn(".agent", str(persona_files[0]))
-            self.assertIn("personas", str(persona_files[0]))
+            self.assertIn(runtime_file, result.files)
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@
     "skills/z-report/SKILL.md",
     "skills/z-explain/SKILL.md",
     "skills/z-learn/SKILL.md",
-    "skills/z-where/SKILL.md"
+    "skills/z-stats/SKILL.md"
   ],
   "confidence": "high",
   "summary": "Read-only work-thread recovery for fuzzy or exact prior-work targets. /z-resume selects a bounded plan/run/worktree/branch/artifact/repo target, reports evidence-backed state and ambiguity, recommends safe continuations without executing them, and delegates --report to /z-report only after selection.",
@@ -143,7 +143,7 @@
   ],
   "adjacent_boundaries": [
     {
-      "command": "/z-where",
+      "command": "/z-stats",
       "use_for": "Active-plan registry status and path overlaps for currently registered runs.",
       "resume_boundary": "/z-resume consumes registry evidence but also recovers bounded historical artifacts, sessions, branches, reports, and cross-repo context."
     },

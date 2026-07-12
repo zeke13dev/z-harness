@@ -6,7 +6,7 @@ All events are appended to `<base>/metrics.jsonl` via `scripts/log-event.sh`,
 where `<base>` is the resolved artifact base — external by default
 (`$XDG_STATE_HOME/z-harness/<repo-id>/`, e.g. `~/.local/state/z-harness/...`);
 see the README for the `Z_HARNESS_EXTERNAL_DEFAULT` / `Z_HARNESS_BASE_DIR`
-overrides, or run `/z-where` to print it.
+overrides, or run `/z-stats` to print it.
 Standard fields on every event: `ts`, `run`, `kind` (and `slug` when set). The
 fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they
 appear only on subagent-bracket events, not on lifecycle or gate events.
@@ -28,13 +28,13 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `research_subcommand_complete` | `/z-research` when the current `z-explore` or `z-brainstorm` subcommand completes, is reused, or is skipped |
 | `phase_end` | `/z-explore --depth=deep` and `/z-research` phase checkpoints (fields: `phase`, `name`, `wall_ms`, `user_wait_ms`) |
 | `user_wait_start` / `user_wait_end` | `/z-explore --depth=deep` AskUser gates, including cost and collision decisions |
-| `research_temptation` / `map_temptation` | Legacy compatibility telemetry for older `/z-map` archives/docs only; current `/z-explore --depth=deep` telemetry uses `explore_run_*` plus `MAP.md` artifact fields |
+| `research_temptation` / `map_temptation` | Legacy compatibility telemetry for older terrain-mapping archives/docs only; current `/z-explore --depth=deep` telemetry uses `explore_run_*` plus `MAP.md` artifact fields |
 | `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
 | `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
 | `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate; `/z-explore --depth=deep` cost gate |
 | `explore_failure` | `/z-explore --depth=deep` or any command that dispatches an Explore subagent that does not return |
 
-`/z-map` is not a current telemetry producer. Mentions of `map_*` event names
+The legacy terrain-mapping command is not a current telemetry producer. Mentions of `map_*` event names
 above are legacy compatibility only; `MAP.md` is the deep terrain artifact written
 by `/z-explore --depth=deep`.
 

@@ -43,16 +43,13 @@ is the standard MCP stdio pattern.
 | `z_audit` | `/z-audit` | Read-only audit pipeline with cross-LLM review |
 | `z_audit_plan_style` | `/z-audit-plan-style` | Audit plan artifacts for code-quality issues before code is written |
 | `z_debug` | `/z-debug` | Investigate a bug with repro/hypothesis/evidence/isolation phases |
-| `z_do` | `/z-do` | Plan-less execution for trivial changes with harness discipline |
 | `z_brainstorm` | `/z-brainstorm` | 3-vendor parallel pre-plan ideation with anti-bias check |
 | `z_research` | `/z-research` | Deep research: deep terrain exploration (`/z-explore --depth=deep` in the command flow) + brainstorm + adversarial synthesis panel |
-| `z_map` | `/z-map` (legacy) | Registered legacy MCP tool for older clients; prefer direct `/z-explore --depth=deep` command guidance for new terrain work |
 | `z_plan_split` | `/z-plan-split` | Pre-emptive scope splitter — fan-out into N narrow cluster-planners |
 | `z_test` | `/z-test` | Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS) |
 | `z_amend` | `/z-amend` | Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state |
 | `z_init_docs` | `/z-init-docs` | Bootstrap a two-tier docs system (human Markdown + LLM JSON) |
 | `z_maintain_docs` | `/z-maintain-docs` | Refresh stale docs after source changes via per-concept updaters |
-| `z_uplift` | `/z-uplift` | Bulk codebase quality uplift — decompose + per-component audit |
 | `z_improve` | `/z-improve` | Post-run retrospective — analyze events.jsonl for friction signals |
 | `z_subagent_dispatch` | `/z-subagent-dispatch` | Dispatch a subagent via LLM CLI |
 
@@ -60,21 +57,17 @@ is the standard MCP stdio pattern.
 
 | Tool name | z-harness command | Description |
 |---|---|---|
-| `z_where` | `/z-where` | List active plans, current phase, branch, age, status |
-| `z_stats` | `/z-stats` | Progress + cost report for the current plan |
+| `z_stats` | `/z-stats` | Progress + cost report for the current plan; also lists active plans, phase, branch, age, status |
 | `z_suggest_memory` | `/z-suggest-memory` | Author a memory entry for docs/llm/ from debug post-mortems |
 | `z_axiom_scan` | `/z-axiom-scan` | Mine candidate axioms from interaction history |
 | `z_axiom_list` | `/z-axiom-list` | List axiom records from the store with filtering |
 | `z_axiom_approve` | `/z-axiom-approve` | Approve a candidate axiom (requires explicit confirmation) |
 | `z_axiom_reject` | `/z-axiom-reject` | Reject a candidate or approved axiom |
 | `z_axiom_edit` | `/z-axiom-edit` | Edit a field on a candidate or approved axiom record |
-| `z_personas` | `/z-personas` | Inspect the persona registry, role bindings, and persona files |
 | `z_handoff` | `/z-handoff` | Write a handoff.json artifact for session continuity |
-| `z_clear_checkpoint` | `/z-clear-checkpoint` | Write a watcher-readable clear checkpoint |
 | `z_update` | `/z-update` | Read-only version check; run CLI/plugin update explicitly to mutate installs |
 | `z_sharpen` | `/z-sharpen` | Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md |
 | `z_overnight` | `/z-overnight` | Overnight batch run of multiple /z-* commands |
-| `z_evaluate` | `/z-evaluate` | Evaluate a completed z-harness session for patterns worth preserving |
 | `z_context_budget` | `/z-context-budget` | Analyze context utilization and surface savings recommendations |
 | `z_doc_rationale` | `/z-doc-rationale` | Produce ADRs, design rationale, and tradeoff explanations |
 | `z_test_invariant` | `/z-test-invariant` | Legacy invariant-only test-case planner |

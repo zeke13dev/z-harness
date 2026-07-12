@@ -199,98 +199,13 @@ class TestExportPayload(unittest.TestCase):
     def setUp(self) -> None:
         self.adapter = CursorAdapter()
 
-    def test_export_warns_when_personas_missing(self):
-        """export_payload() returns a warning when personas/ dir does not exist."""
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "out"
-            dest.mkdir()
-            # Patch the harness root to a dir that has no personas/
-            fake_root = Path(tmp) / "harness"
-            fake_root.mkdir()
-            with patch("z_harness_cli.adapters.cursor.Path") as mock_path_cls:
-                # Only patch __file__ parent resolution; use real Path otherwise.
-                # Easier: patch the computed harness_root via the adapter's module.
-                pass  # We'll use a different approach below.
-
-        # Simpler: patch the runtime import to fail (no personas/ found scenario).
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "out"
-            dest.mkdir()
-            # Patch Path(__file__).parent.parent.parent to a dir with no personas/
-            fake_harness = Path(tmp) / "fake_harness"
-            fake_harness.mkdir()
-
-            import z_harness_cli.adapters.cursor as _mod
-            real_file = _mod.__file__
-
-            with patch.object(_mod, "__file__",
-                              str(fake_harness / "z_harness_cli" / "adapters" / "cursor.py")):
-                result = self.adapter.export_payload(dest)
-
-            # personas/ doesn't exist under fake harness root → warning
-            self.assertEqual(result.fidelity, "flattened")
-            self.assertEqual(result.files, [])
-            self.assertTrue(
-                any("personas/" in w for w in result.warnings),
-                f"Expected warning about missing personas/, got: {result.warnings}",
-            )
-
     def test_export_fidelity_is_flattened(self):
-        """export_payload() always reports fidelity=flattened regardless of outcome."""
+        """export_payload() always reports fidelity=flattened."""
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "out"
             dest.mkdir()
             result = self.adapter.export_payload(dest)
         self.assertEqual(result.fidelity, "flattened")
-
-    def test_export_to_temp_dir_with_mock_persona(self):
-        """Round-trip: persona exported to temp dir lands under .cursor/personas/."""
-        with tempfile.TemporaryDirectory() as tmp_root:
-            dest = Path(tmp_root) / "dest"
-            dest.mkdir()
-
-            # Stub export_persona to write a dummy file under dest.
-            def _fake_export_persona(persona_file, target_root):
-                out = Path(target_root) / ".cursor" / "personas" / "test.mdc"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(f"# {MAGIC_MARKER}\nfake persona\n", encoding="utf-8")
-                return out.resolve()
-
-            # Build a fake harness with a personas/ dir containing one persona.
-            fake_harness = Path(tmp_root) / "harness"
-            personas_dir = fake_harness / "personas"
-            personas_dir.mkdir(parents=True)
-            persona_file = personas_dir / "default.md"
-            persona_file.write_text("---\nname: default\n---\nHello.\n", encoding="utf-8")
-
-            import z_harness_cli.adapters.cursor as _mod
-
-            with patch.object(
-                _mod,
-                "__file__",
-                str(fake_harness / "z_harness_cli" / "adapters" / "cursor.py"),
-            ), patch(
-                "z_harness_cli.adapters.cursor.CursorAdapter.export_payload",
-                wraps=self.adapter.export_payload,
-            ):
-                # Directly patch the runtime import inside the method.
-                with patch.dict(
-                    "sys.modules",
-                    {
-                        "runtime": MagicMock(),
-                        "runtime.drivers": MagicMock(),
-                        "runtime.drivers.cursor": MagicMock(),
-                        "runtime.drivers.cursor.persona_export": MagicMock(
-                            export_persona=_fake_export_persona
-                        ),
-                    },
-                ):
-                    # Re-create adapter to pick up patched __file__.
-                    adapter = CursorAdapter()
-                    result = adapter.export_payload(dest)
-
-            self.assertEqual(result.fidelity, "flattened")
-            self.assertEqual(result.dest, dest)
 
 
 # ---------------------------------------------------------------------------

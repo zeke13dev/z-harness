@@ -59,13 +59,16 @@
       "finalize": "Phase 4",
       "primary_artifact": "BRAINSTORM.md"
     },
-    "/z-do": {
-      "profile": "lite",
-      "init_after": "do_run_start",
-      "finalize": "Phase 7",
-      "primary_artifact": "approach.md",
+    "/z-amend": {
+      "profile": "full",
+      "init_after": "amend_run_start",
+      "finalize": "Phase 8",
+      "primary_artifact": "archive/$RUN/amendment.md",
       "fallbacks": [
-        "premise.md"
+        "INTENT.md",
+        "SPEC.md",
+        "PLAN.md",
+        "FIX.md"
       ]
     }
   }

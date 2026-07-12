@@ -36,7 +36,7 @@ Orchestrator     →  deletes handoff.json (consumed)
 7. The orchestrator spawns a new agent session: loads `context_files` in order (starting with `SESSION_CONTEXT.md` if present), passes `next_step` as the initial prompt
 8. The orchestrator deletes `handoff.json` (consumed)
 
-`scripts/write-handoff.sh` is the automated producer used by `/z-execute`'s compaction breakpoint (gated by `workflow.hermes_enabled=true`) and by `/z-attend` at every yield boundary. `scripts/write-clear-checkpoint.sh` (and its `/z-clear-checkpoint` wrapper) is a shared checkpoint hook that wraps this same producer — it preserves the `handoff.json` schema and puts workflow-specific checkpoint metadata in a separate `clear_checkpoint_written` event/state file rather than in the schema-constrained handoff token.
+`scripts/write-handoff.sh` is the automated producer used by `/z-execute`'s compaction breakpoint (gated by `workflow.hermes_enabled=true`) and by `/z-attend` at every yield boundary. `scripts/write-clear-checkpoint.sh` is a shared checkpoint hook that wraps this same producer — it preserves the `handoff.json` schema and puts workflow-specific checkpoint metadata in a separate `clear_checkpoint_written` event/state file rather than in the schema-constrained handoff token.
 
 ## Relationship to existing artifacts
 
