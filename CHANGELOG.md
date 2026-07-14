@@ -29,6 +29,15 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-12
+
+- _(auto)_ Skill-corpus overhaul phase 1 — delete 10 skills, excise personas, rewrite 6 skills on SKILL-STYLE.md _(skills)_
+
+## 2026-07-11
+
+- _(auto)_ Claude ready-detector misses composer under statusline footer _(watchdog)_
+- _(auto)_ Fanout origin deadlocked in needs_input state _(watchdog)_
+
 ## 2026-07-10
 
 - _(auto)_ Require worktrees for agent edits
