@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Summarise documented Codex rollout v1 JSONL without exposing its contents.
+"""Summarise supported Codex rollout JSONL without exposing its contents.
 
 This is deliberately a read-only, allowlist-only boundary.  It accepts
 ``--source live:path`` and ``--source archive:path`` inputs, but neither input
 paths nor unrecognised record values can reach stdout.  The rollout format is
-not a public API, so rows outside the small v1 envelope are reported only by a
-stable quality flag.
+not a public API, so rows outside the small flat-v1 and current
+``timestamp/type/payload`` envelopes are reported only by a stable quality flag.
 """
 
 from __future__ import annotations
@@ -68,6 +68,8 @@ def read_rows(sources: list[tuple[str, Path]]) -> tuple[list[dict[str, Any]], se
     rows: list[dict[str, Any]] = []
     flags: set[str] = set()
     for source, path in sources:
+        current_session: str | None = None
+        turn_starts: dict[tuple[str, str], int] = {}
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError):
@@ -82,25 +84,87 @@ def read_rows(sources: list[tuple[str, Path]]) -> tuple[list[dict[str, Any]], se
             if not isinstance(value, dict):
                 flags.add("malformed_row")
                 continue
-            if value.get("schema_version", VERSION) != VERSION:
-                flags.add("unknown_schema")
+            if "event" in value or "schema_version" in value:
+                if value.get("schema_version", VERSION) != VERSION:
+                    flags.add("unknown_schema")
+                    continue
+                event = value.get("event")
+                allowed = BASE_FIELDS | EVENT_FIELDS.get(event, set())
+                if event not in EVENT_FIELDS or set(value) - allowed:
+                    flags.add("unknown_schema")
+                    continue
+                session_id = value.get("session_id")
+                stamp = timestamp_ms(value.get("timestamp"))
+                if not isinstance(session_id, str) or not session_id or stamp is None:
+                    flags.add("malformed_row")
+                    continue
+                row = {"source": source, "session_id": session_id, "event": event, "timestamp": stamp}
+                for field in EVENT_FIELDS[event]:
+                    if field in value:
+                        row[field] = value[field]
+                rows.append(row)
                 continue
-            event = value.get("event")
-            allowed = BASE_FIELDS | EVENT_FIELDS.get(event, set())
-            if event not in EVENT_FIELDS or set(value) - allowed:
-                flags.add("unknown_schema")
-                continue
-            session_id = value.get("session_id")
+
+            # Current Codex rollouts use an intentionally private, evolving
+            # timestamp/type/payload envelope. Normalize only metric-bearing
+            # variants and never retain payloads or unrecognized values.
+            outer_type = value.get("type")
+            payload = value.get("payload")
             stamp = timestamp_ms(value.get("timestamp"))
-            if not isinstance(session_id, str) or not session_id or stamp is None:
-                flags.add("malformed_row")
+            if not isinstance(outer_type, str) or not isinstance(payload, dict) or stamp is None:
+                flags.add("unknown_schema")
                 continue
-            # Keep only recognised values, so unknown values are never retained.
-            row = {"source": source, "session_id": session_id, "event": event, "timestamp": stamp}
-            for field in EVENT_FIELDS[event]:
-                if field in value:
-                    row[field] = value[field]
-            rows.append(row)
+            if outer_type == "session_meta":
+                session_id = payload.get("id") or payload.get("session_id")
+                if not isinstance(session_id, str) or not session_id:
+                    flags.add("malformed_row")
+                    current_session = None
+                else:
+                    # Parent metadata is intentionally not a usage baseline:
+                    # each fork accounts only its own monotonic counter.
+                    current_session = session_id
+                continue
+            if current_session is None:
+                flags.add("missing_session_meta")
+                continue
+
+            def append(event: str, event_stamp: int, **fields: Any) -> None:
+                rows.append({
+                    "source": source,
+                    "session_id": current_session,
+                    "event": event,
+                    "timestamp": event_stamp,
+                    **fields,
+                })
+
+            payload_type = payload.get("type")
+            if outer_type == "event_msg" and payload_type == "token_count":
+                info = payload.get("info")
+                usage = info.get("total_token_usage") if isinstance(info, dict) else None
+                total = usage.get("total_tokens") if isinstance(usage, dict) else None
+                append("usage", stamp, total_tokens=total)
+            elif outer_type == "event_msg" and payload_type == "task_started":
+                turn_id = payload.get("turn_id")
+                started = timestamp_ms(payload.get("started_at")) or stamp
+                append("turn_start", started, turn_id=turn_id)
+                if isinstance(turn_id, str) and turn_id:
+                    turn_starts[(current_session, turn_id)] = started
+            elif outer_type == "event_msg" and payload_type in {"task_complete", "turn_aborted"}:
+                turn_id = payload.get("turn_id")
+                ended = timestamp_ms(payload.get("completed_at")) or stamp
+                append("turn_end", ended, turn_id=turn_id)
+                ttft = payload.get("time_to_first_token_ms")
+                started = turn_starts.get((current_session, turn_id)) if isinstance(turn_id, str) else None
+                if isinstance(ttft, (int, float)) and not isinstance(ttft, bool) and started is not None:
+                    append("first_token", started + int(ttft), turn_id=turn_id)
+            elif outer_type == "response_item" and payload_type in {"function_call", "custom_tool_call"}:
+                append("tool_start", stamp, tool_call_id=payload.get("call_id"))
+            elif outer_type == "response_item" and payload_type in {"function_call_output", "custom_tool_call_output"}:
+                append("tool_end", stamp, tool_call_id=payload.get("call_id"))
+            elif outer_type == "turn_context":
+                continue
+            else:
+                flags.add("unknown_schema")
     return rows, flags
 
 

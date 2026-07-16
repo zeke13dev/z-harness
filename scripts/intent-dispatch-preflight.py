@@ -20,6 +20,7 @@ from typing import Any
 
 
 TASK_ID = re.compile(r"T\d{3}\Z")
+WORK_NODE_ID = re.compile(r"[TW]\d{3}\Z")
 COMPLEXITY = {"low", "medium", "high", "retry"}
 CONTEXT_KEYS = (
     "frozen_intent",
@@ -120,11 +121,118 @@ def validate_context(context: Any, errors: list[dict[str, str]]) -> None:
             error(errors, "UNREADABLE_INTENT_CONTEXT", f"intent_context.{key} must be a readable file", field=key)
 
 
+def validate_generated_artifact(document: dict[str, Any]) -> dict[str, Any]:
+    """Validate hard exclusions over the complete generated TASKS/graph artifact."""
+    errors: list[dict[str, str]] = []
+    checked_task_ids: list[str] = []
+    checked_graph_node_ids: list[str] = []
+
+    exclusions = document.get("hard_exclusions")
+    if not isinstance(exclusions, list) or not all(
+        isinstance(value, str) and normal_path(value.rstrip("/")) for value in exclusions
+    ):
+        error(errors, "INVALID_HARD_EXCLUSIONS", "hard_exclusions must be repo-relative path prefixes")
+        exclusions = []
+    normalized_exclusions = [value.rstrip("/") for value in exclusions]
+
+    def validate_entries(value: Any, source: str) -> list[str]:
+        checked: list[str] = []
+        if not isinstance(value, list):
+            error(errors, f"INVALID_{source.upper()}", f"{source} must be a list")
+            return checked
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, dict):
+                error(
+                    errors,
+                    "INVALID_ARTIFACT_ENTRY",
+                    f"each {source} entry must be an object",
+                    source=source,
+                )
+                continue
+            node_id = entry.get("id")
+            id_pattern = TASK_ID if source == "tasks" else WORK_NODE_ID
+            if not isinstance(node_id, str) or not id_pattern.fullmatch(node_id):
+                error(
+                    errors,
+                    "INVALID_ARTIFACT_ID",
+                    f"{source} id has an invalid shape",
+                    source=source,
+                    id=str(node_id),
+                )
+                continue
+            if node_id in seen:
+                error(
+                    errors,
+                    "DUPLICATE_ARTIFACT_ID",
+                    f"{source} id appears more than once",
+                    source=source,
+                    id=node_id,
+                )
+                continue
+            seen.add(node_id)
+            checked.append(node_id)
+            paths = entry.get("paths", entry.get("files", []))
+            if not isinstance(paths, list):
+                error(errors, "UNUSABLE_PATHS", "artifact paths must be a list", source=source, id=node_id)
+                continue
+            if source == "tasks" and not paths:
+                error(errors, "UNUSABLE_PATHS", "generated task must declare paths", source=source, id=node_id)
+            normalized_paths = [normal_path(path) for path in paths]
+            if any(path is None for path in normalized_paths):
+                error(
+                    errors,
+                    "UNUSABLE_PATHS",
+                    "artifact paths must be precise repo-relative file paths",
+                    source=source,
+                    id=node_id,
+                )
+            for path in (path for path in normalized_paths if path is not None):
+                if any(path == prefix or path.startswith(prefix + "/") for prefix in normalized_exclusions):
+                    error(
+                        errors,
+                        "HARD_EXCLUSION",
+                        "generated artifact path is hard-excluded",
+                        source=source,
+                        id=node_id,
+                        path=path,
+                    )
+        return checked
+
+    checked_task_ids = validate_entries(document.get("tasks"), "tasks")
+    graph = document.get("graph")
+    if not isinstance(graph, dict):
+        error(errors, "INVALID_GRAPH", "graph must be an object")
+        graph_nodes: Any = []
+    else:
+        graph_nodes = graph.get("nodes")
+    checked_graph_node_ids = validate_entries(graph_nodes, "graph_nodes")
+
+    errors.sort(
+        key=lambda item: (
+            item["code"],
+            item.get("source", ""),
+            item.get("id", ""),
+            item.get("path", ""),
+            item["message"],
+        )
+    )
+    return {
+        "ok": not errors,
+        "validation_scope": "generated_artifact",
+        "errors": errors,
+        "checked_task_ids": sorted(checked_task_ids),
+        "checked_graph_node_ids": sorted(checked_graph_node_ids),
+    }
+
+
 def preflight(document: Any) -> dict[str, Any]:
     errors: list[dict[str, str]] = []
     serial_task_ids: list[str] = []
     if not isinstance(document, dict):
         return {"ok": False, "errors": [{"code": "INVALID_INPUT", "message": "input must be an object"}], "serial_only": False, "serial_task_ids": [], "deferred_followups": deferred_followups()}
+    if document.get("validation_scope") == "generated_artifact":
+        return validate_generated_artifact(document)
 
     run_id = document.get("run_id")
     if not isinstance(run_id, str) or not run_id.strip():
