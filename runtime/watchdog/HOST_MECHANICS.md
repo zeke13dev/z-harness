@@ -24,6 +24,119 @@ are explicitly scoped as single-session observations and are corroborated
 durably by the per-chat file-multiplicity evidence (`[C-2]`, `[O-3]`) rather
 than asserted as re-runnable fact.
 
+## Lifecycle notification delivery contract
+
+Lifecycle state is committed independently of Discord delivery. The daemon may
+attempt a notification after a daemon, intervention, rollover, child-outcome,
+join, or coordinator-wake transition, but a disabled transport, timeout,
+launch error, or non-zero transport exit never blocks or reverses that
+transition. `runtime/watchdog/notify.py` returns an observable delivery status
+(`delivered`, `disabled`, or `failed`) instead of raising.
+
+Every lifecycle notification has a deterministic
+`watchdog-notify:v1:<sha256>` event ID derived from its event family and the
+caller's stable logical identity fields. Human-facing title/body text is not
+part of the ID, so rerendering or retrying the same logical event retains its
+identity. Callers must use durable IDs (for example daemon generation, outcome
+ID, join ID, rollover ID, or wake outbox ID), not timestamps or attempt counts.
+
+The delivery classes are intentionally distinct:
+
+- `daemon`, `intervention`, `rollover`, and `join` are
+  `best_effort_at_most_once`. A failed or disabled attempt remains observable,
+  but the watchdog does not retry it and lifecycle processing continues.
+- `child_outcome` and `coordinator_wake` are `retryable`. Each attempt reuses
+  the same stable event
+  ID. This describes notification delivery only: durable wake outbox delivery
+  is at least once, while generation-fenced coordinator acknowledgement and
+  deduplication provide exactly-once logical handling. The completed wake
+  outbox record retains notification status and attempt count;
+  failed, disabled, or crash-interrupted (`pending`) attempts are retried by a
+  later daemon poll under that same action/event ID.
+
+Action-backed delivery attempts also emit `lifecycle_notification_delivery`
+records to `signals.jsonl`. Intervention markers durably claim their single
+best-effort attempt before transport invocation, so replaying an already
+completed action marker cannot redeliver it. A crash after that claim may lose
+the best-effort notification, which is the deliberate at-most-once tradeoff;
+it never rolls back the completed action.
+
+The existing shell transport exits zero both after a successful post and when
+Discord configuration is absent. The lifecycle primitive therefore resolves
+`notify.discord_webhook_url` before invoking the default shell transport; an
+empty value yields the observable `disabled` result without invoking it.
+
+Current production hooks use authoritative durable boundaries: daemon
+start/stop after lock/heartbeat confirmation, intervention after a completed
+action marker, child outcome after its authorized terminal commit, and join /
+coordinator wake after a sealed epoch atomically creates the stable join and
+outbox records, and coordinator rollover after its second fresh locked commit.
+Rollover writes canonical atomic `handoff.json` between its prepared and
+committed stages, retains one logical coordinator/session, and moves only the
+active host target to a strictly newer incarnation. Its stable `rollover_id`
+keys one fail-open, at-most-once event; a stale writer or target is rejected
+before authoritative state changes. Legacy handoff transitions and other
+provisional pre-commit paths must not emit lifecycle events.
+
+## Sealed fanout join protocol
+
+Fanout allocation admits deterministic child IDs into one locked, open epoch
+identified by `group:v1:<sha256(coordinator_session_id)>`. `seal-group`
+explicitly closes epoch 1; exact replay is idempotent, while a new child
+admission after sealing fails without persisting the child. An unsealed group
+never joins, even if all current children are terminal.
+
+Authorized terminal outcomes evaluate sealed readiness under the same registry
+flock. A provisional lease-reaper outcome cannot materialize the join before
+its resolution deadline; an authorized explicit report can replace it during
+that window. The final outcome creates exactly one content-derived `join:v1:`
+record and one `wake:v1:` outbox record containing the terminal summary,
+coordinator target, persisted monotonic generation, and deterministic
+`watchdog_ack` metadata (`outbox_id` plus `coordinator_generation`). Failed
+children are terminal and therefore do not deadlock the join.
+
+The daemon retries the stable outbox payload on every poll/restart until
+`ack-join` succeeds. Delivery is deliberately at least once and may repeat;
+the acknowledgement must present the outbox's coordinator generation, and an
+exact acknowledgement replay returns success without handling the join twice.
+A stale generation is rejected, leaving the outbox durable for the current
+coordinator authority. A prepared marker means the host effect is ambiguous;
+every later attempt for that coordinator generation pauses until the ambiguity
+is resolved instead of creating a new marker.
+
+Standing-daemon readiness writes a fresh `wd-<uuid>` incarnation ID into the
+heartbeat file immediately while holding the stable daemon flock, before
+startup reconciliation or polling, and reuses it for every heartbeat from that
+process. Publication failure releases the flock. Managed `ensure`, direct
+standing `run`, and `stop` share a lifecycle-operation sidecar; the managed
+child explicitly delegates that sidecar to its waiting parent to avoid
+self-deadlock. `run --once` performs work without publishing standing readiness.
+Start and stop event
+keys use that persisted incarnation plus the transition name, rather than the
+PID, so PID reuse cannot alias distinct daemon lifecycles and the paired events
+remain correlatable.
+
+The daemon flock pathname is never removed during release. Keeping one inode
+at the stable path prevents an unlock-then-unlink race in which old and new
+openers could each hold a flock on a different inode. A serialized `stop`
+captures the current PID and incarnation, waits for that captured ownership to
+release, and makes at most one best-effort notification attempt before releasing
+the operation sidecar. Thus a concurrent stop becomes a no-op and a replacement
+cannot publish readiness during the captured stop transition. This is not a
+crash-recoverable exact-once notification store: a crash can lose the attempt.
+
+The watchdog state directory and the active daemon/lifecycle-operation lock
+pathnames are trusted cooperative infrastructure. Deliberate unlink or
+replacement of an active lockfile by another same-user process is unsupported;
+that actor can also rewrite watchdog state or executable code and is outside
+this concurrency contract. Ordinary invocation inputs remain untrusted: public
+CLI flags, environment values, and substituted numeric FDs cannot bypass lock
+ownership validation. Once a managed child accepts its parent's inherited
+lifecycle-operation FD, it immediately marks that descriptor non-inheritable
+before configuration resolution, lifecycle acquisition, reconciliation, or
+polling. Failure to apply that descriptor-local boundary closes the accepted FD
+and hard-fails startup rather than falling back to sidecar acquisition.
+
 ## Shared actuation mechanics (host-agnostic; already in-repo)
 
 Both hosts are driven the same way as `claude` in the existing so-MCP

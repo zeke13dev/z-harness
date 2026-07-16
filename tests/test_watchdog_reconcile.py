@@ -249,6 +249,22 @@ def test_live_target_is_left_untouched() -> None:
     assert alert_fn.calls == []
 
 
+def test_startup_reconcile_defers_children_to_durable_lease_reaper() -> None:
+    child = registry.new_session_record(
+        "child", "/plans/child", "claude", "zw-child", "",
+        parent_id="ws-parent", now=NOW,
+    )
+    alert_fn = _RecordingAlertFn()
+    result = reconcile.startup_reconcile(
+        {child["session_id"]: child},
+        has_session=_FakeHasSession(dead={"zw-child"}),
+        alert_fn=alert_fn,
+        now=NOW,
+    )
+    assert result[child["session_id"]]["state"] == "registered"
+    assert alert_fn.calls == []
+
+
 def test_fanout_child_with_empty_transcript_path_is_handled_normally() -> None:
     """T013 note: fanout children are registered with transcript_path=""; this
     module must not assume a non-empty transcript_path anywhere."""
@@ -270,6 +286,51 @@ def test_fanout_child_with_empty_transcript_path_is_handled_normally() -> None:
 
     assert result[rec["session_id"]]["state"] == "orphaned"
     assert len(alert_fn.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "hangs, expected_state", [(frozenset(), "failed"), (frozenset({"zw-lease"}), "orphaned")]
+)
+def test_persisted_child_reaping_waits_for_grace_and_notifies_after_commit(
+    tmp_path, hangs, expected_state,
+) -> None:
+    path = tmp_path / "sessions.json"
+    parent = _record(state="awaiting_children", tmux_target="zw-parent")
+    child = registry.new_session_record(
+        "child", "/plans/child", "claude", "zw-lease", "",
+        parent_id=parent["session_id"], child_lease_timeout_s=3600,
+        child_grace_s=3600, child_resolution_window_s=0,
+        now="2026-07-10T10:00:00Z",
+    )
+    child = registry.transition(child, "running", now="2026-07-10T10:00:01Z")
+    parent["children"] = [child["session_id"]]
+    records = {parent["session_id"]: parent, child["session_id"]: child}
+    registry.write_registry(path, records)
+    seen = []
+
+    def delivered(event):
+        persisted = registry.read_registry(path)
+        assert persisted[child["session_id"]]["state"] == expected_state
+        seen.append(event)
+        return notify.DeliveryResult("failed", event.event_id, event.delivery_class)
+
+    early = reconcile.reconcile_children(
+        parent, records, registry_path=path,
+        has_session=_FakeHasSession(dead={"zw-lease"}, hangs=hangs),
+        now="2026-07-10T11:00:00Z",
+        lifecycle_notify=delivered,
+    )
+    assert early["records"][child["session_id"]]["state"] == "running"
+    assert seen == []
+
+    late = reconcile.reconcile_children(
+        parent, records, registry_path=path,
+        has_session=_FakeHasSession(dead={"zw-lease"}, hangs=hangs),
+        now="2026-07-10T12:00:01Z",
+        lifecycle_notify=delivered,
+    )
+    assert late["records"][child["session_id"]]["state"] == expected_state
+    assert len(seen) == 1 and seen[0].kind == "child_outcome"
 
 
 if __name__ == "__main__":

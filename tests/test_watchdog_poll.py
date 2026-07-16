@@ -15,9 +15,8 @@ by their sibling test files), and every artifact pinned under ``tmp_path``
    nudge_max`` marker persisted so the escalation is exactly-once across polls;
 4. needs_input first-alert then digest-deduped skip on an unchanged prompt, with
    the digest persisted to a sidecar that survives a simulated daemon restart;
-5. a fanout origin's all-terminal-children reconciliation nudge plus a
-   failed-child Discord alert, fired exactly once even when a not-ready pane
-   forces a retry.
+5. a fanout origin advances child leases without bypassing sealed-group join
+   readiness or creating a coordinator wake.
 
 Tests assert on the observable contract — persisted ``sessions.json`` state,
 the exact actuation calls, the sidecar file, and signal-log entries — not on
@@ -30,7 +29,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from runtime.watchdog import poll, registry
+import pytest
+
+from runtime.watchdog import notify, poll, registry, tmux_actuator
 from runtime.watchdog.adapters.base import ContextReading, HostAdapter
 from runtime.watchdog.adapters.claude import ClaudeAdapter
 
@@ -143,7 +144,7 @@ def _read_registry(tmp_path: Path) -> dict[str, dict]:
 
 # ── (1) threshold-crossing handoff + actuation ──────────────────────────────
 
-def test_threshold_crossing_handoff_actuates(tmp_path):
+def test_threshold_crossing_handoff_actuates(tmp_path, monkeypatch):
     """pct_used >= threshold + injection_ready + running drives the full
     handoff choreography to ``resumed`` and submits handoff then clear."""
     rec = _record(tmp_path)
@@ -153,12 +154,13 @@ def test_threshold_crossing_handoff_actuates(tmp_path):
         reading=ContextReading(new_offset=10, used_tokens=180000, window_tokens=200000, pct_used=90.0),
     )
     submit = RecordingSubmit()
+    monkeypatch.setattr(tmux_actuator, "submit_text", submit)
 
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text="ready >",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
         signals_max_mb=50, now=_NOW,
-        submit_fn=submit, judge_dispatch=_succeeding_judge,
+        judge_dispatch=_succeeding_judge,
         **_paths(tmp_path),
     )
 
@@ -188,7 +190,7 @@ def test_below_threshold_no_handoff(tmp_path):
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text="ready >",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=submit, judge_dispatch=_succeeding_judge,
+        now=_NOW, judge_dispatch=_succeeding_judge,
         **_paths(tmp_path),
     )
 
@@ -210,7 +212,7 @@ def test_handoff_skipped_when_pane_not_injection_ready(tmp_path):
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text="working...",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=submit, judge_dispatch=_succeeding_judge,
+        now=_NOW, judge_dispatch=_succeeding_judge,
         **_paths(tmp_path),
     )
 
@@ -218,9 +220,68 @@ def test_handoff_skipped_when_pane_not_injection_ready(tmp_path):
     assert submit.calls == []
 
 
+def test_crashed_handoff_dispatch_never_strands_resumed_state(
+    tmp_path, monkeypatch,
+):
+    rec = _record(tmp_path)
+    sessions = {rec["session_id"]: rec}
+    registry.write_registry(tmp_path / "sessions.json", sessions)
+    adapter = StubAdapter(
+        reading=ContextReading(
+            new_offset=10, used_tokens=180000,
+            window_tokens=200000, pct_used=90.0,
+        ),
+    )
+
+    def _ambiguous_submit(target, text):
+        raise tmux_actuator.TmuxTimeoutError("ambiguous host outcome")
+
+    monkeypatch.setattr(tmux_actuator, "submit_text", _ambiguous_submit)
+    with pytest.raises(tmux_actuator.TmuxTimeoutError):
+        poll.poll_session(
+            rec, sessions, adapter=adapter, pane_text="ready >",
+            threshold_pct=80, window_tokens=200000,
+            stuck_after_s=600, nudge_max=2, now=_NOW,
+            judge_dispatch=_succeeding_judge, **_paths(tmp_path),
+        )
+
+    persisted = _read_registry(tmp_path)
+    assert persisted[rec["session_id"]]["state"] == "handoff_written"
+
+    recorder = RecordingSubmit()
+    monkeypatch.setattr(tmux_actuator, "submit_text", recorder)
+    resumed_attempt = poll.poll_session(
+        persisted[rec["session_id"]], persisted,
+        adapter=StubAdapter(), pane_text="ready >",
+        threshold_pct=80, window_tokens=200000,
+        stuck_after_s=600, nudge_max=2, now=_NOW,
+        judge_dispatch=_succeeding_judge, **_paths(tmp_path),
+    )
+    assert resumed_attempt["action"] == "paused"
+    assert resumed_attempt["record"]["state"] == "handoff_written"
+    assert recorder.calls == []
+
+
+def test_handoff_requested_with_ambiguous_context_pauses_without_fallthrough(
+    tmp_path,
+):
+    rec = registry.transition(
+        _record(tmp_path), "handoff_requested", now="2026-07-10T11:59:00Z",
+    )
+    registry.write_registry(tmp_path / "sessions.json", {rec["session_id"]: rec})
+    result = poll.poll_session(
+        rec, {rec["session_id"]: rec}, adapter=StubAdapter(), pane_text="ready >",
+        threshold_pct=80, window_tokens=200000,
+        stuck_after_s=600, nudge_max=2, now=_NOW,
+        judge_dispatch=_succeeding_judge, **_paths(tmp_path),
+    )
+    assert result["action"] == "paused"
+    assert result["record"]["state"] == "handoff_requested"
+
+
 # ── (2) judge-unavailable degrade-and-still-trigger ─────────────────────────
 
-def test_judge_degraded_still_triggers_and_logs(tmp_path):
+def test_judge_degraded_still_triggers_and_logs(tmp_path, monkeypatch):
     """With the judge unavailable, the handoff sequence still completes via the
     mechanical fallback and a ``judge_degraded`` signal is logged."""
     rec = _record(tmp_path)
@@ -230,11 +291,12 @@ def test_judge_degraded_still_triggers_and_logs(tmp_path):
         reading=ContextReading(new_offset=10, used_tokens=180000, window_tokens=200000, pct_used=95.0),
     )
     submit = RecordingSubmit()
+    monkeypatch.setattr(tmux_actuator, "submit_text", submit)
 
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text="ready >",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        signals_max_mb=50, now=_NOW, submit_fn=submit, judge_dispatch=_degraded_judge,
+        signals_max_mb=50, now=_NOW, judge_dispatch=_degraded_judge,
         **_paths(tmp_path),
     )
 
@@ -250,23 +312,26 @@ def test_judge_degraded_still_triggers_and_logs(tmp_path):
 
 # ── (3) stuck nudge then nudge-max Discord escalation (marker persisted) ─────
 
-def test_stuck_nudge_then_escalation_exactly_once(tmp_path):
+def test_stuck_nudge_then_escalation_exactly_once(tmp_path, monkeypatch):
     """Idle session is nudged up to nudge_max, then escalates to exactly one
     Discord alert; the nudge_count>nudge_max marker persists so later polls
     skip instead of re-alerting."""
     nudge_max = 2
     rec = _record(tmp_path)  # last_seen far in the past -> idle
     sessions = {rec["session_id"]: rec}
+    registry.write_registry(tmp_path / "sessions.json", sessions)
     adapter = StubAdapter()  # default reading: no new bytes -> last_seen stays
     submit = RecordingSubmit()
     alert = RecordingAlert()
+    monkeypatch.setattr(tmux_actuator, "submit_text", submit)
+    monkeypatch.setattr(notify, "send_discord_alert", alert)
 
     def _poll_once(record):
         return poll.poll_session(
             record, {record["session_id"]: record}, adapter=adapter,
             pane_text="idle >", threshold_pct=80, window_tokens=200000,
             stuck_after_s=600, nudge_max=nudge_max, now=_NOW,
-            submit_fn=submit, stuck_alert_fn=alert, **_paths(tmp_path),
+            **_paths(tmp_path),
         )
 
     # Two nudges (nudge_count 0 -> 1 -> 2).
@@ -288,6 +353,67 @@ def test_stuck_nudge_then_escalation_exactly_once(tmp_path):
     assert len(submit.calls) == 2  # only the two plain-text nudges, never the alert
 
 
+def test_failed_nudges_consume_attempts_and_escalate_at_cap(tmp_path, monkeypatch):
+    rec = _record(tmp_path)
+    registry.write_registry(tmp_path / "sessions.json", {rec["session_id"]: rec})
+    calls: list[tuple[str, str]] = []
+
+    def _definite_failure(target, text):
+        calls.append((target, text))
+        return False
+
+    monkeypatch.setattr(tmux_actuator, "submit_text", _definite_failure)
+    current = rec
+    expected = (("nudge_failed", 1), ("escalated", 1), ("nudge_failed", 2))
+    for expected_action, expected_count in expected:
+        result = poll.poll_session(
+            current, {current["session_id"]: current},
+            adapter=StubAdapter(), pane_text="idle >",
+            threshold_pct=80, window_tokens=200000,
+            stuck_after_s=600, nudge_max=2, now=_NOW,
+            **_paths(tmp_path),
+        )
+        assert result["action"] == expected_action
+        assert result["record"]["nudge_count"] == expected_count
+        current = result["record"]
+
+    assert len(calls) == 2
+    markers = registry.read_registry_document(
+        tmp_path / "sessions.json"
+    )["action_markers"]
+    assert sum(marker["status"] == "failed" for marker in markers.values()) == 2
+    assert sum(marker["status"] == "escalated" for marker in markers.values()) == 1
+
+
+def test_prepared_nudge_pauses_without_consuming_attempt(tmp_path, monkeypatch):
+    rec = _record(tmp_path)
+    registry.write_registry(tmp_path / "sessions.json", {rec["session_id"]: rec})
+
+    def _ambiguous_delivery(_target, _text):
+        raise tmux_actuator.TmuxTimeoutError("delivery outcome unknown")
+
+    monkeypatch.setattr(tmux_actuator, "submit_text", _ambiguous_delivery)
+    with pytest.raises(tmux_actuator.TmuxTimeoutError):
+        poll.poll_session(
+            rec, {rec["session_id"]: rec}, adapter=StubAdapter(), pane_text="idle >",
+            threshold_pct=80, window_tokens=200000, stuck_after_s=600,
+            nudge_max=2, now=_NOW, **_paths(tmp_path),
+        )
+
+    persisted = _read_registry(tmp_path)[rec["session_id"]]
+    result = poll.poll_session(
+        persisted, {persisted["session_id"]: persisted}, adapter=StubAdapter(),
+        pane_text="idle >", threshold_pct=80, window_tokens=200000,
+        stuck_after_s=600, nudge_max=2, now=_NOW, **_paths(tmp_path),
+    )
+    assert result["action"] == "paused"
+    assert result["record"]["nudge_count"] == 0
+    markers = registry.read_registry_document(
+        tmp_path / "sessions.json"
+    )["action_markers"]
+    assert [marker["attempt"] for marker in markers.values()] == [1]
+
+
 def test_needs_input_pane_is_never_nudged(tmp_path):
     """A session whose pane still shows a needs_input menu is never nudged
     (criterion #4), even though it is idle: the needs_input arm returns before
@@ -301,7 +427,7 @@ def test_needs_input_pane_is_never_nudged(tmp_path):
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text=_MENU_PANE,
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=submit, stuck_alert_fn=stuck_alert,
+        now=_NOW,
         needs_input_alert_fn=RecordingAlert(), **_paths(tmp_path),
     )
 
@@ -358,7 +484,7 @@ def test_needs_input_first_alert_then_deduped(tmp_path):
 def _child(tmp_path, state, tmux_target):
     child = registry.new_session_record(
         "session-watchdog/cluster", str(tmp_path), "claude", tmux_target,
-        "", now="2020-01-01T00:00:00Z",
+        "", parent_id="ws-parent", now="2020-01-01T00:00:00Z",
     )
     if state != "registered":
         child = registry.transition(child, state, now="2020-01-01T00:00:01Z")
@@ -425,10 +551,8 @@ def test_fanout_origin_still_waiting_in_needs_input_is_not_armed(tmp_path):
     assert res["record"]["state"] == "needs_input"
 
 
-def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
-    """When every child is terminal, the awaiting_children origin gets exactly
-    one reconciliation nudge listing per-child statuses, one Discord alert per
-    failed child, and transitions out of awaiting_children."""
+def test_terminal_children_do_not_bypass_sealed_group_join(tmp_path, monkeypatch):
+    """Terminal children alone never wake or transition their coordinator."""
     done_child = _child(tmp_path, "done", "zw-child-done")
     live_child = _child(tmp_path, "running", "zw-child-dead")  # pane killed OOB
     origin = _record(
@@ -444,7 +568,7 @@ def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
     registry.write_registry(tmp_path / "sessions.json", sessions)
     adapter = StubAdapter()
     submit = RecordingSubmit()
-    recon_alert = RecordingAlert(ret=1)
+    monkeypatch.setattr(tmux_actuator, "submit_text", submit)
 
     def _dead(target, **kwargs):  # live_child's pane is gone
         return target != "zw-child-dead"
@@ -452,8 +576,7 @@ def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
     res = poll.poll_session(
         origin, sessions, adapter=adapter, pane_text="ready >",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=submit, has_session=_dead,
-        reconcile_alert_fn=recon_alert, **_paths(tmp_path),
+        now=_NOW, has_session=_dead, **_paths(tmp_path),
     )
 
     assert res["action"] == "reconcile"
@@ -462,56 +585,17 @@ def test_fanout_reconciliation_nudge_and_failed_child_alert(tmp_path):
     persisted = _read_registry(tmp_path)
     assert persisted[live_child["session_id"]]["state"] == "failed"
     assert persisted[done_child["session_id"]]["state"] == "done"
-    # Exactly one text nudge listing both children's statuses.
-    assert len(submit.calls) == 1
-    summary = submit.calls[0][1]
-    assert "zw-child-dead" in summary and "failed" in summary
-    assert "zw-child-done" in summary and "done" in summary
-    # Exactly one failed-child Discord alert.
-    assert len(recon_alert.calls) == 1
-    # Origin transitioned out of awaiting_children so a later poll cannot re-nudge.
-    assert res["record"]["state"] == "running"
-
-
-def test_fanout_reconciliation_retries_when_pane_not_ready(tmp_path):
-    """A not-ready pane at reconciliation time sends nothing and stays
-    awaiting_children; the failed-child alert + nudge fire exactly once when
-    the pane later becomes ready (no double-alert on the retry cycle)."""
-    live_child = _child(tmp_path, "running", "zw-child-dead")
-    origin = _record(
-        tmp_path, state="awaiting_children", children=[live_child["session_id"]],
-    )
-    sessions = {origin["session_id"]: origin, live_child["session_id"]: live_child}
-    # Seed disk to match the in-memory pass snapshot (single-writer invariant).
-    registry.write_registry(tmp_path / "sessions.json", sessions)
-    submit = RecordingSubmit()
-    recon_alert = RecordingAlert(ret=1)
-
-    def _dead(target, **kwargs):
-        return False
-
-    common = dict(
-        pane_text="busy", threshold_pct=80, window_tokens=200000,
-        stuck_after_s=600, nudge_max=2, now=_NOW, submit_fn=submit,
-        has_session=_dead, reconcile_alert_fn=recon_alert, **_paths(tmp_path),
-    )
-
-    # Cycle 1: pane not ready -> nothing sent, still awaiting_children.
-    res = poll.poll_session(
-        origin, sessions, adapter=StubAdapter(injection_ready=False), **common,
-    )
+    outcomes = registry.read_registry_document(
+        tmp_path / "sessions.json"
+    )["outcomes"]
+    reaped = next(iter(outcomes.values()))
+    assert reaped["state"] == "failed" and reaped["source"] == "lease_reaper"
+    assert all(outcome["state"] != "done" for outcome in outcomes.values())
+    assert submit.calls == []
     assert res["record"]["state"] == "awaiting_children"
-    assert submit.calls == [] and recon_alert.calls == []
-
-    # Cycle 2: pane ready -> exactly one nudge + one failed-child alert.
-    reloaded = _read_registry(tmp_path)
-    origin2 = reloaded[origin["session_id"]]
-    res2 = poll.poll_session(
-        origin2, reloaded, adapter=StubAdapter(injection_ready=True), **common,
-    )
-    assert res2["record"]["state"] == "running"
-    assert len(submit.calls) == 1
-    assert len(recon_alert.calls) == 1
+    assert registry.read_registry_document(
+        tmp_path / "sessions.json"
+    )["action_markers"] == {}
 
 
 # ── (a) context read offset/last_seen persistence ───────────────────────────
@@ -526,7 +610,7 @@ def test_context_read_persists_offset_and_advances_last_seen(tmp_path):
     res = poll.poll_session(
         rec, {rec["session_id"]: rec}, adapter=adapter, pane_text="working",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=RecordingSubmit(), stuck_alert_fn=RecordingAlert(),
+        now=_NOW,
         **_paths(tmp_path),
     )
     assert res["record"]["transcript_offset"] == 250
@@ -568,7 +652,7 @@ def test_poll_session_does_not_clobber_concurrent_fanout_child(tmp_path):
     res = poll.poll_session(
         watched, pass_snapshot, adapter=adapter, pane_text="working...",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=RecordingSubmit(), stuck_alert_fn=RecordingAlert(),
+        now=_NOW,
         **_paths(tmp_path),
     )
 
@@ -602,7 +686,7 @@ def test_fanout_child_first_poll_empty_transcript_path_degrades(tmp_path):
     res = poll.poll_session(
         rec, sessions, adapter=adapter, pane_text="working...",
         threshold_pct=80, window_tokens=200000, stuck_after_s=600, nudge_max=2,
-        now=_NOW, submit_fn=submit, stuck_alert_fn=alert,
+        now=_NOW,
         **_paths(tmp_path),
     )
 

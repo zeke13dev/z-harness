@@ -6,9 +6,8 @@ Coverage:
   ``tmux_target`` for each;
 - heartbeat age is computed deterministically against an injected ``now``
   when the heartbeat file is present, and is ``None`` when absent;
-- a missing registry file never raises — it degrades to
-  ``{"sessions": [], "heartbeat_age_s": None}`` (when the heartbeat file is
-  also absent).
+- a missing registry file never raises and reports empty authority plus a
+  stopped daemon (when the heartbeat file is also absent).
 
 Tests are hermetic (STYLE.md:T-004): all filesystem effects go under
 pytest's ``tmp_path`` fixture.
@@ -86,7 +85,7 @@ def test_compute_status_heartbeat_age_present_file_deterministic(
         registry_path, heartbeat_path, now=lambda: fake_now
     )
 
-    assert result["heartbeat_age_s"] == 42.5
+    assert result["daemon"]["heartbeat_age_s"] == 42.5
 
 
 def test_compute_status_heartbeat_age_none_when_file_absent(tmp_path: Path) -> None:
@@ -96,7 +95,7 @@ def test_compute_status_heartbeat_age_none_when_file_absent(tmp_path: Path) -> N
 
     result = status.compute_status(registry_path, heartbeat_path, now=lambda: 100.0)
 
-    assert result["heartbeat_age_s"] is None
+    assert result["daemon"]["heartbeat_age_s"] is None
     assert result["sessions"] == []
 
 
@@ -106,7 +105,12 @@ def test_compute_status_missing_registry_never_raises(tmp_path: Path) -> None:
 
     result = status.compute_status(registry_path, heartbeat_path)
 
-    assert result == {"sessions": [], "heartbeat_age_s": None}
+    assert result == {
+        "registry_version": registry.REGISTRY_VERSION,
+        "roots": [],
+        "sessions": [],
+        "daemon": {"running": False, "pid": None, "heartbeat_age_s": None},
+    }
 
 
 def test_compute_status_missing_registry_with_present_heartbeat(
@@ -124,4 +128,21 @@ def test_compute_status_missing_registry_with_present_heartbeat(
     )
 
     assert result["sessions"] == []
-    assert result["heartbeat_age_s"] == 5.0
+    assert result["daemon"]["heartbeat_age_s"] == 5.0
+
+
+def test_compute_status_reports_durable_roots_from_authority(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    manifest = {"schema_version": 1, "kind": "watchdog-supervision", "enabled": True}
+    registration, _replayed = registry.register_root_manifest(
+        registry_path, idempotency_key="root-v1:test", manifest=manifest
+    )
+
+    result = status.compute_status(registry_path, tmp_path / "heartbeat")
+
+    assert result["roots"] == [{
+        "coordinator_id": registration["coordinator_id"],
+        "idempotency_key": "root-v1:test",
+        "manifest_sha256": registration["manifest_sha256"],
+        "state": "registered",
+    }]

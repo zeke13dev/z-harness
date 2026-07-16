@@ -14,12 +14,12 @@ Final status at``. Only ``status == "ready"`` rows are spawnable (a completed
 split has every row ``ready``).
 
 Design decisions:
-- ``spawn_children`` takes ``origin_record`` as a caller-supplied mapping (the
+- ``run_fanout`` takes ``origin_record`` as a caller-supplied mapping (the
   session invoking fanout) rather than resolving it itself — the daemon/CLI
   owns origin-session discovery; this module only appends children to it.
-- Child records are left in their freshly-minted ``registered`` state
-  (``registry.new_session_record``'s initial value) — fanout does not invent
-  lifecycle transitions; the daemon/reconcile owns child-state changes (T014).
+- Child records enter ``allocating`` before host creation and transition to
+  ``registered`` only after creation returns successfully. Later lifecycle
+  changes remain owned by daemon reconciliation (T014).
 - ``transcript_path`` on a freshly spawned child is unknown at spawn time (the
   host CLI assigns its own session id / transcript file only after it boots
   inside the new tmux pane), so it is recorded as ``""`` — a later
@@ -33,18 +33,13 @@ Design decisions:
   ``tmux_actuator.new_session``) with an explicit ``timeout`` — no new raw
   subprocess call is introduced in this module.
 
-Concurrency (STYLE.md:P-006, T-REV-001): ``run_fanout`` spawns every child
-(the slow tmux ``new_session`` calls) FIRST, holding no registry lock — so a
-15s-timeout tmux call per cluster can never block the daemon's registry
-persistence or its SIGTERM flush. Only the final registry merge is serialized:
-it goes through ``registry.locked_registry_update``, whose short critical
-section re-reads the registry FRESH under the sidecar lock and applies just
-this fanout's origin-children linkage + new child records onto it. Because the
-merge base is the locked re-read (not the pre-spawn snapshot), a concurrent
-daemon poll pass persisting its own transition of the same registry cannot
-clobber the freshly-added children — the two writers serialize on the sidecar
-lock and each merges onto the other's fresh state. ``spawn_children`` itself
-takes no lock and persists nothing.
+Concurrency (STYLE.md:P-006, T001): ``run_fanout`` first persists deterministic
+``allocating`` records in one short fresh-read-under-lock mutation. It then
+creates tmux resources with no lock held and promotes each successful child to
+``registered`` through another minimal locked mutation. A crash during host
+creation therefore leaves an adoptable/reapable identity without allowing a
+slow tmux call to block daemon persistence. There is no non-persisting public
+spawn path.
 
 Non-scope (later levels own these): resolving the origin record for a given
 root-slug (CLI concern, see ``cli.py``), reconciling child terminal states
@@ -55,7 +50,9 @@ context once its own session boots.
 from __future__ import annotations
 
 import re
+import secrets
 import shlex
+import uuid
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -183,91 +180,95 @@ def _default_command(host: str, cluster_dir: Path) -> str:
     return f"cd {shlex.quote(str(cluster_dir))} && {cli}"
 
 
-def spawn_children(
-    plan_dir: Path | str,
+def _allocation_identity(origin_id: str, cluster: Mapping[str, str]) -> tuple[str, str]:
+    """Return stable watchdog and host identities for one admitted cluster."""
+    cluster_key = _allocation_key(cluster)
+    allocation_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"z-harness:{origin_id}:{cluster_key}")
+    return f"ws-{allocation_uuid}", allocation_uuid.hex[:16]
+
+
+def _allocation_key(cluster: Mapping[str, str]) -> str:
+    """Return the non-empty manifest identity used for durable allocation."""
+    return cluster.get("id", "").strip() or cluster.get("name", "").strip()
+
+
+def _build_allocations(
+    plan_dir: Path,
     origin_record: Mapping[str, object],
     *,
-    host: str | None = None,
-    command_for_cluster: Callable[[Mapping[str, str], Path], str] | None = None,
-    new_session: Callable[..., None] = tmux_actuator.new_session,
-    timeout: float = tmux_actuator.DEFAULT_TIMEOUT_S,
-    now: str | None = None,
-) -> tuple[dict, list[dict]]:
-    """Spawn one tmux session + registry record per ready MANIFEST cluster.
-
-    Reads ``<plan_dir>/MANIFEST.md``, spawns a ``zw-``-prefixed tmux session
-    per ``ready`` cluster via ``new_session`` (explicit ``timeout``), and
-    builds a fresh ``registry`` record per child with ``parent_id`` set to
-    ``origin_record``'s ``session_id``. Does NOT persist anything — callers
-    write the result via ``registry.write_registry`` (see ``run_fanout``).
+    host: str | None,
+    now: str | None,
+) -> tuple[dict, list[tuple[dict[str, str], Path, dict, str]]]:
+    """Build deterministic allocating records without creating host resources.
 
     Args:
-        plan_dir: The completed ``/z-plan-split`` root-slug's directory.
-        origin_record: The session record invoking fanout (not mutated).
-        host: Host to register children under; defaults to
-            ``origin_record["host"]``.
-        command_for_cluster: Optional ``(cluster, cluster_dir) -> command``
-            override for the tmux bootstrap command; defaults to
-            ``_default_command``.
-        new_session: Injected ``tmux_actuator.new_session``-shaped callable.
-        timeout: Explicit subprocess timeout passed to every ``new_session``
-            call.
-        now: ISO timestamp override (deterministic tests).
+        plan_dir: Root plan directory containing ``MANIFEST.md``.
+        origin_record: Parent watchdog session record.
+        host: Optional child host override.
+        now: Optional deterministic timestamp.
 
     Returns:
-        A ``(updated_origin_record, child_records)`` pair: a copy of
-        ``origin_record`` with each new child's id appended to ``children``,
-        and the list of freshly-minted child records (each schema-valid per
-        ``registry.validate_record``).
+        The updated parent and cluster/path/allocation tuples.
 
     Raises:
-        ManifestParseError: if the MANIFEST.md's Clusters table is malformed.
-        tmux_actuator.TmuxTimeoutError / TmuxActuationError: propagated from
-            a failed ``new_session`` call.
+        ManifestParseError: if the manifest cannot be parsed.
+        ValueError: if the resolved host is unsupported.
     """
-    plan_dir = Path(plan_dir)
     clusters = spawnable_clusters(parse_manifest(plan_dir / MANIFEST_FILENAME))
-
+    allocation_keys = [_allocation_key(cluster) for cluster in clusters]
+    if any(not key for key in allocation_keys):
+        raise ValueError("allocation key must not be empty")
+    if len(set(allocation_keys)) != len(allocation_keys):
+        raise ValueError("allocation key must be unique within a manifest")
     origin_host = host or str(origin_record.get("host"))
-    origin_id = origin_record.get("session_id")
+    origin_id = str(origin_record.get("session_id"))
     root_slug = str(origin_record.get("slug"))
-
     origin = dict(origin_record)
     children_ids = list(origin.get("children", []))
-    child_records: list[dict] = []
-    seen_tmux_names: set[str] = set()
+    allocations: list[tuple[dict[str, str], Path, dict, str]] = []
 
     for cluster in clusters:
         cluster_name = cluster.get("name") or cluster.get("id") or "cluster"
         cluster_dir = _cluster_dir(plan_dir, cluster)
-
-        tmux_name = registry.new_tmux_name(f"{root_slug}-{cluster_name}")
-        while tmux_name in seen_tmux_names:  # pragma: no cover — uuid4 collision is
-            # astronomically unlikely; guard kept cheap and correct regardless.
-            tmux_name = registry.new_tmux_name(f"{root_slug}-{cluster_name}")
-        seen_tmux_names.add(tmux_name)
-
-        command = (
-            command_for_cluster(cluster, cluster_dir)
-            if command_for_cluster is not None
-            else _default_command(origin_host, cluster_dir)
+        session_id, resource_suffix = _allocation_identity(origin_id, cluster)
+        tmux_name = registry.deterministic_tmux_name(
+            f"{root_slug}-{cluster_name}", resource_suffix
         )
-        new_session(tmux_name, command, timeout=timeout)
-
+        report_capability = secrets.token_urlsafe(32)
         record = registry.new_session_record(
             slug=f"{root_slug}/{cluster_name}",
             plan_dir=str(cluster_dir),
             host=origin_host,
             tmux_target=tmux_name,
             transcript_path="",
+            session_id=session_id,
             parent_id=origin_id,
+            report_capability=report_capability,
             now=now,
         )
-        children_ids.append(record["session_id"])
-        child_records.append(record)
+        record["state"] = "allocating"
+        if session_id not in children_ids:
+            children_ids.append(session_id)
+        allocations.append((cluster, cluster_dir, record, report_capability))
 
     origin["children"] = children_ids
-    return origin, child_records
+    return origin, allocations
+
+
+_ALLOCATION_IDENTITY_FIELDS = (
+    "session_id",
+    "slug",
+    "plan_dir",
+    "host",
+    "tmux_target",
+    "parent_id",
+)
+
+
+def _same_allocation(existing: Mapping[str, object], intended: Mapping[str, object]) -> bool:
+    """Return whether two records identify the same durable host allocation."""
+    return all(existing.get(field) == intended.get(field)
+               for field in _ALLOCATION_IDENTITY_FIELDS)
 
 
 def run_fanout(
@@ -281,56 +282,65 @@ def run_fanout(
     timeout: float = tmux_actuator.DEFAULT_TIMEOUT_S,
     now: str | None = None,
 ) -> tuple[dict[str, dict], list[dict]]:
-    """Spawn fanout children and persist the updated registry. Hard-fail.
+    """Durably allocate, spawn, and register fanout children. Hard-fail.
 
-    Spawns every child via ``spawn_children`` (the tmux ``new_session`` calls)
-    while holding NO registry lock, then persists the origin-children linkage
-    and the new child records through ``registry.locked_registry_update`` — a
-    short critical section that re-reads the registry fresh under the sidecar
-    lock and merges only this fanout's records onto it.
+    Persists every deterministic child allocation before the first tmux call,
+    then creates resources without the registry lock and promotes successful
+    allocations to ``registered`` one at a time.
 
-    Concurrency (T-REV-001): the slow tmux spawning is deliberately OUTSIDE the
-    lock so it never blocks the daemon's registry persistence / SIGTERM flush;
-    the only serialized work is the final merge, whose fresh locked re-read is
-    the authoritative merge base. A concurrent daemon poll pass persisting its
-    own transition of the same registry therefore cannot clobber the
-    freshly-added children (and this merge cannot clobber the poll's
-    transition: the origin's own ``children`` list is appended onto whatever
-    origin record the fresh re-read holds, not overwritten with the pre-spawn
-    copy). See ``registry.locked_registry_update``'s docstring.
+    Concurrency: every persistence step uses a fresh locked merge, so unrelated
+    lifecycle sections and concurrent session transitions survive. Host calls
+    remain outside the lock.
 
     Args:
         plan_dir: The completed ``/z-plan-split`` root-slug's directory.
         origin_record: The session record invoking fanout.
         registry_path: Path to ``sessions.json``.
-        host, command_for_cluster, new_session, timeout, now: see
-            ``spawn_children``.
+        host: Child host override; defaults to the origin host.
+        command_for_cluster: Optional cluster bootstrap command builder.
+        new_session: Host creation callable compatible with tmux actuation.
+        timeout: Explicit timeout passed to each host creation call.
+        now: Timestamp override for deterministic tests.
 
     Returns:
         A ``(sessions, child_records)`` pair: the full post-write sessions
-        mapping (``session_id`` -> record) and the list of newly spawned
-        child records.
+        mapping (``session_id`` -> record) and the addressed child records.
 
     Raises:
-        ManifestParseError: see ``spawn_children``.
+        ManifestParseError: if the manifest cannot be parsed.
         ValueError: if a resulting record fails ``registry.validate_record``.
+        RuntimeError: if an existing allocation requires later reconciliation.
+        tmux_actuator.TmuxTimeoutError / TmuxActuationError: propagated from
+            host creation.
         OSError: on a registry write failure.
     """
-    # Spawn every child FIRST, holding no registry lock — the tmux calls must
-    # never block a concurrent daemon persist / SIGTERM flush (T-REV-001).
-    updated_origin, child_records = spawn_children(
-        plan_dir,
-        origin_record,
-        host=host,
-        command_for_cluster=command_for_cluster,
-        new_session=new_session,
-        timeout=timeout,
-        now=now,
+    plan_dir = Path(plan_dir)
+    updated_origin, allocations = _build_allocations(
+        plan_dir, origin_record, host=host, now=now
     )
     origin_key = str(updated_origin["session_id"])
-    new_child_ids = [str(child["session_id"]) for child in child_records]
+    allocating_records = [allocation[2] for allocation in allocations]
+    new_child_ids = [str(child["session_id"]) for child in allocating_records]
+    replay_ids: set[str] = set()
 
     def _merge(fresh: dict[str, dict]) -> None:
+        pending_ids: list[str] = []
+        for child in allocating_records:
+            child_id = str(child["session_id"])
+            existing = fresh.get(child_id)
+            if existing is None:
+                continue
+            if not _same_allocation(existing, child):
+                raise ValueError(f"conflicting allocation replay for {child_id}")
+            if existing["state"] == "allocating":
+                pending_ids.append(child_id)
+            else:
+                replay_ids.add(child_id)
+        if pending_ids:
+            raise RuntimeError(
+                "allocation awaiting host reconciliation: " + ", ".join(pending_ids)
+            )
+
         # Append the new children onto whatever origin record the fresh locked
         # re-read holds (preserving a concurrent poll's transition of the
         # origin) rather than overwriting it with the pre-spawn copy; fall back
@@ -346,8 +356,41 @@ def run_fanout(
             fresh[origin_key] = base
         else:
             fresh[origin_key] = updated_origin
-        for child in child_records:
-            fresh[str(child["session_id"])] = child
+        for child in allocating_records:
+            fresh.setdefault(str(child["session_id"]), child)
 
+    # Allocation intent and deterministic tmux identity become authoritative
+    # before the first host side effect. A crash from this point onward leaves
+    # enough state for the later host-specific reconciler to adopt or reap.
     sessions = registry.locked_registry_update(registry_path, _merge)
+    child_records: list[dict] = []
+    origin_host = host or str(origin_record.get("host"))
+    for cluster, cluster_dir, allocating, report_capability in allocations:
+        child_id = str(allocating["session_id"])
+        if child_id in replay_ids:
+            child_records.append(sessions[child_id])
+            continue
+        command = (
+            command_for_cluster(cluster, cluster_dir)
+            if command_for_cluster is not None
+            else _default_command(origin_host, cluster_dir)
+        )
+        bootstrap = " ".join((
+            "env",
+            f"Z_HARNESS_WATCHDOG_CHILD_ID={shlex.quote(child_id)}",
+            "Z_HARNESS_WATCHDOG_CHILD_GENERATION="
+            f"{shlex.quote(registry.child_generation(allocating))}",
+            "Z_HARNESS_WATCHDOG_REPORT_CAPABILITY="
+            f"{shlex.quote(report_capability)}",
+            command,
+        ))
+        new_session(allocating["tmux_target"], bootstrap, timeout=timeout)
+
+        def _mark_registered(fresh: dict[str, dict], session_id: str = child_id) -> None:
+            current = fresh[session_id]
+            if current["state"] == "allocating":
+                fresh[session_id] = registry.transition(current, "registered", now=now)
+
+        sessions = registry.locked_registry_update(registry_path, _mark_registered)
+        child_records.append(sessions[child_id])
     return sessions, child_records

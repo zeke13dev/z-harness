@@ -28,10 +28,9 @@ cycle. Order and gates:
 3. **Context-threshold handoff** (criteria #2/#3) — when
    ``pct_used >= threshold_pct`` AND the record is ``registered``/``running`` AND
    ``adapter.injection_ready(pane_text)``, drive ``handoff.maybe_trigger_handoff``
-   and then actuate the real choreography by submitting ``handoff_command()`` then
-   ``clear_command()`` via ``tmux_actuator.submit_text``. A not-yet-ready pane
-   skips the trigger this cycle and re-evaluates next cycle (the "gated across
-   possibly-many poll cycles" contract from ``handoff.py``'s T010 docstring).
+   and then actuate the real choreography through marker-first ``handoff`` and
+   ``clear`` requests. ``cleared`` and ``resumed`` are persisted only after the
+   corresponding host stage completes; an ambiguous prepared marker pauses.
 4. **needs_input** (criterion #5) — when ``adapter.needs_input(pane_text)``,
    dispatch a Discord brief via ``needs_input.evaluate_needs_input`` deduped
    against a per-session digest sidecar (see below), and transition the record
@@ -43,13 +42,17 @@ cycle. Order and gates:
    ``nudge_count > nudge_max`` "already escalated" marker (LEDGER T011) survives
    across polls and the Discord escalation stays exactly-once.
 
+Every host-side intervention in this cascade is claimed through
+``tmux_actuator.dispatch_lifecycle_action`` before its effect runs. Prepared
+markers survive daemon restarts; an ambiguous prepared action pauses instead
+of being silently repeated.
+
 Design decisions:
 - Dependency-injection seam discipline (mirrors every sibling module — ``stuck``,
   ``needs_input``, ``reconcile``, ``handoff``): every ``watchdog.*`` knob is a
   caller-supplied argument (the daemon resolves them once via
-  ``registry.get_config_int``), and every tmux/judge/Discord collaborator is an
-  injected callable defaulting to the real implementation, so tests never touch a
-  real tmux pane, provider CLI, or webhook. This module resolves no config itself
+  ``registry.get_config_int``), while host effects use validated lifecycle
+  requests. This module resolves no config itself
   (STYLE.md:P-004).
 - Every tmux and judge invocation funnels through the existing explicit-timeout
   wrappers (``tmux_actuator.submit_text``/``has_session``,
@@ -62,17 +65,9 @@ Design decisions:
   persistence contract). Sidecar reads/writes are best-effort (STYLE.md:EH-001):
   a lost digest at worst re-sends one Discord brief, matching needs_input.py's
   fail-open stance — it must never crash the poll loop.
-- Reconciliation exactly-once: ``reconcile.reconcile_children``'s own Discord
-  failed-child alert is decoupled from its payload build by injecting a no-op
-  ``send_alerts`` and having THIS module own the failed-child alert + text nudge
-  + ``awaiting_children -> running`` transition together, all gated on
-  ``injection_ready`` and fired exactly once at the transition-out moment. This
-  keeps BOTH exactly-once obligations (the failed-child Discord alert AND the
-  reconciliation text nudge) honored even when a not-ready pane forces the nudge
-  to retry across cycles: because nothing is sent and the origin stays
-  ``awaiting_children`` until the pane is ready, no cycle double-sends. The
-  child-terminal marking inside ``reconcile_children`` still runs every cycle
-  (it is idempotent — already-terminal children are skipped).
+- Reconciliation advances persisted child lease outcomes, then asks the
+  registry to materialize sealed-group joins. The registry remains the sole
+  readiness authority; unsealed child terminality never creates a wake.
 - Persistence: ``poll_session`` persists on the returning arm through
   ``registry.locked_registry_update`` (``_persist_changed``), which re-reads the
   registry fresh under the sidecar lock and merges ONLY the records this cycle
@@ -180,29 +175,8 @@ def _write_last_digest(path: Path, digest: str) -> None:
         return
 
 
-# ── reconciliation text summary ─────────────────────────────────────────────
-
-def _format_reconciliation_summary(payload: Mapping[str, object]) -> str:
-    """Build the plain-text reconciliation nudge listing per-child statuses.
-
-    Args:
-        payload: A ``notify.format_reconciliation_payload``-shaped dict.
-
-    Returns:
-        A multi-line plain-text summary naming each child's tmux target and
-        terminal state — the text submitted to the origin's pane.
-    """
-    root_slug = str(payload.get("root_slug", ""))
-    lines = [f"fanout '{root_slug}' children all terminal (automated watchdog):"]
-    for entry in payload.get("entries", []):  # type: ignore[union-attr]
-        lines.append(f"- {entry.get('tmux_target')}: {entry.get('state')}")
-    return "\n".join(lines)
-
-
 def _noop_send_alerts(payload: Mapping[str, object]) -> int:
-    """No-op ``send_alerts`` injected into ``reconcile_children`` so THIS module
-    owns the failed-child Discord alert timing (see module docstring's
-    reconciliation exactly-once decision). Returns 0 (nothing sent)."""
+    """Suppress legacy alerts until sealed-group join owns wake timing."""
     return 0
 
 
@@ -257,13 +231,14 @@ def poll_session(
     signals_max_mb: int | None = None,
     digest_dir: Path | str | None = None,
     now: datetime | None = None,
-    submit_fn: Callable[..., None] = tmux_actuator.submit_text,
     has_session: Callable[..., bool] = tmux_actuator.has_session,
     judge_dispatch: Callable[..., dict] = judge.dispatch_judge_verdict,
     judge_role: str = judge.JUDGE_ROLE,
-    stuck_alert_fn: Callable[..., bool] = notify.send_discord_alert,
     needs_input_alert_fn: Callable[..., bool] = notify.send_needs_input_alert,
-    reconcile_alert_fn: Callable[..., int] = notify.send_reconciliation_alerts,
+    dispatch_action: Callable[..., dict] = tmux_actuator.dispatch_lifecycle_action,
+    lifecycle_notify: Callable[..., notify.DeliveryResult] = (
+        notify.deliver_lifecycle_notification
+    ),
 ) -> dict:
     """Run one poll cycle for a single session record and persist the result.
 
@@ -302,25 +277,27 @@ def poll_session(
         digest_dir: Directory for per-session needs_input digest sidecars;
             defaults to ``<registry_path parent>/needs_input_digests``.
         now: Injected clock (deterministic tests); defaults to current UTC.
-        submit_fn: Injected ``tmux_actuator.submit_text``-shaped actuator.
         has_session: Injected ``tmux_actuator.has_session``-shaped liveness check
             (forwarded to ``reconcile_children``).
         judge_dispatch: Injected ``judge.dispatch_judge_verdict``-shaped callable.
         judge_role: Provider role forwarded to ``judge_dispatch``.
-        stuck_alert_fn: Injected Discord sender for the stuck escalation.
         needs_input_alert_fn: Injected Discord sender for the needs_input brief.
-        reconcile_alert_fn: Injected Discord sender for failed-child alerts.
+        dispatch_action: Marker-first deterministic lifecycle dispatcher.
+        lifecycle_notify: Fail-open lifecycle notification delivery callable.
 
     Returns:
         A structured result dict with fields enumerated explicitly
         (STYLE.md:P-003):
         ``{"session_id", "action", "record", "sessions", "reading",
         "handoff_result", "needs_input_result", "stuck_result",
-        "reconcile_payload"}``. ``action`` is one of ``"await_children"``,
+        "reconcile_payload", "lifecycle_notification_result"}``. ``action``
+        is one of ``"await_children"``,
         ``"reconcile"``, ``"handoff"``, ``"needs_input"``, ``"nudge"``,
         ``"discord_alert"``, or ``"skip"``. ``record`` is the final record;
         ``sessions`` is the full post-write mapping; the arm-specific sub-result
         fields are populated for the arm that acted and ``None`` otherwise.
+        ``"paused"`` reports a durable prepared marker whose side-effect
+        outcome is ambiguous; no additional intervention is attempted.
     """
     sessions = dict(sessions)
     # Deep snapshot of the state this cycle starts from — the diff base for
@@ -332,6 +309,27 @@ def poll_session(
     session_id = record["session_id"]
     now_dt = _now_dt(now)
     now_iso = _iso(now_dt)
+
+    # A queued/duplicate poll may carry the pre-rollover record. Never let it
+    # read or persist against the old host target: authority is the fresh
+    # generation under the registry lock, and stale work is a harmless no-op.
+    authoritative = registry.read_registry(registry_path).get(session_id)
+    if authoritative is not None and (
+        authoritative.get("state_generation") != record.get("state_generation")
+        or authoritative.get("tmux_target") != record.get("tmux_target")
+    ):
+        return {
+            "session_id": session_id,
+            "action": "stale",
+            "record": authoritative,
+            "sessions": registry.read_registry(registry_path),
+            "reading": None,
+            "handoff_result": None,
+            "needs_input_result": None,
+            "stuck_result": None,
+            "reconcile_payload": None,
+            "lifecycle_notification_result": None,
+        }
 
     resolved_digest_dir = (
         Path(digest_dir)
@@ -363,6 +361,7 @@ def poll_session(
         "needs_input_result": None,
         "stuck_result": None,
         "reconcile_payload": None,
+        "lifecycle_notification_result": None,
     }
 
     # ── (e) fanout-origin lifecycle ────────────────────────────────────────
@@ -370,17 +369,26 @@ def poll_session(
         return _poll_fanout_origin(
             record, sessions, result, incoming,
             adapter=adapter, pane_text=pane_text, registry_path=registry_path,
-            has_session=has_session, reconcile_alert_fn=reconcile_alert_fn,
-            submit_fn=submit_fn, now_dt=now_dt, now_iso=now_iso,
+            has_session=has_session, lifecycle_notify=lifecycle_notify,
+            now_iso=now_iso,
         )
 
     # ── (b) context-threshold handoff ──────────────────────────────────────
-    if (
+    handoff_in_progress = record["state"] in {
+        "handoff_requested", "handoff_written", "cleared",
+    }
+    handoff_threshold_crossed = (
         reading.pct_used is not None
         and reading.pct_used >= threshold_pct
         and record["state"] in _ORIGIN_ARM_STATES
-        and adapter.injection_ready(pane_text)
+    )
+    if (handoff_in_progress or handoff_threshold_crossed) and not adapter.injection_ready(
+        pane_text
     ):
+        sessions = _persist_changed(registry_path, incoming, sessions)
+        result.update(action="paused", sessions=sessions)
+        return result
+    if handoff_in_progress or handoff_threshold_crossed:
         handoff_result = handoff.maybe_trigger_handoff(
             record, reading.pct_used,
             threshold_pct=threshold_pct,
@@ -396,13 +404,60 @@ def poll_session(
         if handoff_result["triggered"]:
             record = handoff_result["record"]
             sessions[session_id] = record
-            # Actuate the real choreography: submit the host's handoff-equivalent
-            # then its clear-equivalent, each a separate race-safe submit.
-            submit_fn(record["tmux_target"], adapter.handoff_command())
-            submit_fn(record["tmux_target"], adapter.clear_command())
+            if record["state"] == "handoff_written":
+                handoff_dispatch = dispatch_action(
+                    registry_path,
+                    session_id=session_id,
+                    action="handoff",
+                    generation=record["state_changed_at"],
+                    attempt=1,
+                    max_attempts=1,
+                    target=record["tmux_target"],
+                    text=adapter.handoff_command(),
+                    host_ready=True,
+                )
+                if handoff_dispatch["status"] != "completed":
+                    sessions = _persist_changed(registry_path, incoming, sessions)
+                    result.update(
+                        action="paused", record=record, sessions=sessions,
+                        handoff_result=handoff_result,
+                    )
+                    return result
+                record = registry.transition(record, "cleared", now=now_iso)
+                sessions[session_id] = record
+                sessions = _persist_changed(registry_path, incoming, sessions)
+                incoming = copy.deepcopy(sessions)
+            if record["state"] == "cleared":
+                clear_dispatch = dispatch_action(
+                    registry_path,
+                    session_id=session_id,
+                    action="clear",
+                    generation=record["state_changed_at"],
+                    attempt=1,
+                    max_attempts=1,
+                    target=record["tmux_target"],
+                    text=adapter.clear_command(),
+                    host_ready=True,
+                )
+                if clear_dispatch["status"] != "completed":
+                    sessions = _persist_changed(registry_path, incoming, sessions)
+                    result.update(
+                        action="paused", record=record, sessions=sessions,
+                        handoff_result=handoff_result,
+                    )
+                    return result
+                record = registry.transition(record, "resumed", now=now_iso)
+                sessions[session_id] = record
             sessions = _persist_changed(registry_path, incoming, sessions)
             result.update(
                 action="handoff", record=record, sessions=sessions,
+                handoff_result=handoff_result,
+            )
+            return result
+        if handoff_in_progress:
+            sessions = _persist_changed(registry_path, incoming, sessions)
+            result.update(
+                action="paused", sessions=sessions,
                 handoff_result=handoff_result,
             )
             return result
@@ -424,11 +479,39 @@ def poll_session(
         sessions[session_id] = record
 
     # ── (c) stuck ──────────────────────────────────────────────────────────
+    def _marked_submit(target: str, text: str) -> str:
+        dispatched = dispatch_action(
+            registry_path,
+            session_id=session_id,
+            action="nudge",
+            generation=record["last_seen"],
+            attempt=record["nudge_count"] + 1,
+            max_attempts=nudge_max,
+            target=target,
+            text=text,
+            host_ready=True,
+        )
+        return str(dispatched["status"])
+
+    def _marked_escalation(title: str, body: str) -> str:
+        dispatched = dispatch_action(
+            registry_path,
+            session_id=session_id,
+            action="escalation",
+            generation=record["last_seen"],
+            attempt=1,
+            max_attempts=1,
+            title=title,
+            body=body,
+            host_ready=True,
+        )
+        return str(dispatched["status"])
+
     stuck_result = stuck.evaluate_stuck(
         record, now_dt,
         pane_text=pane_text, adapter=adapter,
         stuck_after_s=stuck_after_s, nudge_max=nudge_max,
-        submit_fn=submit_fn, alert_fn=stuck_alert_fn,
+        submit_fn=_marked_submit, alert_fn=_marked_escalation,
     )
     # Persist the returned record VERBATIM — including the nudge_count past-max
     # marker bump on a discord_alert (LEDGER T011) that makes escalation
@@ -453,21 +536,14 @@ def _poll_fanout_origin(
     pane_text: str,
     registry_path: Path | str,
     has_session: Callable[..., bool],
-    reconcile_alert_fn: Callable[..., int],
-    submit_fn: Callable[..., None],
-    now_dt: datetime,
+    lifecycle_notify: Callable[..., notify.DeliveryResult],
     now_iso: str,
 ) -> dict:
     """Handle a fanout origin's ``awaiting_children`` lifecycle for one cycle.
 
     A ``registered``/``running`` origin is armed into ``awaiting_children``. An
-    origin already ``awaiting_children`` runs ``reconcile.reconcile_children``
-    (which marks out-of-band-killed children ``failed`` idempotently every
-    cycle); once every child is terminal, the origin — gated on
-    ``injection_ready`` — receives exactly one plain-text reconciliation nudge,
-    a Discord alert per failed child, and a ``awaiting_children -> running``
-    transition (the exactly-once gate). See the module docstring for why the
-    failed-child alert is fired here rather than inside ``reconcile_children``.
+    origin already ``awaiting_children`` advances child leases and atomically
+    materializes a join only when its explicit registration epoch is sealed.
     """
     session_id = record["session_id"]
 
@@ -492,24 +568,15 @@ def _poll_fanout_origin(
     if record["state"] == "awaiting_children":
         reconciled = reconcile.reconcile_children(
             record, sessions,
-            has_session=has_session,
-            send_alerts=_noop_send_alerts,  # THIS module owns alert timing
+            has_session=has_session, send_alerts=_noop_send_alerts,
+            registry_path=registry_path,
+            lifecycle_notify=lifecycle_notify,
             now=now_iso,
         )
         sessions = reconciled["records"]
         payload = reconciled["payload"]
-        if payload is not None and adapter.injection_ready(pane_text):
-            # All children terminal AND the pane can receive the nudge: fire the
-            # text summary, the per-failed-child Discord alert, and the
-            # transition-out together — exactly once.
-            submit_fn(record["tmux_target"], _format_reconciliation_summary(payload))
-            if payload.get("failed_entries"):
-                reconcile_alert_fn(payload)
-            record = registry.transition(record, "running", now=now_iso)
-            sessions[session_id] = record
-        # else: payload not ready or pane not ready — stay awaiting_children and
-        # retry next cycle; nothing was sent, so no double-alert on retry.
         sessions = _persist_changed(registry_path, incoming, sessions)
+        registry.materialize_ready_joins(registry_path, now=now_iso)
         result.update(
             action="reconcile", record=record, sessions=sessions,
             reconcile_payload=payload,

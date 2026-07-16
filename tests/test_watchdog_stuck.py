@@ -187,6 +187,18 @@ def test_stuck_below_nudge_max_gated_on_injection_ready_skips_when_not_ready() -
     assert result["record"]["nudge_count"] == 0
 
 
+@pytest.mark.parametrize("status", ["paused", "escalated"])
+def test_ambiguous_dispatch_status_does_not_consume_nudge_attempt(status: str) -> None:
+    record = _record(state="stuck", idle_s=STUCK_AFTER_S + 1, nudge_count=0, now=NOW)
+    result, _submit_fn, alert_fn = _evaluate(
+        record, submit=lambda _target, _text: status,
+    )
+    assert result["action"] == status
+    assert result["record"]["nudge_count"] == 0
+    assert result["record"]["last_nudge_at"] is None
+    assert alert_fn.calls == []
+
+
 # ── at/above nudge_max: exactly one Discord alert, no further nudge ─────────
 
 def test_stuck_at_nudge_max_sends_exactly_one_discord_alert_and_no_nudge() -> None:

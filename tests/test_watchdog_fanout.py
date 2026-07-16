@@ -29,8 +29,9 @@ always a fake recorder, never the real ``tmux_actuator.new_session``).
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
-import threading
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,10 @@ def test_spawnable_clusters_filters_non_ready() -> None:
     assert [c["id"] for c in ready] == ["C1", "C3"]
 
 
+def test_spawn_children_compatibility_path_is_removed() -> None:
+    assert not hasattr(fanout, "spawn_children")
+
+
 # ── spawn_children / run_fanout: N clusters -> N children ────────────────────
 
 def test_run_fanout_spawns_n_children_with_correct_linkage(tmp_path: Path) -> None:
@@ -207,9 +212,8 @@ def test_run_fanout_only_spawns_ready_clusters(tmp_path: Path) -> None:
     assert child_records[0]["slug"].endswith("/alpha")
 
 
-def test_run_fanout_appends_to_existing_children(tmp_path: Path) -> None:
-    """A second fanout call against a registry that already has children
-    appends rather than clobbers the existing linkage."""
+def test_run_fanout_replay_reuses_deterministic_child_identity(tmp_path: Path) -> None:
+    """An exact replay addresses the same child and host resource."""
     rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
     plan_dir = tmp_path / "plans" / "demo-plan"
     _write_manifest(plan_dir, rows)
@@ -222,15 +226,139 @@ def test_run_fanout_appends_to_existing_children(tmp_path: Path) -> None:
     origin_id = origin["session_id"]
     updated_origin = sessions[origin_id]
 
+    replay_recorder = _RecordingNewSession()
     sessions_2, second_children = fanout.run_fanout(
-        plan_dir, updated_origin, registry_path, new_session=_RecordingNewSession()
+        plan_dir, updated_origin, registry_path, new_session=replay_recorder
     )
 
-    all_ids = {rec["session_id"] for rec in first_children} | {
-        rec["session_id"] for rec in second_children
-    }
-    assert len(all_ids) == 2  # both children are distinct records
-    assert set(sessions_2[origin_id]["children"]) == all_ids
+    assert second_children[0]["session_id"] == first_children[0]["session_id"]
+    assert second_children[0]["tmux_target"] == first_children[0]["tmux_target"]
+    assert sessions_2[origin_id]["children"] == [first_children[0]["session_id"]]
+    assert replay_recorder.calls == []
+
+
+def test_run_fanout_persists_allocating_and_leaves_replay_for_reconciler(
+    tmp_path: Path,
+) -> None:
+    rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+    origin = _origin_record()
+    observed: list[tuple[str, str, list[str]]] = []
+
+    def _crash_during_creation(
+        name: str, command: str | None = None, *, timeout: float
+    ) -> None:
+        sessions = registry.read_registry(registry_path)
+        children = sessions[origin["session_id"]]["children"]
+        child = sessions[children[0]]
+        observed.append((child["state"], child["tmux_target"], children))
+        raise RuntimeError("simulated host-creation crash")
+
+    with pytest.raises(RuntimeError, match="simulated host-creation crash"):
+        fanout.run_fanout(
+            plan_dir, origin, registry_path, new_session=_crash_during_creation
+        )
+
+    allocating = registry.read_registry(registry_path)
+    child_id = allocating[origin["session_id"]]["children"][0]
+    host_identity = allocating[child_id]["tmux_target"]
+    assert observed == [("allocating", host_identity, [child_id])]
+
+    recorder = _RecordingNewSession()
+    with pytest.raises(RuntimeError, match="reconciliation"):
+        fanout.run_fanout(plan_dir, origin, registry_path, new_session=recorder)
+
+    assert recorder.calls == []
+    assert registry.read_registry(registry_path)[child_id]["state"] == "allocating"
+
+
+def test_run_fanout_does_not_respawn_after_post_creation_promotion_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+    real_update = registry.locked_registry_update
+    update_count = 0
+
+    def _crash_on_promotion(path: Path | str, mutate_fn: Any) -> dict[str, dict]:
+        nonlocal update_count
+        update_count += 1
+        if update_count == 2:
+            raise OSError("simulated promotion crash")
+        return real_update(path, mutate_fn)
+
+    first_recorder = _RecordingNewSession()
+    monkeypatch.setattr(registry, "locked_registry_update", _crash_on_promotion)
+    with pytest.raises(OSError, match="simulated promotion crash"):
+        fanout.run_fanout(
+            plan_dir, _origin_record(), registry_path, new_session=first_recorder
+        )
+    monkeypatch.setattr(registry, "locked_registry_update", real_update)
+
+    assert len(first_recorder.calls) == 1
+    replay_recorder = _RecordingNewSession()
+    with pytest.raises(RuntimeError, match="reconciliation"):
+        fanout.run_fanout(
+            plan_dir, _origin_record(), registry_path, new_session=replay_recorder
+        )
+    assert replay_recorder.calls == []
+
+
+def test_run_fanout_rejects_new_manifest_child_after_group_seal(tmp_path: Path) -> None:
+    """Criterion #6: a sealed epoch rejects late fanout admission before spawn."""
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    registry_path = tmp_path / "state" / "sessions.json"
+    origin = _origin_record()
+    _write_manifest(plan_dir, [("C1", "alpha", "demo-plan/alpha/", "ready", "1")])
+    fanout.run_fanout(
+        plan_dir, origin, registry_path, new_session=_RecordingNewSession()
+    )
+    registry.seal_group(
+        registry_path, registry.group_id_for(str(origin["session_id"]))
+    )
+    _write_manifest(plan_dir, [
+        ("C1", "alpha", "demo-plan/alpha/", "ready", "1"),
+        ("C2", "beta", "demo-plan/beta/", "ready", "1"),
+    ])
+    recorder = _RecordingNewSession()
+    with pytest.raises(registry.GroupAdmissionError, match="sealed"):
+        fanout.run_fanout(plan_dir, origin, registry_path, new_session=recorder)
+    assert recorder.calls == []
+    assert len(registry.read_registry(registry_path)) == 2
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            ("C1", "alpha", "demo-plan/alpha/", "ready", "1"),
+            ("C1", "beta", "demo-plan/beta/", "ready", "1"),
+        ],
+        [("", "", "demo-plan/alpha/", "ready", "1")],
+        [("   ", "   ", "demo-plan/alpha/", "ready", "1")],
+    ],
+)
+def test_run_fanout_rejects_duplicate_or_empty_allocation_keys_before_persist(
+    tmp_path: Path,
+    rows: list[tuple[str, str, str, str, str]],
+) -> None:
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+    recorder = _RecordingNewSession()
+
+    with pytest.raises(ValueError, match="allocation key"):
+        fanout.run_fanout(
+            plan_dir, _origin_record(), registry_path, new_session=recorder
+        )
+
+    assert recorder.calls == []
+    assert not registry_path.exists()
 
 
 # ── run_fanout: concurrency discipline (T-REV-001) ───────────────────────────
@@ -385,7 +513,49 @@ def test_command_for_cluster_override_is_used(tmp_path: Path) -> None:
     )
 
     assert calls == [("C1", plan_dir.parent / "demo-plan" / "alpha")]
-    assert new_session.calls[0][1] == "custom-command"
+    assert new_session.calls[0][1].endswith(" custom-command")
+
+
+def test_fanout_privately_provisions_capability_without_registry_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [("C1", "alpha", "demo-plan/alpha/", "ready", "1")]
+    plan_dir = tmp_path / "plans" / "demo-plan"
+    _write_manifest(plan_dir, rows)
+    registry_path = tmp_path / "state" / "sessions.json"
+    new_session = _RecordingNewSession()
+    secret = "capability with ' quote and $(command)"
+    monkeypatch.setattr(fanout.secrets, "token_urlsafe", lambda _size: secret)
+
+    _sessions, children = fanout.run_fanout(
+        plan_dir, _origin_record(), registry_path, new_session=new_session
+    )
+
+    child = children[0]
+    argv = shlex.split(new_session.calls[0][1])
+    provisioned = dict(part.split("=", 1) for part in argv[1:4])
+    capability = provisioned["Z_HARNESS_WATCHDOG_REPORT_CAPABILITY"]
+    assert capability == secret
+    assert provisioned["Z_HARNESS_WATCHDOG_CHILD_ID"] == child["session_id"]
+    assert provisioned["Z_HARNESS_WATCHDOG_CHILD_GENERATION"] == registry.child_generation(child)
+    assert child["supervision"] == {
+        "schema_version": registry.CHILD_SUPERVISION_SCHEMA_VERSION,
+        "report_capability_sha256": hashlib.sha256(capability.encode()).hexdigest(),
+        "lease_timeout_s": registry.DEFAULT_CHILD_LEASE_TIMEOUT_S,
+        "grace_s": registry.DEFAULT_CHILD_GRACE_S,
+        "resolution_window_s": registry.DEFAULT_CHILD_RESOLUTION_WINDOW_S,
+    }
+    assert capability not in registry_path.read_text(encoding="utf-8")
+    with pytest.raises(registry.UnauthorizedChildReporterError):
+        registry.report_child_outcome(
+            registry_path,
+            child_id=child["session_id"],
+            generation=registry.child_generation(child),
+            reporter_id=child["session_id"],
+            report_capability=child["supervision"]["report_capability_sha256"],
+            state="done",
+            evidence={"artifact": "RESULT.json"},
+        )
 
 
 # ── cli.py seed wiring ────────────────────────────────────────────────────────

@@ -70,7 +70,7 @@ from runtime.watchdog.adapters.base import HostAdapter
 _SKIP_STATES = frozenset({"needs_input", "awaiting_children"})
 """States the D1 short-circuit binding obligation exempts from nudging."""
 
-DEFAULT_NUDGE_TEXT = "still there? (automated watchdog nudge)"
+DEFAULT_NUDGE_TEXT = tmux_actuator.NUDGE_TEXT
 """Plain-text nudge submitted via ``tmux_actuator.submit_text`` when a
 session is stuck and below ``nudge_max``."""
 
@@ -121,7 +121,8 @@ def evaluate_stuck(
             ``DEFAULT_NUDGE_TEXT``.
 
     Returns:
-        ``{"action": "skip" | "nudge" | "discord_alert", "record": dict}``.
+        ``{"action": "skip" | "nudge" | "nudge_failed" | "paused" |
+        "escalated" | "discord_alert", "record": dict}``.
         ``action`` is:
         - ``"skip"`` — ``record["state"]`` is ``needs_input`` or
           ``awaiting_children`` (D1), the session is not idle *strictly past*
@@ -133,6 +134,11 @@ def evaluate_stuck(
           ``nudge_count < nudge_max``, and the pane accepted the submit;
           ``record`` is returned with ``nudge_count`` incremented by one and
           ``last_nudge_at`` stamped to ``now``.
+        - ``"nudge_failed"`` — a definite delivery failure consumed the
+          bounded attempt; ``nudge_count`` and ``last_nudge_at`` advance so a
+          later poll cannot reuse the same durable attempt marker.
+        - ``"paused"`` / ``"escalated"`` — the lifecycle dispatcher could
+          not report explicit completion or failure; the record is unchanged.
         - ``"discord_alert"`` — the session is idle past ``stuck_after_s``
           and ``nudge_count == nudge_max`` (the first cycle to reach the
           cap); exactly one Discord alert is dispatched via ``alert_fn`` and
@@ -158,10 +164,12 @@ def evaluate_stuck(
 
     if decision == "discord_alert":
         session_label = record.get("tmux_target", record.get("session_id", ""))
-        alert_fn(
+        alert_status = alert_fn(
             f"stuck session: {session_label}",
             f"no response after {nudge_max} nudge(s); idle {int(idle_s)}s.",
         )
+        if alert_status in {"paused", "escalated"}:
+            return {"action": alert_status, "record": record}
         updated = dict(record)
         updated["nudge_count"] = nudge_count + 1
         return {"action": "discord_alert", "record": updated}
@@ -170,7 +178,14 @@ def evaluate_stuck(
     if not adapter.injection_ready(pane_text):
         return {"action": "skip", "record": record}
 
-    submit_fn(record["tmux_target"], nudge_text)
+    delivered = submit_fn(record["tmux_target"], nudge_text)
+    if delivered in {"paused", "escalated"}:
+        return {"action": delivered, "record": record}
+    if delivered is False or delivered == "failed":
+        updated = dict(record)
+        updated["nudge_count"] = nudge_count + 1
+        updated["last_nudge_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {"action": "nudge_failed", "record": updated}
     updated = dict(record)
     updated["nudge_count"] = nudge_count + 1
     updated["last_nudge_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")

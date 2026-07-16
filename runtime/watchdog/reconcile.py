@@ -62,6 +62,8 @@ around a ``startup_reconcile`` call; this module does not touch the lock).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from runtime.watchdog import notify, registry, tmux_actuator
@@ -94,6 +96,10 @@ def reconcile_children(
         notify.format_reconciliation_payload
     ),
     send_alerts: Callable[..., int] = notify.send_reconciliation_alerts,
+    registry_path: Path | str | None = None,
+    lifecycle_notify: Callable[..., notify.DeliveryResult] = (
+        notify.deliver_lifecycle_notification
+    ),
     now: str | None = None,
 ) -> dict:
     """Reconcile a fanout origin's children against live tmux state.
@@ -133,25 +139,68 @@ def reconcile_children(
     """
     updated: dict[str, dict] = dict(records)
     child_ids = list(origin_record.get("children", []))
+    observed_at = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for child_id in child_ids:
         child = updated.get(child_id)
         if child is None:
             continue  # unknown child id — nothing to reconcile against
         if registry.is_terminal(child.get("state")):
+            if registry_path is not None:
+                outcome_id = registry.child_outcome_id(
+                    str(child_id), registry.child_generation(child)
+                )
+                claimed = registry.claim_child_outcome_notification(
+                    registry_path, outcome_id, now=observed_at
+                )
+                if claimed is not None:
+                    result = lifecycle_notify(notify.child_outcome_notification(claimed))
+                    registry.finish_child_outcome_notification(
+                        registry_path,
+                        outcome_id,
+                        status=result.status,
+                        attempt=int(claimed["notification_attempts"]),
+                    )
             continue  # already terminal: no re-check, no re-transition
 
         try:
-            alive = has_session(child["tmux_target"], timeout=timeout)
+            alive: bool | None = has_session(child["tmux_target"], timeout=timeout)
         except tmux_actuator.TmuxTimeoutError:
-            # A hung liveness check must not block evaluating the remaining
-            # children; retried next poll cycle.
-            continue
+            alive = None
         if alive:
             continue
 
+        if registry_path is not None:
+            outcome = registry.reap_child_lease(
+                registry_path,
+                child_id=str(child_id),
+                generation=registry.child_generation(child),
+                reachable=alive,
+                observed_at=observed_at,
+            )
+            if outcome is not None:
+                claimed = registry.claim_child_outcome_notification(
+                    registry_path, str(outcome["outcome_id"]), now=observed_at
+                )
+                if claimed is not None:
+                    # The winner is durable before this fail-open effect.
+                    result = lifecycle_notify(notify.child_outcome_notification(claimed))
+                    registry.finish_child_outcome_notification(
+                        registry_path,
+                        str(outcome["outcome_id"]),
+                        status=result.status,
+                        attempt=int(claimed["notification_attempts"]),
+                    )
+            updated = registry.read_registry(registry_path)
+            continue
+
+        if alive is None:
+            # Legacy pure-call compatibility has no durable lease authority;
+            # leave ambiguous checks untouched for a later persisted pass.
+            continue
+
         try:
-            updated[child_id] = registry.transition(child, "failed", now=now)
+            updated[child_id] = registry.transition(child, "failed", now=observed_at)
         except registry.InvalidTransitionError:
             # Raced with a concurrent transition since the read above — skip
             # rather than crash the whole reconciliation pass.
@@ -212,6 +261,10 @@ def startup_reconcile(
     for session_id, record in records.items():
         if registry.is_terminal(record.get("state")):
             continue  # already terminal — includes a prior orphaned mark
+        if record.get("parent_id") is not None:
+            # Child disappearance is resolved only by the durable lease/grace
+            # path above so startup cannot bypass outcome provenance or grace.
+            continue
 
         try:
             alive = has_session(record.get("tmux_target", ""), timeout=timeout)

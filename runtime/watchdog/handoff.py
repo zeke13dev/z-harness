@@ -5,11 +5,9 @@ INTENT describes as "external transcript measurement, judge-advised stopping
 point, then a crash-safe persisted state machine driving ``/z-handoff`` →
 ``/clear`` → resume pointer". This module is the single entry point,
 ``maybe_trigger_handoff``: given a session record and its already-measured
-context-usage percentage, it drives the record through
-``registered/running -> handoff_requested -> handoff_written -> cleared ->
-resumed`` (T003's frozen adjacency graph), persisting every step via
-``registry.write_registry`` so ``sessions.json`` shows a distinct,
-monotonically increasing ``state_changed_at`` per transition, writes
+context-usage percentage, it prepares the durable pre-host stages
+``registered/running -> handoff_requested -> handoff_written`` with fresh
+locked mutations, writes
 ``handoff.json`` to ``<record's plan_dir>/handoff.json``, and consults the
 ``watchdog_judge`` provider (T007's ``judge.dispatch_judge_verdict``) for a
 stopping-point recommendation — degrading to the mechanical fallback and
@@ -37,9 +35,8 @@ Design decisions:
   a *live* pane-readiness gate across possibly-many poll cycles, which is
   poll-loop/composition-layer work (INTENT "no daemon-loop code" scope note
   for this level) — not a single synchronous state-transition call. This
-  keeps the acceptance surface here to exactly what T010's four acceptance
-  obligations describe: the persisted state machine, ``handoff.json``, and
-  the judge-advised verdict + degrade path.
+  leaves ``cleared`` and ``resumed`` to the poll layer, which persists each
+  only after its corresponding marked host stage completes.
 - Judge prompt construction (T007's explicit non-scope item, "the level that
   wires the context-threshold state machine is the one that will define...
   that contract") lands here: ``_build_judge_prompt`` embeds the session's
@@ -54,21 +51,25 @@ Design decisions:
   "postpone" branch, so once the mechanical ``>=`` trigger fires, the full
   sequence always completes — the judge's recommendation is recorded in
   ``handoff.json`` for the resumed session to read, not used to gate
-  progression at this level.
+  progression once the marker-first host stages complete.
 - ``handoff.json`` is written via ``registry.atomic_write_json`` (STYLE.md
   WL-001 rung 2 — reuse: the same tempfile+``os.replace`` primitive
   ``sessions.json`` itself uses, registry.py:349) rather than a bespoke
   write, so a concurrent reader never observes a torn handoff pointer file
   (STYLE.md:P-006).
 - Monotonic timestamps: ``registry.transition``'s default clock
-  (``registry._iso_now()``) has one-second resolution, which four
-  back-to-back transitions in the same call can trivially tie. This module's
+  (``registry._iso_now()``) has one-second resolution, which back-to-back
+  transitions in the same call can trivially tie. This module's
   default clock (``_default_clock``) instead returns microsecond-precision
   UTC timestamps and bumps by one microsecond whenever two consecutive calls
   would otherwise collide, guaranteeing the "distinct, monotonically
   increasing ``state_changed_at`` per transition" acceptance obligation
   without a real sleep. Callers may inject their own zero-arg ``now``
   callable (e.g. for fully deterministic tests).
+- Lifecycle notifications: this legacy handoff choreography is not the
+  generation-fenced rollover authority required by criterion #7. It therefore
+  emits no ``rollover`` event; the later rollover level must hook that family
+  only after its durable fenced transfer commits.
 """
 
 from __future__ import annotations
@@ -151,6 +152,33 @@ def _build_judge_prompt(
 
 # ── entry point ───────────────────────────────────────────────────────────
 
+def rollover_coordinator(
+    registry_path: str | Path,
+    *,
+    session_id: str,
+    expected_generation: str,
+    target: str,
+    transcript_path: str,
+    now: str | None = None,
+) -> tuple[dict[str, object], bool, Path]:
+    """Transfer a coordinator without releasing its generation fence mid-flight."""
+    record = registry.read_registry(registry_path)[session_id]
+    handoff_path = Path(record["plan_dir"]) / "handoff.json"
+
+    def publish(prepared: dict[str, object]) -> None:
+        registry.atomic_write_json(handoff_path, {
+            "schema_version": registry.SCHEMA_VERSION,
+            "kind": "coordinator_rollover",
+            **prepared,
+        })
+
+    committed, replayed = registry.publish_and_commit_coordinator_rollover(
+        registry_path, session_id=session_id, expected_generation=expected_generation,
+        target=target, transcript_path=transcript_path, publish_handoff=publish, now=now,
+    )
+    return committed, replayed, handoff_path
+
+
 def maybe_trigger_handoff(
     record: dict,
     pct_used: float | None,
@@ -213,6 +241,17 @@ def maybe_trigger_handoff(
         (``"context_unknown"``, ``"below_threshold"``, or
         ``"invalid_source_state:<state>"``).
     """
+    state = record.get("state")
+    if state in {"handoff_written", "cleared"}:
+        handoff_path = Path(record["plan_dir"]) / "handoff.json"
+        return {
+            "triggered": True,
+            "record": record,
+            "reason": None,
+            "handoff_path": handoff_path,
+            "verdict": None,
+            "judge_degraded": None,
+        }
     if pct_used is None:
         return {
             "triggered": False,
@@ -222,7 +261,7 @@ def maybe_trigger_handoff(
             "verdict": None,
             "judge_degraded": None,
         }
-    if pct_used < threshold_pct:
+    if state in _TRIGGER_SOURCE_STATES and pct_used < threshold_pct:
         return {
             "triggered": False,
             "record": record,
@@ -231,7 +270,7 @@ def maybe_trigger_handoff(
             "verdict": None,
             "judge_degraded": None,
         }
-    if record.get("state") not in _TRIGGER_SOURCE_STATES:
+    if state not in _TRIGGER_SOURCE_STATES | {"handoff_requested"}:
         return {
             "triggered": False,
             "record": record,
@@ -242,15 +281,21 @@ def maybe_trigger_handoff(
         }
 
     clock = now or _default_clock()
-    sessions = registry.read_registry(registry_path)
-
     def _persist(next_state: str) -> dict:
-        updated = registry.transition(record, next_state, now=clock())
-        sessions[updated["session_id"]] = updated
-        registry.write_registry(registry_path, sessions)
+        updated: dict | None = None
+
+        def _advance(fresh: dict[str, dict]) -> None:
+            nonlocal updated
+            current = fresh.get(record["session_id"], record)
+            updated = registry.transition(current, next_state, now=clock())
+            fresh[record["session_id"]] = updated
+
+        registry.locked_registry_update(registry_path, _advance)
+        assert updated is not None
         return updated
 
-    record = _persist("handoff_requested")
+    if state in _TRIGGER_SOURCE_STATES:
+        record = _persist("handoff_requested")
 
     prompt = _build_judge_prompt(record, pct_used, threshold_pct, pane_text)
     dispatch_result = judge_dispatch(
@@ -284,8 +329,6 @@ def maybe_trigger_handoff(
     })
 
     record = _persist("handoff_written")
-    record = _persist("cleared")
-    record = _persist("resumed")
 
     return {
         "triggered": True,

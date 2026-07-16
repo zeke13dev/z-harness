@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
+from typing import Any
+
+import pytest
+
+from runtime.watchdog import planning_ingress
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 Z_PLAN_SKILL = REPO_ROOT / "skills" / "z-plan" / "SKILL.md"
+Z_PLAN_SPLIT_SKILL = REPO_ROOT / "skills" / "z-plan-split" / "SKILL.md"
 CONSULTANT_PRIMARY = REPO_ROOT / "agents" / "consultant-primary.md"
 CONSULTANT_SECONDARY = REPO_ROOT / "agents" / "consultant-secondary.md"
 GENERATE_WORKSTREAMS = REPO_ROOT / "scripts" / "generate-workstreams.py"
@@ -18,6 +26,362 @@ def index_after(text: str, needle: str, start: int = 0) -> int:
     idx = text.find(needle, start)
     assert idx != -1, f"missing marker {needle!r}"
     return idx
+
+
+def supervision_ingress_contract(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    start = index_after(text, "<!-- SUPERVISION_INGRESS_CONTRACT_START -->")
+    end = index_after(text, "<!-- SUPERVISION_INGRESS_CONTRACT_END -->", start)
+    return text[start:end]
+
+
+class RecordingWatchdogRegistry:
+    def __init__(self) -> None:
+        self.registration_calls: list[tuple[Any, ...]] = []
+
+    def locked_registry_document_update(self, *args: Any, **kwargs: Any) -> None:
+        self.registration_calls.append((*args, kwargs))
+
+
+def manifest_shape(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: manifest_shape(child) for key, child in sorted(value.items())}
+    return type(value).__name__
+
+
+def test_planning_skills_share_default_off_supervision_ingress_contract() -> None:
+    contracts = [supervision_ingress_contract(path) for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL)]
+
+    for block in contracts:
+        prose = " ".join(block.split())
+        assert "exactly one supervision choice" in block
+        assert block.count("AskUserQuestion") == 1
+        assert "off — Off (Recommended default)" in block
+        assert "In unattended/no-ask mode" in prose
+        assert "enabling supervision must not open follow-up" in prose
+        assert "leave `SUPERVISION_WAIT_TOKEN` empty without asking" in prose
+        assert "run `begin-wait` immediately before" in prose
+        assert "capture its raw answer" in prose
+        assert block.count("python3 -m runtime.watchdog.planning_ingress") == 2
+        assert "--plan-dir \"$Z_HARNESS_PLAN_DIR\"" in block
+        assert "--run \"$RUN\"" in block
+        assert "--source /z-plan" in block
+        assert "--phase " in block
+        assert "helper owns timing, normalization" in prose
+        assert "log-event.sh" not in block
+        assert "log-decision.sh" not in block
+        assert "time.monotonic_ns()" not in block
+        assert "date +%s%3N" not in block
+
+
+def test_planning_skills_delegate_shared_ingress_mechanics_instead_of_copying_them() -> None:
+    contracts = [supervision_ingress_contract(path) for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL)]
+
+    for block in contracts:
+        code = block.split("```bash", 1)[1].split("```", 1)[0]
+        assert len([line for line in code.splitlines() if line.strip()]) == 3
+        assert "SUPERVISION_WAIT_START_MS=" not in block
+        assert "if [[" not in block
+        assert "case \"$SUPERVISION_CHOICE\"" not in block
+
+
+def test_planning_skills_serialize_same_versioned_manifest_shape_without_enrollment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording_registry = RecordingWatchdogRegistry()
+    monkeypatch.setattr(
+        planning_ingress.watchdog_registry,
+        "locked_registry_document_update",
+        recording_registry.locked_registry_document_update,
+    )
+    manifests_by_choice: dict[str, list[dict[str, Any]]] = {}
+    manifest_paths: list[Path] = []
+    for choice in ("off", "supervised"):
+        choice_paths = [
+            planning_ingress.persist_supervision_manifest(
+                tmp_path / choice / path.parent.name,
+                choice,
+            )
+            for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL)
+        ]
+        manifest_paths.extend(choice_paths)
+        manifests_by_choice[choice] = [
+            json.loads(path.read_text(encoding="utf-8")) for path in choice_paths
+        ]
+
+    off_manifests = manifests_by_choice["off"]
+    supervised_manifests = manifests_by_choice["supervised"]
+    assert off_manifests[0] == off_manifests[1]
+    assert supervised_manifests[0] == supervised_manifests[1]
+    assert manifest_shape(off_manifests[0]) == manifest_shape(supervised_manifests[0])
+    off_without_enabled = {key: value for key, value in off_manifests[0].items() if key != "enabled"}
+    supervised_without_enabled = {
+        key: value for key, value in supervised_manifests[0].items() if key != "enabled"
+    }
+    assert off_without_enabled == supervised_without_enabled
+    assert off_manifests[0]["enabled"] is False
+    assert supervised_manifests[0]["enabled"] is True
+    assert off_manifests[0]["schema_version"] == supervised_manifests[0]["schema_version"] == 1
+    assert off_manifests[0]["kind"] == supervised_manifests[0]["kind"] == "watchdog-supervision"
+    assert off_manifests[0]["topology"]["kind"] == "coordinator_fanout"
+    assert all(
+        manifest["current_planning_session"] == "excluded"
+        for manifests in manifests_by_choice.values()
+        for manifest in manifests
+    )
+    assert recording_registry.registration_calls == []
+    assert all(path.read_text(encoding="utf-8").count("\n") == 1 for path in manifest_paths)
+
+
+def test_no_ask_completion_defaults_off_emits_normalized_telemetry_and_never_enrolls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording_registry = RecordingWatchdogRegistry()
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    choice, manifest_path = planning_ingress.complete_choice(
+        tmp_path,
+        "run-no-ask",
+        "/z-plan",
+        "supervision-ingress",
+        "",
+        locked_registry_mutation=recording_registry.locked_registry_document_update,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert choice == "off"
+    assert manifest["enabled"] is False
+    assert manifest["current_planning_session"] == "excluded"
+    assert recording_registry.registration_calls == []
+    assert [call[3] for call in telemetry_calls] == ["supervision_topology"]
+    assert telemetry_calls[0][-1] == "/z-plan"
+
+
+def test_wait_end_requires_and_consumes_matching_begin_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    token = planning_ingress.begin_choice_wait(tmp_path, "run-interactive", "1f")
+    planning_ingress.complete_choice(
+        tmp_path,
+        "run-interactive",
+        "/z-plan-split",
+        "1f",
+        "supervised",
+        token,
+    )
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        planning_ingress.complete_choice(
+            tmp_path,
+            "run-interactive",
+            "/z-plan-split",
+            "1f",
+            "off",
+            token,
+        )
+
+    assert token
+    assert [call[3] for call in telemetry_calls] == [
+        "user_wait_start",
+        "user_wait_end",
+        "supervision_topology",
+    ]
+    assert not list(tmp_path.glob(f"{planning_ingress.WAIT_TOKEN_PREFIX}*"))
+
+
+def test_unverified_wait_token_never_emits_wait_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        planning_ingress.complete_choice(
+            tmp_path,
+            "run-forged",
+            "/z-plan",
+            "supervision-ingress",
+            "off",
+            "forged-positive-looking-token",
+        )
+
+    assert telemetry_calls == []
+
+
+def test_forged_token_cannot_consume_valid_wait_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    token = planning_ingress.begin_choice_wait(tmp_path, "run-valid", "1f")
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        planning_ingress.complete_choice(
+            tmp_path,
+            "run-valid",
+            "/z-plan-split",
+            "1f",
+            "off",
+            "A" * 24,
+        )
+    planning_ingress.complete_choice(
+        tmp_path,
+        "run-valid",
+        "/z-plan-split",
+        "1f",
+        "off",
+        token,
+    )
+
+    assert [call[3] for call in telemetry_calls].count("user_wait_end") == 1
+
+
+def test_wait_token_is_claimed_once_under_concurrent_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    token = planning_ingress.begin_choice_wait(tmp_path, "run-race", "1f")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                planning_ingress.complete_choice,
+                tmp_path,
+                "run-race",
+                "/z-plan-split",
+                "1f",
+                "off",
+                token,
+            )
+            for _ in range(2)
+        ]
+        results = []
+        errors = []
+        for future in futures:
+            try:
+                results.append(future.result())
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    assert [call[3] for call in telemetry_calls].count("user_wait_end") == 1
+    assert len(results) == len(errors) == 1
+    assert errors == ["invalid or consumed supervision wait token"]
+
+
+def test_mismatched_context_cannot_consume_valid_wait_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    token = planning_ingress.begin_choice_wait(tmp_path, "run-valid", "1f")
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        planning_ingress.complete_choice(
+            tmp_path,
+            "run-other",
+            "/z-plan-split",
+            "1f",
+            "off",
+            token,
+        )
+    planning_ingress.complete_choice(
+        tmp_path,
+        "run-valid",
+        "/z-plan-split",
+        "1f",
+        "supervised",
+        token,
+    )
+
+    assert [call[3] for call in telemetry_calls].count("user_wait_end") == 1
+    assert json.loads(
+        (tmp_path / planning_ingress.MANIFEST_NAME).read_text(encoding="utf-8")
+    )["enabled"] is True
+
+
+def test_consumed_token_replay_cannot_overwrite_manifest_or_emit_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    telemetry_calls: list[list[str]] = []
+
+    def record_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        telemetry_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", record_telemetry)
+    token = planning_ingress.begin_choice_wait(tmp_path, "run-replay", "1f")
+    planning_ingress.complete_choice(
+        tmp_path,
+        "run-replay",
+        "/z-plan-split",
+        "1f",
+        "supervised",
+        token,
+    )
+    calls_after_success = list(telemetry_calls)
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        planning_ingress.complete_choice(
+            tmp_path,
+            "run-replay",
+            "/z-plan-split",
+            "1f",
+            "off",
+            token,
+        )
+
+    assert telemetry_calls == calls_after_success
+    assert json.loads(
+        (tmp_path / planning_ingress.MANIFEST_NAME).read_text(encoding="utf-8")
+    )["enabled"] is True
+
+
+def test_telemetry_failure_is_fail_open_for_manifest_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_telemetry(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise OSError("telemetry unavailable")
+
+    monkeypatch.setattr(planning_ingress.subprocess, "run", fail_telemetry)
+    choice, manifest_path = planning_ingress.complete_choice(
+        tmp_path,
+        "run-fail-open",
+        "/z-plan-split",
+        "1f",
+        "supervised — displayed label",
+    )
+
+    assert choice == "supervised"
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["enabled"] is True
 
 
 def test_mode_gate_precedes_hard_cost_gate() -> None:

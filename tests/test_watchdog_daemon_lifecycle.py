@@ -37,7 +37,15 @@ from pathlib import Path
 
 import pytest
 
-from runtime.watchdog import daemon, registry, tmux_actuator
+from runtime.watchdog import daemon, notify, registry, tmux_actuator
+
+
+def test_daemon_exports_only_deterministic_lifecycle_actions() -> None:
+    assert daemon.DETERMINISTIC_ACTION_ALLOWLIST == frozenset({
+        "clear", "coordinator_wake", "escalation", "handoff", "nudge",
+    })
+    assert "judge" not in daemon.DETERMINISTIC_ACTION_ALLOWLIST
+    assert "reconcile_semantics" not in daemon.DETERMINISTIC_ACTION_ALLOWLIST
 
 
 @pytest.fixture(autouse=True)
@@ -136,6 +144,18 @@ def test_touch_heartbeat_creates_file_and_advances_mtime(tmp_path: Path) -> None
     second_mtime = heartbeat.stat().st_mtime
 
     assert second_mtime > first_mtime
+
+
+def test_touch_heartbeat_persists_one_incarnation_across_readiness_updates(
+    tmp_path: Path,
+) -> None:
+    heartbeat = tmp_path / "heartbeat"
+    incarnation_id = daemon.new_incarnation_id()
+
+    daemon.touch_heartbeat(heartbeat, incarnation_id)
+    daemon.touch_heartbeat(heartbeat, incarnation_id)
+
+    assert daemon.read_incarnation_id(heartbeat) == incarnation_id
 
 
 # ── run_lifecycle ──────────────────────────────────────────────────────────────
@@ -432,3 +452,284 @@ def test_run_poll_pass_skips_session_on_capture_pane_failure(tmp_path: Path) -> 
 
     assert len(poll_session.calls) == 1
     assert poll_session.calls[0][0][0]["session_id"] == live2["session_id"]
+
+
+def test_intervention_notification_failure_occurs_after_durable_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry_path, live, _live2 = _poll_pass_fixture(tmp_path)
+    sessions = {live["session_id"]: live}
+    registry.write_registry(registry_path, sessions)
+    monkeypatch.setattr(tmux_actuator, "submit_text", lambda target, text: True)
+    observed: list[str] = []
+
+    def lifecycle_notify(event):
+        markers = registry.read_registry_document(registry_path)["action_markers"]
+        assert markers
+        assert next(iter(markers.values()))["status"] == "completed"
+        observed.append(event.event_id)
+        return notify.DeliveryResult(
+            status="failed",
+            event_id=event.event_id,
+            delivery_class=event.delivery_class,
+        )
+
+    def dispatching_poll(record, current, *, dispatch_action, **_kwargs):
+        dispatched = dispatch_action(
+            registry_path,
+            session_id=record["session_id"],
+            action="nudge",
+            generation=record["last_seen"],
+            attempt=1,
+            max_attempts=1,
+            target=record["tmux_target"],
+            text=tmux_actuator.NUDGE_TEXT,
+            host_ready=True,
+        )
+        assert dispatched["status"] == "completed"
+        assert dispatched["notification"].status == "failed"
+        return {"sessions": current}
+
+    result = daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=lambda key: 1,
+        capture_pane=lambda target: "ready",
+        poll_session=dispatching_poll,
+        lifecycle_notify=lifecycle_notify,
+    )
+
+    assert observed
+    assert result[live["session_id"]]["state"] == "running"
+    marker = next(iter(registry.read_registry_document(registry_path)["action_markers"].values()))
+    assert marker["notification_status"] == "failed"
+    signal = json.loads((tmp_path / "signals.jsonl").read_text(encoding="utf-8"))
+    assert signal["kind"] == "lifecycle_notification_delivery"
+    assert signal["payload"]["status"] == "failed"
+
+
+def test_completed_marker_replay_does_not_redeliver_intervention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry_path, live, _live2 = _poll_pass_fixture(tmp_path)
+    sessions = {live["session_id"]: live}
+    registry.write_registry(registry_path, sessions)
+    monkeypatch.setattr(tmux_actuator, "submit_text", lambda target, text: True)
+    delivered: list[str] = []
+
+    def lifecycle_notify(event):
+        delivered.append(event.event_id)
+        return notify.DeliveryResult(
+            status="delivered",
+            event_id=event.event_id,
+            delivery_class=event.delivery_class,
+        )
+
+    def replaying_poll(record, current, *, dispatch_action, **_kwargs):
+        request = {
+            "session_id": record["session_id"],
+            "action": "nudge",
+            "generation": record["last_seen"],
+            "attempt": 1,
+            "max_attempts": 1,
+            "target": record["tmux_target"],
+            "text": tmux_actuator.NUDGE_TEXT,
+            "host_ready": True,
+        }
+        first = dispatch_action(registry_path, **request)
+        replay = dispatch_action(registry_path, **request)
+        assert "notification" in first
+        assert "notification" not in replay
+        return {"sessions": current}
+
+    daemon.run_poll_pass(
+        sessions,
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=lambda key: 1,
+        capture_pane=lambda target: "ready",
+        poll_session=replaying_poll,
+        lifecycle_notify=lifecycle_notify,
+    )
+
+    assert len(delivered) == 1
+
+
+def test_poll_pass_retries_durable_wake_notification_with_stable_id(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    registry.write_registry(registry_path, {})
+    action_id = "wake-action-retry"
+
+    def _seed(document):
+        document["action_markers"][action_id] = {
+            "registry_version": registry.REGISTRY_VERSION,
+            "action": "coordinator_wake",
+            "session_id": "coordinator-1",
+            "generation": "generation-1",
+            "attempt": 1,
+            "status": "completed",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+
+    registry.locked_registry_document_update(registry_path, _seed)
+    event = notify.lifecycle_notification(
+        "coordinator_wake", {"action_id": action_id}, "wake", "first"
+    )
+    assert notify.claim_action_notification(registry_path, action_id, event)
+    notify.finish_action_notification(
+        registry_path,
+        action_id,
+        notify.DeliveryResult("failed", event.event_id, notify.RETRYABLE),
+    )
+    seen: list[str] = []
+
+    def delivered(retry_event):
+        seen.append(retry_event.event_id)
+        return notify.DeliveryResult(
+            "delivered", retry_event.event_id, retry_event.delivery_class
+        )
+
+    daemon.run_poll_pass(
+        {},
+        registry_path=registry_path,
+        signals_path=tmp_path / "signals.jsonl",
+        repo_root=tmp_path,
+        adapter_for_host=lambda host: object(),
+        get_config_int=lambda key: 1,
+        lifecycle_notify=delivered,
+    )
+
+    marker = registry.read_registry_document(registry_path)["action_markers"][action_id]
+    assert seen == [event.event_id]
+    assert marker["notification_status"] == "delivered"
+    assert marker["notification_attempts"] == 2
+
+
+def test_pending_join_wake_retries_across_passes_until_generation_fenced_ack(
+    tmp_path: Path,
+) -> None:
+    """Criterion #6: host delivery is at least once while logical ack is once."""
+    registry_path = tmp_path / "sessions.json"
+    signals_path = tmp_path / "signals.jsonl"
+    parent = registry.new_session_record(
+        "root", "/plans/root", "claude", "zw-root", "",
+        session_id="ws-root", now="2026-07-14T10:00:00Z",
+    )
+    parent = registry.transition(parent, "awaiting_children", now="2026-07-14T10:01:00Z")
+    child = registry.new_session_record(
+        "child", "/plans/child", "claude", "zw-child", "",
+        session_id="ws-child", parent_id="ws-root", report_capability="cap",
+        now="2026-07-14T10:00:00Z",
+    )
+    child = registry.transition(child, "running", now="2026-07-14T10:00:01Z")
+    parent["children"] = ["ws-child"]
+    registry.write_registry(registry_path, {"ws-root": parent, "ws-child": child})
+    registry.locked_registry_update(registry_path, lambda _sessions: None)
+    registry.seal_group(registry_path, registry.group_id_for("ws-root"))
+    registry.report_child_outcome(
+        registry_path, child_id="ws-child", generation=registry.child_generation(child),
+        reporter_id="ws-child", report_capability="cap", state="failed",
+        evidence={"reason": "test"},
+    )
+    outbox = next(iter(registry.read_registry_document(registry_path)["outbox"].values()))
+    calls: list[str] = []
+
+    def dispatch(_path, **kwargs):
+        calls.append(kwargs["text"])
+        if len(calls) == 1:
+            raise tmux_actuator.TmuxTimeoutError("delivery outcome unknown")
+        return {"status": "completed", "action_id": "action-2", "attempt": 2}
+
+    disabled = notify.DeliveryResult(
+        status="disabled", event_id="ignored", delivery_class=notify.RETRYABLE,
+    )
+    first_results = daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, dispatch_action=dispatch,
+        lifecycle_notify=lambda _event: disabled,
+    )
+    daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, dispatch_action=dispatch,
+        lifecycle_notify=lambda _event: disabled,
+    )
+    durable = registry.read_registry_document(registry_path)["outbox"][outbox["outbox_id"]]
+    assert first_results[0]["status"] == "paused"
+    assert len(calls) == 2 and calls[0] == calls[1] == outbox["text"]
+    assert durable["delivery_attempts"] == 2
+
+    registry.acknowledge_join_wake(
+        registry_path, outbox["outbox_id"],
+        coordinator_generation=outbox["coordinator_generation"],
+    )
+    daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, dispatch_action=dispatch,
+        lifecycle_notify=lambda _event: disabled,
+    )
+    assert len(calls) == 2
+
+
+def test_pending_join_wake_escalates_at_stable_configured_attempt_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wake retries inject at least once, then exhaust one stable cap."""
+    registry_path = tmp_path / "sessions.json"
+    signals_path = tmp_path / "signals.jsonl"
+    parent = registry.new_session_record(
+        "root", "/plans/root", "claude", "zw-root", "",
+        session_id="ws-root", now="2026-07-14T10:00:00Z",
+    )
+    parent = registry.transition(parent, "awaiting_children", now="2026-07-14T10:01:00Z")
+    child = registry.new_session_record(
+        "child", "/plans/child", "claude", "zw-child", "",
+        session_id="ws-child", parent_id="ws-root", report_capability="cap",
+        now="2026-07-14T10:00:00Z",
+    )
+    child = registry.transition(child, "running", now="2026-07-14T10:00:01Z")
+    parent["children"] = ["ws-child"]
+    registry.write_registry(registry_path, {"ws-root": parent, "ws-child": child})
+    registry.locked_registry_update(registry_path, lambda _sessions: None)
+    registry.seal_group(registry_path, registry.group_id_for("ws-root"))
+    registry.report_child_outcome(
+        registry_path, child_id="ws-child", generation=registry.child_generation(child),
+        reporter_id="ws-child", report_capability="cap", state="failed",
+        evidence={"reason": "test"},
+    )
+    outbox = next(iter(registry.read_registry_document(registry_path)["outbox"].values()))
+    monkeypatch.setattr(tmux_actuator, "submit_text", lambda _target, _text: False)
+    disabled = notify.DeliveryResult(
+        status="disabled", event_id="ignored", delivery_class=notify.RETRYABLE,
+    )
+
+    first = daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, max_attempts=2,
+        lifecycle_notify=lambda _event: disabled,
+    )
+    second = daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, max_attempts=2,
+        lifecycle_notify=lambda _event: disabled,
+    )
+    exhausted = daemon.deliver_pending_join_wakes(
+        registry_path, signals_path, max_mb=1, max_attempts=2,
+        lifecycle_notify=lambda _event: disabled,
+    )
+
+    assert [first[0]["status"], second[0]["status"], exhausted[0]["status"]] == [
+        "failed", "escalated", "escalated",
+    ]
+    assert [first[0]["attempt"], second[0]["attempt"], exhausted[0]["attempt"]] == [
+        1, 2, 3,
+    ]
+    document = registry.read_registry_document(registry_path)
+    marker_statuses = [
+        marker["status"] for marker in document["action_markers"].values()
+        if marker["session_id"] == "ws-root"
+    ]
+    assert marker_statuses.count("failed") == 2
+    assert marker_statuses.count("escalated") == 1
+    assert document["outbox"][outbox["outbox_id"]]["delivery_attempts"] == 3

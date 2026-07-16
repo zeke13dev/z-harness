@@ -20,11 +20,30 @@ tmux session is created.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from runtime.watchdog import tmux_actuator as ta
+from runtime.watchdog import registry, tmux_actuator as ta
+
+_WAKE_GENERATION = "coordinator:v1:coordinator-1:1"
+_WAKE_OUTBOX_ID = f"wake:v1:{'a' * 64}"
+_WAKE_TEXT = (
+    "fanout 'root' children all terminal (automated watchdog):\n"
+    f"watchdog_ack outbox_id={_WAKE_OUTBOX_ID} "
+    f"coordinator_generation={_WAKE_GENERATION}\n"
+    "- zw-child: done"
+)
+
+
+def _seed_wake_authority(registry_path: Path) -> None:
+    record = registry.new_session_record(
+        "root", str(registry_path.parent), "claude", "zw-coordinator-1", "",
+        session_id="coordinator-1", now="1",
+    )
+    record = registry.transition(record, "awaiting_children", now="7")
+    registry.write_registry(registry_path, {record["session_id"]: record})
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -216,3 +235,275 @@ def test_capture_pane_uses_default_timeout_when_unspecified(monkeypatch: pytest.
     ta.capture_pane("zw-t-1")
     _argv, kwargs = fake.calls[0]
     assert kwargs["timeout"] == ta.DEFAULT_TIMEOUT_S
+
+
+# ── deterministic daemon action boundary ────────────────────────────────────
+
+def test_lifecycle_action_marker_is_durable_before_side_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    _seed_wake_authority(registry_path)
+    observed: list[dict[str, dict]] = []
+
+    def effect(target: str, text: str) -> bool:
+        observed.append(registry.read_registry_document(registry_path)["action_markers"])
+        return True
+
+    monkeypatch.setattr(ta, "submit_text", effect)
+
+    result = ta.dispatch_lifecycle_action(
+        registry_path,
+        session_id="coordinator-1",
+        action="coordinator_wake",
+        generation=_WAKE_GENERATION,
+        attempt=1,
+        max_attempts=2,
+        target="zw-coordinator-1",
+        text=_WAKE_TEXT,
+        now="2026-07-14T19:00:00Z",
+    )
+
+    assert result["status"] == "completed"
+    assert observed[0][result["action_id"]]["status"] == "prepared"
+    persisted = registry.read_registry_document(registry_path)["action_markers"]
+    assert persisted[result["action_id"]]["status"] == "completed"
+
+
+def test_unknown_or_semantic_action_cannot_dispatch_or_mutate(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    effects: list[str] = []
+
+    with pytest.raises(ta.LifecycleActionRejectedError):
+        ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id="coordinator-1",
+            action="implement_change",
+            generation=_WAKE_GENERATION,
+            attempt=1,
+            max_attempts=1,
+            target="zw-coordinator-1",
+            text="implement",
+        )
+
+    assert effects == []
+    assert not registry_path.exists()
+
+
+def test_ambiguous_intent_or_host_state_pauses_without_mutation(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    for intent_confirmed, host_ready in ((False, True), (True, False)):
+        result = ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id="coordinator-1",
+            action="nudge",
+            generation="episode-1",
+            attempt=1,
+            max_attempts=2,
+            target="zw-coordinator-1",
+            text=ta.NUDGE_TEXT,
+            intent_confirmed=intent_confirmed,
+            host_ready=host_ready,
+        )
+        assert result["status"] == "paused"
+    assert not registry_path.exists()
+
+
+def test_restart_pauses_prepared_action_instead_of_repeating_side_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    _seed_wake_authority(registry_path)
+
+    def ambiguous_effect(target: str, text: str) -> None:
+        raise ta.TmuxTimeoutError("delivery outcome unknown")
+
+    monkeypatch.setattr(ta, "submit_text", ambiguous_effect)
+
+    with pytest.raises(ta.TmuxTimeoutError):
+        ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id="coordinator-1",
+            action="coordinator_wake",
+            generation=_WAKE_GENERATION,
+            attempt=1,
+            max_attempts=2,
+            target="zw-coordinator-1",
+            text=_WAKE_TEXT,
+        )
+
+    monkeypatch.setattr(
+        ta, "submit_text", lambda target, text: pytest.fail(
+            "restart repeated an ambiguous wake"
+        ),
+    )
+    result = ta.dispatch_lifecycle_action(
+        registry_path,
+        session_id="coordinator-1",
+        action="coordinator_wake",
+        generation=_WAKE_GENERATION,
+        attempt=1,
+        max_attempts=2,
+        target="zw-coordinator-1",
+        text=_WAKE_TEXT,
+    )
+    assert result["status"] == "paused"
+
+
+def test_later_attempt_pauses_while_prior_generation_marker_is_prepared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Criterion #6: timeout ambiguity fences every later wake attempt."""
+    registry_path = tmp_path / "sessions.json"
+    _seed_wake_authority(registry_path)
+
+    def _timeout(_target: str, _text: str) -> bool:
+        raise ta.TmuxTimeoutError("delivery outcome unknown")
+
+    monkeypatch.setattr(ta, "submit_text", _timeout)
+    with pytest.raises(ta.TmuxTimeoutError):
+        ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id="coordinator-1",
+            action="coordinator_wake",
+            generation=_WAKE_GENERATION,
+            attempt=1,
+            max_attempts=2,
+            target="zw-coordinator-1",
+            text=_WAKE_TEXT,
+        )
+
+    monkeypatch.setattr(
+        ta, "submit_text", lambda *_args: pytest.fail("attempt 2 bypassed pause")
+    )
+    paused = ta.dispatch_lifecycle_action(
+        registry_path,
+        session_id="coordinator-1",
+        action="coordinator_wake",
+        generation=_WAKE_GENERATION,
+        attempt=2,
+        max_attempts=2,
+        target="zw-coordinator-1",
+        text=_WAKE_TEXT,
+    )
+    assert paused["status"] == "paused"
+    assert paused["attempt"] == 1
+
+
+def test_exhausted_bounded_attempts_persist_explicit_escalation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    _seed_wake_authority(registry_path)
+    calls: list[tuple[str, str]] = []
+
+    def fail(target: str, text: str) -> bool:
+        calls.append((target, text))
+        return False
+
+    monkeypatch.setattr(ta, "submit_text", fail)
+
+    first = ta.dispatch_lifecycle_action(
+        registry_path,
+        session_id="coordinator-1",
+        action="coordinator_wake",
+        generation=_WAKE_GENERATION,
+        attempt=None,
+        max_attempts=2,
+        target="zw-coordinator-1",
+        text=_WAKE_TEXT,
+    )
+    second = ta.dispatch_lifecycle_action(
+        registry_path,
+        session_id="coordinator-1",
+        action="coordinator_wake",
+        generation=_WAKE_GENERATION,
+        attempt=None,
+        max_attempts=2,
+        target="zw-coordinator-1",
+        text=_WAKE_TEXT,
+    )
+
+    assert first["status"] == "failed"
+    assert first["attempt"] == 1
+    assert second["status"] == "escalated"
+    assert second["attempt"] == 2
+    assert len(calls) == 2
+    markers = registry.read_registry_document(registry_path)["action_markers"]
+    assert sum(marker["status"] == "failed" for marker in markers.values()) == 2
+    assert sum(marker["status"] == "escalated" for marker in markers.values()) == 1
+
+
+def test_allowlisted_action_rejects_arbitrary_effect_callable(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        ta.dispatch_lifecycle_action(
+            tmp_path / "sessions.json",
+            session_id="coordinator-1",
+            action="nudge",
+            generation="episode-1",
+            attempt=1,
+            max_attempts=1,
+            target="zw-coordinator-1",
+            text=ta.NUDGE_TEXT,
+            effect=lambda: True,
+        )
+
+
+def test_allowlisted_action_rejects_semantic_text_without_mutation(tmp_path: Path) -> None:
+    registry_path = tmp_path / "sessions.json"
+    with pytest.raises(ta.LifecycleActionRejectedError):
+        ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id="coordinator-1",
+            action="nudge",
+            generation="episode-1",
+            attempt=1,
+            max_attempts=1,
+            target="zw-coordinator-1",
+            text="implement the pending task",
+        )
+    assert not registry_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("session_id", "target", "generation", "state"),
+    [
+        ("missing", "zw-coordinator-1", _WAKE_GENERATION, "awaiting_children"),
+        ("coordinator-1", "zw-other", _WAKE_GENERATION, "awaiting_children"),
+        ("coordinator-1", "zw-coordinator-1", "6", "awaiting_children"),
+        ("coordinator-1", "zw-coordinator-1", _WAKE_GENERATION, "running"),
+    ],
+)
+def test_action_rejects_non_authoritative_target_generation_or_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_id: str,
+    target: str,
+    generation: str,
+    state: str,
+) -> None:
+    registry_path = tmp_path / "sessions.json"
+    _seed_wake_authority(registry_path)
+    if state == "running":
+        document = registry.read_registry_document(registry_path)
+        document["sessions"]["coordinator-1"]["state"] = "running"
+        registry.write_registry(
+            registry_path, document["sessions"],
+        )
+    monkeypatch.setattr(
+        ta, "submit_text", lambda *_args: pytest.fail("rejected action dispatched"),
+    )
+
+    with pytest.raises(ta.LifecycleActionRejectedError):
+        ta.dispatch_lifecycle_action(
+            registry_path,
+            session_id=session_id,
+            action="coordinator_wake",
+            generation=generation,
+            attempt=1,
+            max_attempts=2,
+            target=target,
+            text=_WAKE_TEXT,
+        )
+
+    assert registry.read_registry_document(registry_path)["action_markers"] == {}
