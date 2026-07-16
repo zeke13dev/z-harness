@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-16
+
+- _(auto)_ Add supervised planning lifecycle _(watchdog)_
+
 ## 2026-07-12
 
 - _(auto)_ Skill-corpus overhaul phase 1 — delete 10 skills, excise personas, rewrite 6 skills on SKILL-STYLE.md _(skills)_
