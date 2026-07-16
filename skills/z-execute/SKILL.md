@@ -21,6 +21,25 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
+Outcome telemetry uses one fail-closed adapter. Callers pass only normalized enums, counts, and
+opaque task/finding IDs; the helper rejects every other field before `log-event.sh` sees it.
+Emission is best-effort and never changes dispatch or review control flow:
+
+```bash
+log_execute_efficiency_event() {
+  local event_kind="$1" payload="$2" event_scope="$3" normalized
+  normalized="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-execute-efficiency-event.py" \
+    "$event_kind" "$payload" 2>/dev/null)" || return 0
+  [ "$event_scope" = "orchestration" ] || event_scope="tasks/$event_scope"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$event_scope" execute_efficiency "$normalized" 2>/dev/null || true
+}
+```
+
+Never pass prompts, reviewer text, tool arguments/results, environment data, secrets, or paths to
+this adapter. The helper's exact event schemas are the telemetry contract; do not spread an
+existing result object into them.
+
 ## Hermes-managed mode (HERMES_MARKER_FILE)
 
 When env var `HERMES_MARKER_FILE` is set the session is driven by the hermes watcher (remote-control). In this mode:
@@ -162,6 +181,7 @@ with `|| true` and does NOT add a misleading `|| log` (that would be dead code, 
 subcommand returns 0 by design).
 
 ```
+log_execute_efficiency_event subagent_dispatch '{"role":"scope_extractor","count":1}' orchestration
 Agent(
   subagent_type="scope-extractor",
   description="Scope for /z-execute overlap scan",
@@ -790,6 +810,7 @@ print(m.group(1).strip() if m else '')
     # Dispatch the task-tree-generator agent to append known work and refresh
     # the TASKS.md implementation projection for the current scheduler frontier.
     # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user. -->
+    log_execute_efficiency_event subagent_dispatch '{"role":"task_tree_generator","count":1}' orchestration
     GENERATOR_RETURN="$(Agent(
       subagent_type="task-tree-generator",
       description="Generate BFS level ${CURRENT_LEVEL} task batch",
@@ -964,6 +985,31 @@ PYEOF
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
         "orchestration" intent_generation_exclusion_failed \
         "$(python3 -c 'import json,sys; print(json.dumps({"level":int(sys.argv[2]),"result":json.load(open(sys.argv[1]))},sort_keys=True))' "$INTENT_GENERATION_EXCLUSION_RESULT" "$CURRENT_LEVEL" 2>/dev/null || echo '{"result":"unreadable"}')" 2>/dev/null || true
+      # GENERATION-PREFLIGHT-REJECTION-TELEMETRY-BEGIN
+      while IFS= read -r EXECUTE_EFFICIENCY_PAYLOAD; do
+        [ -n "$EXECUTE_EFFICIENCY_PAYLOAD" ] || continue
+        PREFLIGHT_TASK_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", "orchestration"))' "$EXECUTE_EFFICIENCY_PAYLOAD")"
+        log_execute_efficiency_event preflight_rejection "$EXECUTE_EFFICIENCY_PAYLOAD" "$PREFLIGHT_TASK_ID"
+      done < <(python3 -c '
+import json, re, sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+counts = {}
+for error in result.get("errors", []):
+    if not isinstance(error, dict) or not isinstance(error.get("code"), str):
+        continue
+    reason = error["code"].lower()
+    task_id = error.get("id") if re.fullmatch(r"T\d{3}", str(error.get("id", ""))) else None
+    key = (reason, task_id)
+    counts[key] = counts.get(key, 0) + 1
+for (reason, task_id), count in sorted(counts.items(), key=lambda item: (item[0][0], item[0][1] or "")):
+    payload = {"outcome": "rejected", "reason": reason, "count": count}
+    if task_id is not None:
+        payload["task_id"] = task_id
+    print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+' "$INTENT_GENERATION_EXCLUSION_RESULT"
+      )
+      # GENERATION-PREFLIGHT-REJECTION-TELEMETRY-END
       RB_HALT_REASON="generated INTENT artifact violates hard exclusions at scheduler depth ${CURRENT_LEVEL}"
       # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
@@ -1428,6 +1474,7 @@ PYEOF
       # instead of deriving `<slug>/<task-id>`, and forwards it to
       # remote-sandbox-sync.sh as `--sandbox-key` (see agents/remote-runner.md).
       # `level` is optional/informational context for the runner.
+      log_execute_efficiency_event subagent_dispatch '{"role":"remote_runner","count":1}' orchestration
       LEVEL_REMOTE_RETURN="$(Agent(
         subagent_type="remote-runner",
         description="Remote verify BFS level ${CURRENT_LEVEL}",
@@ -1928,6 +1975,7 @@ execute_clear_checkpoint_protocol() {
     export Z_SESSION_MAX_CHARS
     # Dispatch context-curator synchronously.
     # The Agent() call blocks until the curator returns its STATUS line.
+    log_execute_efficiency_event subagent_dispatch '{"role":"context_curator","count":1}' orchestration
     CURATOR_RETURN="$(Agent(
       subagent_type="context-curator",
       description="Context curation at clear checkpoint",
@@ -2312,6 +2360,31 @@ if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-dis
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "orchestration" intent_dispatch_preflight_failed \
     "$(python3 -c 'import json,sys; print(json.dumps({"level":int(sys.argv[2]),"result":json.load(open(sys.argv[1]))},sort_keys=True))' "$INTENT_PREFLIGHT_RESULT" "$CURRENT_LEVEL" 2>/dev/null || echo '{"result":"unreadable"}')" 2>/dev/null || true
+  # SELECTED-BATCH-PREFLIGHT-REJECTION-TELEMETRY-BEGIN
+  while IFS= read -r EXECUTE_EFFICIENCY_PAYLOAD; do
+    [ -n "$EXECUTE_EFFICIENCY_PAYLOAD" ] || continue
+    PREFLIGHT_TASK_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", "orchestration"))' "$EXECUTE_EFFICIENCY_PAYLOAD")"
+    log_execute_efficiency_event preflight_rejection "$EXECUTE_EFFICIENCY_PAYLOAD" "$PREFLIGHT_TASK_ID"
+  done < <(python3 -c '
+import json, re, sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+counts = {}
+for error in result.get("errors", []):
+    if not isinstance(error, dict) or not isinstance(error.get("code"), str):
+        continue
+    reason = error["code"].lower()
+    task_id = error.get("id") if re.fullmatch(r"T\d{3}", str(error.get("id", ""))) else None
+    key = (reason, task_id)
+    counts[key] = counts.get(key, 0) + 1
+for (reason, task_id), count in sorted(counts.items(), key=lambda item: (item[0][0], item[0][1] or "")):
+    payload = {"outcome": "rejected", "reason": reason, "count": count}
+    if task_id is not None:
+        payload["task_id"] = task_id
+    print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+' "$INTENT_PREFLIGHT_RESULT"
+  )
+  # SELECTED-BATCH-PREFLIGHT-REJECTION-TELEMETRY-END
   LEVEL_EXECUTE_RC=1
   LEVEL_EXECUTE_HALT_REASON="INTENT dispatch preflight failed at scheduler depth ${CURRENT_LEVEL}"
   return 1
@@ -2623,6 +2696,7 @@ PYEOF
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The spec-precheck catches spec-drift before implementation; drivers that skip it should warn the user that spec validation is unavailable. -->
 ```
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"spec_precheck","count":1}' '<task-id>'
 Agent(
   subagent_type="spec-precheck",
   description="Spec precheck <task-id>",
@@ -2663,6 +2737,7 @@ The implementer runs as the native Claude `implementer` subagent — model and r
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The implementer subagent performs all code edits; drivers that skip it must warn the user that task implementation has been bypassed. -->
 ```
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"implementer","count":1}' '<task-id>'
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
@@ -2752,6 +2827,7 @@ if [ "${LEVEL_EXECUTE_ACTIVE:-0}" -eq 0 ]; then
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The remote-runner verifies the build on the remote host; drivers that skip it should treat REMOTE_VERIFY tasks as unable_to_complete. -->
 ```
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"remote_runner","count":1}' '<task-id>'
 Agent(
   subagent_type="remote-runner",
   description="Remote verify <task-id>",
@@ -2943,6 +3019,7 @@ TASK_BLOCK_FOR_DRIFT="$(printf '%s' "$TASK_BLOCK" | grep -v '^\*\*Complexity:\*\
 
 ```
 # Dispatch inside the if block — only when runtime.impl_pre_review=true
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"complexity_classifier","count":1}' '<task-id>'
 Agent(
   subagent_type="complexity-classifier",
   description="Tier-drift re-check for <task-id>",
@@ -3000,6 +3077,7 @@ Probe whether the Flash (pre-reviewer) provider is available:
 When Flash is available, dispatch the pre-reviewer on the task diff:
 
 ```
+    log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"pre_reviewer","count":1}' '<task-id>'
     Agent(
       subagent_type="pre-reviewer",
       description="Flash pre-review (gate-down) for <task-id>",
@@ -3107,6 +3185,7 @@ If `REVIEWER_PROVIDER == "none"` (i.e. `runtime.consult = "off"` in config): ski
   ```
 - Spawn a dedicated self-review subagent (read-only — no Edit/Write tools, no resolve-provider call):
   ```
+  log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"self_reviewer","count":1}' '<task-id>'
   Agent(
     subagent_type="self-reviewer",
     description="Self-review (consult=off) <task-id>",
@@ -3127,6 +3206,7 @@ Otherwise (consult=on), spawn the external reviewer:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The reviewer is the correctness gate; drivers that skip it must warn the user that Codex review has been bypassed. -->
 ```
+  log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"reviewer","count":1}' '<task-id>'
   Agent(
     subagent_type="reviewer",
     description="Codex review <task-id>",
@@ -3181,6 +3261,26 @@ result = json.load(open(path, encoding="utf-8"))
 open(path + ".md", "w", encoding="utf-8").write(result["artifact_markdown"])
 PYEOF
 PREVIOUS_FINDINGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["current_findings"]))' "$TASK_ARCHIVE/review-findings-semantic-v$SEMANTIC_REVIEW_ROUND.json")"
+while IFS= read -r EXECUTE_EFFICIENCY_PAYLOAD; do
+  [ -n "$EXECUTE_EFFICIENCY_PAYLOAD" ] || continue
+  log_execute_efficiency_event finding_transition "$EXECUTE_EFFICIENCY_PAYLOAD" "<task-id>"
+done < <(python3 - "$TASK_ARCHIVE/review-findings-semantic-v$SEMANTIC_REVIEW_ROUND.json" <<'PYEOF'
+import json, sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+task_id = state["task_id"]
+transitions = state["prior_findings"] + [
+    finding for finding in state["current_findings"] if finding["disposition"] == "new"
+]
+for finding in transitions:
+    print(json.dumps({
+        "task_id": task_id,
+        "finding_id": finding["id"],
+        "outcome": finding["disposition"],
+        "count": 1,
+    }, separators=(",", ":"), sort_keys=True))
+PYEOF
+)
 ```
 
 Every later reviewer or consult-off self-review receives the latest
@@ -3213,7 +3313,20 @@ existing step-7a deep retry implementer is dispatched. These variables must neve
 from one another. In particular, the post-surgical review does not increment `CYCLE`, consume the
 normal retry allowance, or set `NORMAL_DEEP_RETRY_USED`.
 
+At that eligibility decision, set `SURGICAL_ELIGIBILITY` to `eligible` or `ineligible` and set
+`SURGICAL_ELIGIBILITY_REASON` to the single normalized reason selected by the helper contract.
+Emit exactly one decision event, including only the already-computed actionable finding and
+declared-path counts:
+
+```bash
+log_execute_efficiency_event surgical_eligibility \
+  "$(printf '{"task_id":"%s","outcome":"%s","reason":"%s","finding_count":%d,"path_count":%d}' \
+    "<task-id>" "$SURGICAL_ELIGIBILITY" "$SURGICAL_ELIGIBILITY_REASON" \
+    "$ACTIONABLE_FINDING_COUNT" "$ACTIONABLE_PATH_COUNT")" "<task-id>"
+```
+
 ```text
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"surgical_fixer","count":1}' '<task-id>'
 Agent(subagent_type="surgical-fixer", description="One bounded repair for <task-id>",
   prompt="<one surgical-review-failure.v1 JSON object only>")
 ```
@@ -3243,10 +3356,28 @@ hold before `STATUS: success` is accepted as a repaired diff:
 Every other shape, including a nominal `success` with an empty/invalid repair claim, takes the
 normal deep retry path. Never treat the surgical return as review evidence.
 
+After strict parsing, set `SURGICAL_RESULT` to `success` or `fallback` and
+`SURGICAL_RESULT_REASON` to its normalized reason. Emit exactly one result event. If the mandatory
+post-surgical review fails, emit a second `fallback` result with reason `post_review_failed`; this
+records the fallback without treating the surgical return as acceptance evidence:
+
+```bash
+log_execute_efficiency_event surgical_result \
+  "$(printf '{"task_id":"%s","outcome":"%s","reason":"%s","attempt_count":1}' \
+    "<task-id>" "$SURGICAL_RESULT" "$SURGICAL_RESULT_REASON")" "<task-id>"
+```
+
 On `STATUS: success`, capture a fresh task diff and run another full semantic reviewer exactly
 once against that diff plus the latest finding-state artifact. This is the same consult-aware
 reviewer/self-review choice as step 6. Immediately before either dispatch, increment
-`SEMANTIC_REVIEW_ROUND` and use this full-review prompt contract:
+`SEMANTIC_REVIEW_ROUND`, set `EXECUTE_EFFICIENCY_REVIEW_ROLE` to `reviewer` or `self_reviewer`,
+emit the normalized dispatch count below, and use this full-review prompt contract:
+
+```bash
+log_execute_efficiency_event subagent_dispatch \
+  "$(printf '{"task_id":"%s","role":"%s","count":1}' \
+    "<task-id>" "$EXECUTE_EFFICIENCY_REVIEW_ROLE")" "<task-id>"
+```
 
 ```text
 task id: <id>
@@ -3369,6 +3500,7 @@ IMPL_MODEL_SUPPORT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])
 Implementer prompt on cycle ≥ 2 is shorter than cycle 1:
 
 ```
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"implementer","count":1}' '<task-id>'
 Agent(
   subagent_type="implementer",
   description="Implement <task-id> v<CYCLE>",
@@ -3397,6 +3529,7 @@ If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `runtime.consult = "off"` in config
 - Emit `no_consult_dispatch` event (with `"cycle": <CYCLE>` in the payload).
 - Spawn the dedicated self-review subagent (read-only — no Edit/Write tools, no resolve-provider call):
   ```
+  log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"self_reviewer","count":1}' '<task-id>'
   Agent(
     subagent_type="self-reviewer",
     description="Self-review (consult=off) <task-id> v<CYCLE>",
@@ -3411,6 +3544,7 @@ Otherwise (consult=on), spawn the external reviewer:
 **Base codex reviewer** (gating, cycle ≥ 2):
 
 ```
+log_execute_efficiency_event subagent_dispatch '{"task_id":"<task-id>","role":"reviewer","count":1}' '<task-id>'
 Agent(
   subagent_type="reviewer",
   description="Codex review <task-id> v<CYCLE>",
@@ -3848,6 +3982,7 @@ EOF
    spawn and the reconcile entirely.
 
    ```
+   log_execute_efficiency_event subagent_dispatch '{"role":"tier1_doc_updater","count":1}' orchestration
    Agent(
      subagent_type="tier1-doc-updater",
      description="Run-end mechanical doc sync",
@@ -4030,6 +4165,7 @@ This phase fires once per run, after Run Brief finalize (Finalize §), before th
 
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The review-agent generates memory candidates; drivers that skip it should warn the user that memory review is unavailable for this run. -->
    ```
+   log_execute_efficiency_event subagent_dispatch '{"role":"review_agent","count":1}' orchestration
    Agent(
      subagent_type="review-agent",
      description="Memory review for <SLUG_FOR_DESC>",
@@ -4052,6 +4188,7 @@ This phase fires once per run, after Run Brief finalize (Finalize §), before th
     ```
 
     ```
+    log_execute_efficiency_event subagent_dispatch '{"role":"axiom_extractor","count":1}' orchestration
     Agent(
       subagent_type="axiom-extractor",
       description="Axiom extraction for <SLUG_FOR_DESC>",
