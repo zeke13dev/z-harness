@@ -945,6 +945,7 @@ invariants_path: ${INVARIANTS_PATH}"
 style_path: ${STYLE_PATH}"
     export INTENT_MODE_CTX="$INTENT_CTX_LINES"   # consumed by implementer + reviewer dispatch in steps 5 and 6
 
+    # Exact selected-batch preflight is applied inside Main-loop Rules 0-2 below.
     # ── Invoke the reusable per-task engine over this ready frontier ───────────
     LEVEL_EXECUTE_RC=0
     LEVEL_EXECUTE_HALT_REASON=""
@@ -1962,6 +1963,252 @@ The numbered steps below describe a **single task track** — one task's journey
    - `scope_unknown: true` means some task block has no parseable `**Files:**` line, making rule 2 blind for that task. In INTENT known-work mode this is a hard serialization gate for the affected frontier. Legacy mode keeps the historical risk-based behavior.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
+### Exact selected-batch INTENT dispatch preflight (after Rules 0-2)
+
+When `LEVEL_EXECUTE_ACTIVE=1`, run this seam only **after** Rules 0-2 have produced the
+ordered, conflict-deduplicated `SELECTED_BATCH_TASK_IDS` partition and immediately before
+Rule 3 dispatches that partition's prechecks and implementers. Do not run it over every pending
+task in the level. Do not reselect, widen, reorder, or merge partitions. The existing scheduler's
+fan-out remains authoritative and `SELECTED_BATCH_FANOUT` must be the configured cap that
+produced this partition (an integer in 1..3), not the partition length.
+
+This is a fail-closed, read-only dispatch seam. It never writes graph state, claims or releases a
+lease, waits, polls, restarts, cancels, joins, starts background handles, or changes watchdog or
+supervisor lifecycle. The full semantic reviewer and conditional aggregate-review decision remain
+authoritative.
+
+First capture the existing registry/lease view with its read-only `list --json` command. This is a
+snapshot only; do not call `register`, `heartbeat`, `claim`, `release`, `wait-for`, `reap`, or any
+other registry mutation from this seam:
+
+```bash
+INTENT_PREFLIGHT_INPUT="$ARCHIVE_DIR/intent-dispatch-preflight-level-${CURRENT_LEVEL}-batch-${BATCH_SEQUENCE}.json"
+INTENT_PREFLIGHT_RESULT="$ARCHIVE_DIR/intent-dispatch-preflight-level-${CURRENT_LEVEL}-batch-${BATCH_SEQUENCE}.result.json"
+INTENT_PREFLIGHT_LEASE_SNAPSHOT="$ARCHIVE_DIR/intent-dispatch-preflight-level-${CURRENT_LEVEL}-batch-${BATCH_SEQUENCE}.leases.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json \
+  > "$INTENT_PREFLIGHT_LEASE_SNAPSHOT"
+
+python3 - "$LEVEL_TASKS_FILE" "$WORK_GRAPH_FILE" "$SELECTED_BATCH_TASK_IDS" \
+  "$SELECTED_BATCH_FANOUT" "$INTENT_PREFLIGHT_LEASE_SNAPSHOT" \
+  "$ARCHIVE_DIR/INTENT.frozen.md" "$LEDGER_FILE" "$EXECUTION_STRATEGY_FILE" \
+  "$WORKSTREAMS_FILE" "$RUN" > "$INTENT_PREFLIGHT_INPUT" <<'PYEOF'
+# PREFLIGHT-INPUT-BUILDER-BEGIN
+import json
+import os
+import posixpath
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(
+    tasks_file,
+    graph_file,
+    selected_csv,
+    fanout_text,
+    lease_snapshot_file,
+    frozen_intent,
+    ledger,
+    strategy,
+    dependency_context,
+    run_id,
+) = sys.argv[1:]
+tasks_path = Path(tasks_file)
+graph_path = Path(graph_file)
+selected_ids = [value.strip() for value in selected_csv.split(",") if value.strip()]
+fanout = int(fanout_text)
+
+task_blocks = {}
+for block in re.split(r"(?=^## T\d+\b)", tasks_path.read_text(encoding="utf-8"), flags=re.M):
+    heading = re.match(r"^## (T\d+)\b.*", block)
+    if heading:
+        task_blocks[heading.group(1)] = block
+
+source_graph = json.loads(graph_path.read_text(encoding="utf-8"))
+source_nodes = source_graph.get("nodes", []) if isinstance(source_graph, dict) else []
+node_by_id = {
+    str(node.get("id")): node
+    for node in source_nodes
+    if isinstance(node, dict) and node.get("id")
+}
+completed = {
+    task_id
+    for task_id, node in node_by_id.items()
+    if node.get("status") in {"complete", "completed", "done"}
+}
+
+tasks = []
+graph_nodes = []
+for task_id in selected_ids:
+    block = task_blocks.get(task_id, "")
+    files = re.search(r"^\*\*Files:\*\*\s*(.+)$", block, re.M)
+    complexity = re.search(r"^\*\*Complexity:\*\*\s*(\w+)", block, re.M)
+    atomic_reason = re.search(r"^\*\*Atomic reason:\*\*\s*(.+)$", block, re.M)
+    disjointness = re.search(r"^\*\*Disjointness proven:\*\*\s*(true|false)\s*$", block, re.M | re.I)
+    task = {
+        "id": task_id,
+        "paths": [path.strip(" `") for path in files.group(1).split(",")] if files else [],
+        "complexity": complexity.group(1).lower() if complexity else "",
+    }
+    if atomic_reason:
+        task["atomic_reason"] = atomic_reason.group(1).strip()
+    if disjointness:
+        task["disjointness_proven"] = disjointness.group(1).lower() == "true"
+    tasks.append(task)
+
+    source_node = node_by_id.get(task_id)
+    if source_node is not None:
+        dependencies = source_node.get("depends_on", source_node.get("dependencies", []))
+        unresolved = (
+            [dependency for dependency in dependencies if dependency not in completed]
+            if isinstance(dependencies, list)
+            else dependencies
+        )
+        graph_nodes.append({"id": task_id, "dependencies": unresolved, "status": "ready"})
+
+registry_records = json.loads(Path(lease_snapshot_file).read_text(encoding="utf-8"))
+held_paths = []
+seen_held_paths = set()
+terminal_statuses = {"complete", "completed", "aborted", "stale"}
+try:
+    stale_threshold = int(os.environ.get("Z_HARNESS_REGISTRY_STALE_SECS", "1800"))
+except ValueError:
+    stale_threshold = 1800
+
+def normalized_registry_path(value):
+    if not isinstance(value, str) or not value or "\\" in value:
+        return None
+    normalized = posixpath.normpath(value)
+    if normalized in {"", ".", ".."} or normalized.startswith("../") or normalized.startswith("/"):
+        return None
+    return normalized
+
+def paths_overlap(first, second):
+    return first == second or first.startswith(second + "/") or second.startswith(first + "/")
+
+def is_age_stale(record):
+    heartbeat = record.get("last_heartbeat", "")
+    if not heartbeat:
+        return False  # Match active-plan-registry.py::_is_stale.
+    try:
+        observed = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now(timezone.utc) - observed).total_seconds() > stale_threshold
+
+selected_task_paths = [
+    normalized
+    for task in tasks
+    for value in task["paths"]
+    if (normalized := normalized_registry_path(value)) is not None
+]
+for record in registry_records if isinstance(registry_records, list) else []:
+    if not isinstance(record, dict):
+        continue
+    holder_run_id = record.get("run_id")
+    if not isinstance(holder_run_id, str) or not holder_run_id or holder_run_id == run_id:
+        continue
+    try:
+        lease_capable = int(record.get("schema_version", 1)) >= 2 and "held_paths" in record
+    except (TypeError, ValueError):
+        lease_capable = False
+    if not lease_capable or record.get("status") in terminal_statuses or is_age_stale(record):
+        continue
+    raw_held_paths = record.get("held_paths", [])
+    if not isinstance(raw_held_paths, list):
+        continue
+    for held in raw_held_paths:
+        held_path = normalized_registry_path(held.get("path")) if isinstance(held, dict) else None
+        if held_path is None:
+            continue
+        # Preserve the live lease and also project every normalized parent/child
+        # collision onto the selected task path. intent-dispatch-preflight.py
+        # consumes exact held-path markers, so this projection carries the
+        # registry-compatible path-overlap decision without adding lifecycle work.
+        projected_paths = [held_path]
+        projected_paths.extend(path for path in selected_task_paths if paths_overlap(path, held_path))
+        for projected_path in projected_paths:
+            key = (holder_run_id, projected_path)
+            if key not in seen_held_paths:
+                seen_held_paths.add(key)
+                held_paths.append({"run_id": holder_run_id, "path": projected_path})
+
+hard_exclusions = [
+    "runtime/watchdog/",
+    "tests/fixtures/watchdog/",
+    "tests/test_config_watchdog.py",
+    "tests/test_config_session_watchdog.py",
+    "tests/test_watchdog_adapter_claude.py",
+    "tests/test_watchdog_adapter_codex.py",
+    "tests/test_watchdog_adapter_omp.py",
+    "tests/test_watchdog_cli.py",
+    "tests/test_watchdog_daemon_lifecycle.py",
+    "tests/test_watchdog_fanout.py",
+    "tests/test_watchdog_handoff.py",
+    "tests/test_watchdog_judge.py",
+    "tests/test_watchdog_needs_input.py",
+    "tests/test_watchdog_notify.py",
+    "tests/test_watchdog_poll.py",
+    "tests/test_watchdog_reconcile.py",
+    "tests/test_watchdog_registry.py",
+    "tests/test_watchdog_status.py",
+    "tests/test_watchdog_stuck.py",
+    "tests/test_watchdog_tmux_actuator.py",
+    "tests/deprecated/test_hermes_watchdog_webhook.py",
+    "tests/deprecated/test_hermes_supervisor.py",
+    "skills/z-plan/SKILL.md",
+    "skills/z-plan-split/SKILL.md",
+    "tests/test_z_plan_markdown_contract.py",
+]
+
+print(json.dumps({
+    "run_id": run_id,
+    "tasks": tasks,
+    "graph": {"nodes": graph_nodes},
+    "ready_ids": selected_ids,
+    "fanout": fanout,
+    "intent_context": {
+        "frozen_intent": frozen_intent,
+        "graph": str(graph_path),
+        "ledger": ledger,
+        "strategy": strategy,
+        "dependency_context": dependency_context,
+    },
+    "held_paths": held_paths,
+    "hard_exclusions": hard_exclusions,
+}, sort_keys=True))
+# PREFLIGHT-INPUT-BUILDER-END
+PYEOF
+```
+
+The normalized graph view intentionally contains exactly the selected task IDs. Dependencies
+already completed in the durable source graph are removed; any unresolved dependency remains and
+therefore fails the helper's ready-task validation. A selected ID missing from the source graph is
+omitted from the graph view and fails `TASK_GRAPH_MISMATCH`. Thus a valid batch has matching exact
+task/graph IDs without smuggling completed historical tasks into the dispatch batch.
+
+Invoke the helper and halt only this frontier on failure, before step 3 marks anything in progress
+and before step 3.5 claims any path:
+
+```bash
+if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-dispatch-preflight.py" \
+  < "$INTENT_PREFLIGHT_INPUT" > "$INTENT_PREFLIGHT_RESULT"; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "orchestration" intent_dispatch_preflight_failed \
+    "$(python3 -c 'import json,sys; print(json.dumps({"level":int(sys.argv[2]),"result":json.load(open(sys.argv[1]))},sort_keys=True))' "$INTENT_PREFLIGHT_RESULT" "$CURRENT_LEVEL" 2>/dev/null || echo '{"result":"unreadable"}')" 2>/dev/null || true
+  LEVEL_EXECUTE_RC=1
+  LEVEL_EXECUTE_HALT_REASON="INTENT dispatch preflight failed at scheduler depth ${CURRENT_LEVEL}"
+  return 1
+fi
+```
+
+A successful result preserves the partition exactly. If `serial_only` is false, dispatch the
+unchanged `SELECTED_BATCH_TASK_IDS`. If it is true, the helper contract guarantees the accepted
+partition is already a single task (a wider frontier containing an unproven atomic multi-file task
+is rejected); keep that one task serialized. Never implement this response by changing
+`INTENT_PARALLEL_LEVELS`, the fan-out cap, the remaining scheduler queue, or later partitions.
+`deferred_followups` is telemetry/documentation only and must not start supervisor work.
+
 ## Hard caps (token / wall-clock safety)
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.
@@ -2709,11 +2956,137 @@ fi  # ── END reviewer-dispatch block (PRE_REVIEW_GATED_DOWN guard closes her
 
 ### 7. Handle review outcome
 
+#### Retry finding-state artifact (every full semantic review)
+
+At task-track initialization, before the first reviewer dispatch, create independent state for
+semantic reviews, the optional surgical attempt, and the existing normal deep retry:
+
+```bash
+SEMANTIC_REVIEW_ROUND=0
+SURGICAL_ATTEMPTED=0
+NORMAL_DEEP_RETRY_USED=0
+```
+
+Increment `SEMANTIC_REVIEW_ROUND` immediately before each full semantic reviewer or consult-off
+self-review dispatch. This counter names review artifacts; `CYCLE` continues to name implementer
+attempts only.
+
+Immediately after a full semantic reviewer (or consult-off self-review) returns and before
+the outcome branch below, normalize its actionable findings with
+`scripts/review-finding-state.py`.  This creates a task-local, deterministic record; it never
+suppresses a newly discovered finding, and it never changes the final aggregate-review gate.
+
+```bash
+TASK_ARCHIVE="$BASE/archive/tasks/<task-id>"
+mkdir -p "$TASK_ARCHIVE"
+PREVIOUS_FINDINGS_JSON="${PREVIOUS_FINDINGS_JSON:-[]}"  # v1 starts empty
+CURRENT_FINDINGS_JSON="<normalized blocker/major findings from this full semantic review>"
+FINDING_STATE_INPUT="$(python3 -c '
+import json, sys
+print(json.dumps({"task_id": sys.argv[1], "prior_findings": json.loads(sys.argv[2]), "current_findings": json.loads(sys.argv[3])}))
+' "<task-id>" "$PREVIOUS_FINDINGS_JSON" "$CURRENT_FINDINGS_JSON")"
+printf '%s\n' "$FINDING_STATE_INPUT" | \
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/review-finding-state.py" \
+  > "$TASK_ARCHIVE/review-findings-semantic-v$SEMANTIC_REVIEW_ROUND.json"
+python3 - "$TASK_ARCHIVE/review-findings-semantic-v$SEMANTIC_REVIEW_ROUND.json" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+result = json.load(open(path, encoding="utf-8"))
+open(path + ".md", "w", encoding="utf-8").write(result["artifact_markdown"])
+PYEOF
+PREVIOUS_FINDINGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["current_findings"]))' "$TASK_ARCHIVE/review-findings-semantic-v$SEMANTIC_REVIEW_ROUND.json")"
+```
+
+Every later reviewer or consult-off self-review receives the latest
+`review-findings-semantic-vN.json` artifact as historical state, plus the complete current task
+diff and normal task/acceptance context. A resolved prior item is recorded as `resolved`; an
+unchanged item is `still_open`; a new regression stays `new` and is review-blocking. The artifact
+guides continuity but never narrows review scope: every review remains a full semantic review of
+the entire current task diff. Do not treat a clean retry state as permission to omit that review,
+and do not let this artifact waive the conditional aggregate review.
+
+#### Bounded surgical lane before the existing deep retry
+
+Only after the **first full semantic review** returns blockers or majors may the orchestrator
+offer one surgical attempt.  It is a cost-saving lane, not a new acceptance path: it is eligible
+only when the structured review has at most three actionable blocker/major findings, all paths
+are exactly within at most two declared task paths, and `change_classes` is empty.  Any
+decision-needed, public API, schema, dependency, concurrency, or INTENT-contract change is
+ineligible.  The `surgical-fixer` agent's machine-checkable contract is authoritative.
+
+Use the three task-local state variables initialized above. `CYCLE` remains the
+implementer/deep-retry cycle and is not the semantic-review counter. Increment
+`SEMANTIC_REVIEW_ROUND` immediately before every full semantic reviewer or consult-off
+self-review dispatch, including the post-surgical review. Set `SURGICAL_ATTEMPTED=1` before the
+surgical agent is dispatched, not after it returns. Set `NORMAL_DEEP_RETRY_USED=1` only when the
+existing step-7a deep retry implementer is dispatched. These variables must never alias or derive
+from one another. In particular, the post-surgical review does not increment `CYCLE`, consume the
+normal retry allowance, or set `NORMAL_DEEP_RETRY_USED`.
+
+```text
+Agent(subagent_type="surgical-fixer", description="One bounded repair for <task-id>",
+  prompt="<one surgical-review-failure.v1 JSON object only>")
+```
+
+Archive the exact input and return at
+`$TASK_ARCHIVE/surgical-input-v1.json` and `$TASK_ARCHIVE/surgical-result-v1.txt`.  Parse the
+five required headers and fenced `surgical-fixer-result.v1` JSON strictly.  A malformed return,
+`ineligible`, `failed`, any changed path outside the declaration, any unknown finding id, or any
+claim that `normal_retry_allowance_consumed` is true must immediately fall through to the normal
+deep retry below.  The surgical lane has `ATTEMPT_LIMIT: 1`; it cannot retry itself and does not increment `CYCLE` or consume the normal retry allowance.
+
+The surgical artifact names are single-assignment. Before dispatch, require
+`SURGICAL_ATTEMPTED=0` and both paths to be absent; then set `SURGICAL_ATTEMPTED=1` and create them
+with no-clobber semantics. If either path already exists, do not overwrite it and do not dispatch
+surgery again; continue to the normal deep retry. Strict parsing means all of the following must
+hold before `STATUS: success` is accepted as a repaired diff:
+
+- Exactly five non-JSON headers occur, once each and in the documented order.
+- `STATUS`, `TASK`, `ATTEMPTS_USED`, `ATTEMPT_LIMIT`, and `FALLBACK` match the fenced JSON and the
+  current task; success requires `1`, `1`, and `none` for the last three attempt/fallback fields.
+- There is exactly one fenced JSON object with schema `surgical-fixer-result.v1`, no trailing prose,
+  `fallback.required=false`, `reason_code=none`, and
+  `normal_retry_allowance_consumed=false`.
+- `changed_paths` is a unique subset of the supplied declared paths and `finding_ids` is a unique
+  subset of the supplied actionable finding IDs. Unknown or undeclared values fail closed.
+
+Every other shape, including a nominal `success` with an empty/invalid repair claim, takes the
+normal deep retry path. Never treat the surgical return as review evidence.
+
+On `STATUS: success`, capture a fresh task diff and run another full semantic reviewer exactly
+once against that diff plus the latest finding-state artifact. This is the same consult-aware
+reviewer/self-review choice as step 6. Immediately before either dispatch, increment
+`SEMANTIC_REVIEW_ROUND` and use this full-review prompt contract:
+
+```text
+task id: <id>
+task description: <title>
+acceptance criteria: <criteria verbatim from task block>
+review_mode: full_semantic_current_task
+semantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json
+diff.patch path: $TASK_ARCHIVE/diff.patch
+changed files: <abs paths>
+related downstream files: <related_files paths>
+relevant_docs: <relevant_docs paths>
+$BASE: <abs path>
+${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}
+```
+
+The reviewer or self-reviewer must inspect the entire current task diff and may report new
+regressions anywhere in that diff; the semantic finding-state artifact is continuity evidence,
+not a scope restriction. For this post-surgical review, leave `CYCLE=1` and `NORMAL_DEEP_RETRY_USED=0`. The full reviewer may surface new
+blockers/majors; those are preserved by the finding-state helper. If that post-surgical review
+fails, flow to the still-untouched normal step-7a deep retry, set `NORMAL_DEEP_RETRY_USED=1` and
+`CYCLE=2`, then run yet another full semantic review. Only a blocker/major result from that
+post-deep-retry full review reaches the existing second-failure user gate. Never gate merely
+because `SEMANTIC_REVIEW_ROUND=2`, never dispatch surgery twice, and never overwrite the v1
+surgical artifacts.
+
 - **No blockers, no majors** → accept; go to step 8 (done).
 - **Has blockers or majors** →
-  - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review (cycle 2). Note: if the implementer was re-spawned for a non-review reason (e.g. after resolving a `decision_needed` or `needs_clarification`), the cycle-2 reviewer is skipped entirely by the **Skip-rereview on clean cycle-1** guard above — meaning a cycle-2 re-review only fires when the cycle-1 review actually found something actionable.
+  - **Before normal deep retry** (`NORMAL_DEEP_RETRY_USED=0`): if this is the first full semantic failure and `SURGICAL_ATTEMPTED=0`, attempt the bounded lane only when eligible. A surgical success gets its mandatory full semantic review; any surgical fallback or failed post-surgical review then re-spawns the existing deep retry implementer once with the latest full-review findings. The normal deep retry is still untouched after every surgical outcome. Note: if the implementer was re-spawned for a non-review reason (for example after resolving `decision_needed` or `needs_clarification`), the clean-cycle-1 guard still applies; it does not apply to the mandatory post-surgical full review.
   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
-  - **Second failure**: halt queue. Push-notify. Before presenting to the user, run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
+  - **After normal deep retry** (`NORMAL_DEEP_RETRY_USED=1`): only the next full semantic review's blocker/major result is the second-failure gate. Halt queue, push-notify, then run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
 
     ```bash
     NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed)"
@@ -2761,9 +3134,12 @@ fi  # ── END reviewer-dispatch block (PRE_REVIEW_GATED_DOWN guard closes her
       - **patch manually** → the user takes over; the attempt closes when the user resumes and the track reaches a real terminal (step 8 `done` or a later halt).
       - **abandon task / re-spec** → the attempt is abandoned; halt the track.
 
-#### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
+#### 7a. Targeted deep retry with mandatory full semantic review (cycle ≥ 2)
 
-To avoid re-paying full Opus-implementer + Codex-reviewer round trips on retries, both subagents on cycle ≥ 2 see only the **delta** from the prior attempt, not a fresh dump.
+The deep-retry implementer receives the prior failure and between-attempt context so it can make a
+targeted correction. Acceptance still requires a fresh full semantic reviewer or consult-off
+self-review over the complete current task diff. The delta patch is supplemental repair evidence;
+it never limits the gating review.
 
 Before re-spawning the implementer for retry:
 
@@ -2833,7 +3209,7 @@ If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `runtime.consult = "off"` in config
   Agent(
     subagent_type="self-reviewer",
     description="Self-review (consult=off) <task-id> v<CYCLE>",
-    prompt="task id: <id>\ntask description: <title>\nReview ROUND v<CYCLE> — focus on whether the prior findings were addressed; do NOT re-flag issues outside the delta.\n\nPrior findings (v<CYCLE-1>):\n<verbatim ≤8K reviewer return from prior cycle>\n\nImplementer's claim of what changed: <SUMMARY from implementer return>\n\nDelta patch (between-attempts): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\nFull current diff: $BASE/archive/tasks/<id>/diff.patch\nSPEC excerpt: <slice or empty in INTENT mode>\nchanged files: <abs paths>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+    prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
   )
   ```
 - Emit `self_review_completed` event after the self-review returns.
@@ -2847,15 +3223,16 @@ Otherwise (consult=on), spawn the external reviewer:
 Agent(
   subagent_type="reviewer",
   description="Codex review <task-id> v<CYCLE>",
-  prompt="task id: <id>\ntask description: <title>\nReview ROUND v<CYCLE> — focus on whether the prior findings were addressed; do NOT re-flag issues outside the delta.\n\nPrior findings (v<CYCLE-1>):\n<verbatim ≤8K reviewer return from prior cycle>\n\nImplementer's claim of what changed: <SUMMARY from implementer return>\n\nDelta patch (between-attempts): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\nFull current diff: $BASE/archive/tasks/<id>/diff.patch\nSPEC excerpt: <slice or empty in INTENT mode>\nchanged files: <abs paths>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
 )
 ```
 
 Parse the base codex reviewer's response for step 7 branching (blockers/majors counts, retry decisions, halt logic).
 
-The reviewer is explicitly told to scope to the delta — Codex will still re-read full files only if a finding requires it.
-
-This roughly halves the Opus tokens spent on cycle-2 implementer (no fresh SPEC/PLAN walk) and cuts the Codex-reviewer prompt size by ~70% on typical small fixes.
+Only the implementer correction is delta-targeted. The gating reviewer/self-review always receives
+the canonical semantic finding-state artifact and performs a full semantic review. Increment
+`SEMANTIC_REVIEW_ROUND` immediately before this post-deep-retry dispatch; only blocker/major
+findings from its normalized result can reach the second-failure gate.
 
 ### 7b. Run the task's TESTS.md entries (only if task block has a **Tests:** line)
 
