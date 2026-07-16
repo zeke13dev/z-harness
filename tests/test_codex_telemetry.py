@@ -72,6 +72,97 @@ def representative_current_rollout(session_id: str, sentinel: str) -> list[objec
     ]
 
 
+def representative_flat_v1_rollout(session_id: str) -> list[object]:
+    """Return a provenance-documented sanitized flat-v1 rollout fixture.
+
+    Derived by projecting the allowlisted metric-bearing event relationships
+    from representative live and archived local Codex rollouts inspected on
+    2026-07-16 into the supported flat-v1 envelope. Identifiers, timestamps,
+    and counters are invented; no original rollout value is retained.
+    """
+    return [
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "usage",
+            "timestamp": "2026-07-16T09:00:00Z",
+            "total_tokens": 10,
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "usage",
+            "timestamp": "2026-07-16T09:00:01Z",
+            "total_tokens": 15,
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "turn_start",
+            "timestamp": "2026-07-16T09:00:02Z",
+            "turn_id": "sanitized-turn",
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "first_token",
+            "timestamp": "2026-07-16T09:00:02.200Z",
+            "turn_id": "sanitized-turn",
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "tool_start",
+            "timestamp": "2026-07-16T09:00:02.250Z",
+            "tool_call_id": "sanitized-call",
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "tool_end",
+            "timestamp": "2026-07-16T09:00:02.500Z",
+            "tool_call_id": "sanitized-call",
+        },
+        {
+            "schema_version": 1,
+            "session_id": session_id,
+            "event": "turn_end",
+            "timestamp": "2026-07-16T09:00:03Z",
+            "turn_id": "sanitized-turn",
+        },
+    ]
+
+
+def test_flat_v1_live_archive_fixture_normalizes_end_to_end(tmp_path: Path) -> None:
+    fixture = representative_flat_v1_rollout("flat-v1-session")
+    live = write_jsonl(tmp_path / "live-flat-v1.jsonl", fixture)
+    archive = write_jsonl(tmp_path / "archive-flat-v1.jsonl", fixture)
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--source", f"live:{live}", "--source", f"archive:{archive}"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert str(tmp_path) not in completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["quality_flags"] == []
+    assert payload["sessions"] == [{
+        "idle_precision": "unknown",
+        "inferred_idle_ms": None,
+        "quality_flags": [],
+        "session_hash": telemetry.session_hash("flat-v1-session"),
+        "source": "both",
+        "token_count": 15,
+        "tool_wait_ms": 250,
+        "tool_wait_precision": "exact",
+        "ttft_ms": 200,
+        "ttft_precision": "exact",
+        "turn_count": 1,
+    }]
+
+
 def test_current_rollout_live_archive_fixture_normalizes_end_to_end(tmp_path: Path) -> None:
     sentinel = "PROMPT reasoning tool-output sk-secret /absolute/private/path"
     fixture = representative_current_rollout("current-session", sentinel)
