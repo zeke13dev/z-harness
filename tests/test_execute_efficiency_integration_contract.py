@@ -45,12 +45,78 @@ def _builder_code() -> str:
     return match.group(1)
 
 
+def _precheck_prompt_builder_code() -> str:
+    match = re.search(
+        r"# SPEC-PRECHECK-PROMPT-BUILDER-BEGIN\n(.*?)# SPEC-PRECHECK-PROMPT-BUILDER-END",
+        _text(),
+        re.S,
+    )
+    assert match is not None
+    return match.group(1)
+
+
+def _generation_exclusion_builder_code() -> str:
+    match = re.search(
+        r"# GENERATION-EXCLUSION-INPUT-BUILDER-BEGIN\n(.*?)# GENERATION-EXCLUSION-INPUT-BUILDER-END",
+        _text(),
+        re.S,
+    )
+    assert match is not None
+    return match.group(1)
+
+
+def _run_generation_exclusion_builder(
+    tmp_path: Path, task_text: str, graph: dict
+) -> dict:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    tasks_file = tmp_path / "TASKS.md"
+    graph_file = tmp_path / "work-graph.json"
+    tasks_file.write_text(task_text, encoding="utf-8")
+    graph_file.write_text(json.dumps(graph), encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, "-", str(tasks_file), str(graph_file)],
+        input=_generation_exclusion_builder_code(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def _run_precheck_prompt_builder(
+    mode: str, context: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-",
+            mode,
+            "T005",
+            REAL_TASK_BLOCKS.split("\n\n", 1)[0],
+            "/plan/base",
+            "/repo/root",
+            "docs/llm/execution.json",
+            "/repo/kernel.md",
+            context.get("frozen_intent", ""),
+            context.get("graph", ""),
+            context.get("ledger", ""),
+            context.get("strategy", ""),
+            context.get("dependency_context", ""),
+        ],
+        input=_precheck_prompt_builder_code(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _run_builder(
     tmp_path: Path,
     task_text: str,
     graph: dict,
     selected: str,
     leases: list[dict] | None = None,
+    current_session_id: str = "session-a",
 ) -> dict:
     tmp_path.mkdir(parents=True, exist_ok=True)
     tasks_file = tmp_path / "TASKS.md"
@@ -74,6 +140,7 @@ def _run_builder(
             context["strategy"],
             context["dependency_context"],
             "run-a",
+            current_session_id,
         ],
         input=_builder_code(),
         text=True,
@@ -147,17 +214,19 @@ def test_surgical_retry_is_bounded_and_preserves_normal_deep_retry() -> None:
 
 
 def test_finding_state_preserves_resolved_open_and_new_findings() -> None:
+    fixed_id = "T001-F0000000000000001"
+    open_id = "T001-F0000000000000002"
     completed = subprocess.run(
         [sys.executable, str(FINDING_STATE)],
         input=json.dumps(
             {
                 "task_id": "T001",
                 "prior_findings": [
-                    {"path": "scripts/a.py", "message": "fixed"},
-                    {"path": "scripts/b.py", "message": "still open"},
+                    {"id": fixed_id, "path": "scripts/a.py", "message": "fixed"},
+                    {"id": open_id, "path": "scripts/b.py", "message": "still open"},
                 ],
                 "current_findings": [
-                    {"path": "scripts/b.py", "message": "still open"},
+                    {"id": open_id, "path": "scripts/b.py", "message": "still open"},
                     {"path": "scripts/c.py", "message": "new"},
                 ],
             }
@@ -175,6 +244,78 @@ def test_finding_state_preserves_resolved_open_and_new_findings() -> None:
     assert result["aggregate_review"]["preserved"] is True
     assert "Retry finding-state artifact (every full semantic review)" in _text()
     assert "conditional aggregate review" in _text()
+
+
+def test_finding_state_carries_prior_ids_and_supports_review_task_ids() -> None:
+    first = subprocess.run(
+        [sys.executable, str(FINDING_STATE)],
+        input=json.dumps(
+            {
+                "task_id": "T-REV-003",
+                "prior_findings": [],
+                "current_findings": [
+                    {"path": "scripts/a.py", "message": "original", "severity": "major"}
+                ],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    first_result = json.loads(first.stdout)
+    prior_id = first_result["current_findings"][0]["id"]
+    second = subprocess.run(
+        [sys.executable, str(FINDING_STATE)],
+        input=json.dumps(
+            {
+                "task_id": "T-REV-003",
+                "prior_findings": first_result["current_findings"],
+                "current_findings": [
+                    {
+                        "id": prior_id,
+                        "path": "scripts/a.py",
+                        "message": "semantically equivalent rewording",
+                        "severity": "blocker",
+                    },
+                    {"path": "scripts/b.py", "message": "new regression", "severity": "minor"},
+                ],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    result = json.loads(second.stdout)
+    assert next(item for item in result["current_findings"] if item["id"] == prior_id)["disposition"] == "still_open"
+    assert next(item for item in result["current_findings"] if item["message"] == "new regression")["disposition"] == "new"
+
+    unknown = subprocess.run(
+        [sys.executable, str(FINDING_STATE)],
+        input=json.dumps(
+            {
+                "task_id": "T-REV-003",
+                "prior_findings": first_result["current_findings"],
+                "current_findings": [
+                    {
+                        "id": "T-REV-003-F0000000000000000",
+                        "path": "scripts/a.py",
+                        "message": "unknown",
+                    }
+                ],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert unknown.returncode == 2
+    assert "not present in prior_findings" in unknown.stderr
+
+    text = _text()
+    assert text.count("finding_identity_contract:") >= 3
+    assert "Reuse an exact prior id only for the same still-open semantic issue" in text
+    assert "Omit id for every new finding" in text
+    assert "Every prior finding, regardless of severity" in text
 
 
 def test_documented_builder_executes_on_real_task_block_and_exact_batch(tmp_path: Path) -> None:
@@ -246,6 +387,60 @@ def test_held_path_snapshot_keeps_only_live_lease_capable_peers(tmp_path: Path) 
     assert document["held_paths"] == [{"run_id": "live-peer", "path": "scripts/live.py"}]
 
 
+def test_held_path_snapshot_matches_registry_self_session_semantics(tmp_path: Path) -> None:
+    leases = [
+        _live_lease(
+            "same-session-peer",
+            "scripts/same-session.py",
+            session_id="session-a",
+        ),
+        _live_lease(
+            "different-session-peer",
+            "scripts/different-session.py",
+            session_id="session-b",
+        ),
+        _live_lease("empty-peer-session", "scripts/empty-peer.py", session_id=""),
+        _live_lease("missing-peer-session", "scripts/missing-peer.py"),
+        _live_lease(
+            "run-a",
+            "scripts/same-run.py",
+            session_id="different-session",
+        ),
+    ]
+
+    document = _run_builder(
+        tmp_path / "non-empty-current-session",
+        REAL_TASK_BLOCKS,
+        REAL_GRAPH,
+        "T005",
+        leases=leases,
+        current_session_id="session-a",
+    )
+    assert document["held_paths"] == [
+        {"run_id": "different-session-peer", "path": "scripts/different-session.py"},
+        {"run_id": "empty-peer-session", "path": "scripts/empty-peer.py"},
+        {"run_id": "missing-peer-session", "path": "scripts/missing-peer.py"},
+    ]
+
+    empty_current = _run_builder(
+        tmp_path / "empty-current-session",
+        REAL_TASK_BLOCKS,
+        REAL_GRAPH,
+        "T005",
+        leases=[
+            _live_lease(
+                "empty-peer-session",
+                "scripts/empty-peer.py",
+                session_id="",
+            )
+        ],
+        current_session_id="",
+    )
+    assert empty_current["held_paths"] == [
+        {"run_id": "empty-peer-session", "path": "scripts/empty-peer.py"}
+    ]
+
+
 @pytest.mark.parametrize(
     ("declared_path", "held_path"),
     [
@@ -281,6 +476,51 @@ def test_held_path_parent_child_overlap_blocks_dispatch(
     }
 
 
+def test_held_path_parent_child_collision_uses_only_true_peers(tmp_path: Path) -> None:
+    task_text = """\
+## T007 — Normalized collision `[ ]`
+**Files:** scripts/supervisor/session.py
+**Complexity:** high
+"""
+    graph = {"nodes": [{"id": "T007", "status": "ready", "depends_on": []}]}
+    leases = [
+        _live_lease(
+            "same-session-peer",
+            "scripts/supervisor/ignored/../session.py",
+            session_id="session-a",
+        ),
+        _live_lease(
+            "true-peer",
+            "scripts/supervisor/worker/..",
+            session_id="session-b",
+        ),
+    ]
+    document = _run_builder(
+        tmp_path,
+        task_text,
+        graph,
+        "T007",
+        leases=leases,
+        current_session_id="session-a",
+    )
+    result = subprocess.run(
+        [sys.executable, str(PREFLIGHT)],
+        input=json.dumps(document),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert {item["code"] for item in json.loads(result.stdout)["errors"]} == {
+        "HELD_PATH_COLLISION"
+    }
+    assert document["held_paths"] == [
+        {"run_id": "true-peer", "path": "scripts/supervisor"},
+        {"run_id": "true-peer", "path": "scripts/supervisor/session.py"},
+    ]
+
+
 def test_intent_preflight_is_at_selected_batch_seam_and_keeps_lifecycle_out_of_scope() -> None:
     text = _text()
     parallelism_at = text.index("## Parallelism (read first)")
@@ -294,6 +534,106 @@ def test_intent_preflight_is_at_selected_batch_seam_and_keeps_lifecycle_out_of_s
     assert "active-plan-registry.py\" list --json" in text
     assert "do not call `register`, `heartbeat`, `claim`, `release`, `wait-for`, `reap`" in text
     assert "full semantic reviewer and conditional aggregate-review decision remain\nauthoritative" in text
+
+
+def test_generation_boundary_checks_entire_artifact_before_per_level_execute(
+    tmp_path: Path,
+) -> None:
+    text = _text()
+    generated_at = text.index("intent_bfs_level_generated")
+    validation_at = text.index(
+        "Generation-boundary artifact-wide hard-exclusion validation"
+    )
+    execute_at = text.index("T023-SEAM: Per-level execute")
+    assert generated_at < validation_at < execute_at
+    assert "every TASKS task" in text
+    assert "non-implementation W nodes" in text
+    assert 'INTENT_GENERATION_EXCLUSION_INPUT="$ARCHIVE_DIR/' in text
+    assert 'INTENT_GENERATION_EXCLUSION_RESULT="$ARCHIVE_DIR/' in text
+
+    document = _run_generation_exclusion_builder(
+        tmp_path,
+        """\
+## T001 — Selected safe task `[ ]`
+**Files:** scripts/safe.py
+**Complexity:** low
+
+## T002 — Non-selected safe task `[ ]`
+**Files:** docs/safe.md
+**Complexity:** low
+""",
+        {
+            "artifact": "known_work_graph",
+            "nodes": [
+                {"id": "T001", "status": "ready", "files": ["scripts/safe.py"]},
+                {"id": "T002", "status": "blocked", "files": ["docs/safe.md"]},
+                {
+                    "id": "W003",
+                    "kind": "research",
+                    "status": "blocked",
+                    "files": ["runtime/watchdog/non_selected.py"],
+                },
+            ],
+        },
+    )
+
+    assert document["validation_scope"] == "generated_artifact"
+    assert [task["id"] for task in document["tasks"]] == ["T001", "T002"]
+    assert [node["id"] for node in document["graph"]["nodes"]] == [
+        "T001",
+        "T002",
+        "W003",
+    ]
+    result = subprocess.run(
+        [sys.executable, str(PREFLIGHT)],
+        input=json.dumps(document),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["checked_task_ids"] == ["T001", "T002"]
+    assert payload["checked_graph_node_ids"] == ["T001", "T002", "W003"]
+    assert payload["errors"] == [
+        {
+            "code": "HARD_EXCLUSION",
+            "id": "W003",
+            "message": "generated artifact path is hard-excluded",
+            "path": "runtime/watchdog/non_selected.py",
+            "source": "graph_nodes",
+        }
+    ]
+
+
+def test_real_spec_precheck_dispatch_prompt_is_mode_explicit(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    skill = _text()
+    assert 'prompt="$SPEC_PRECHECK_PROMPT"' in skill
+
+    intent = _run_precheck_prompt_builder("intent", context)
+    assert intent.returncode == 0, intent.stderr
+    assert "execution_mode: intent" in intent.stdout
+    assert f"frozen_intent_path: {context['frozen_intent']}" in intent.stdout
+    assert f"work_graph_path: {context['graph']}" in intent.stdout
+    assert f"ledger_path: {context['ledger']}" in intent.stdout
+    assert f"execution_strategy_path: {context['strategy']}" in intent.stdout
+    assert f"dependency_context_path: {context['dependency_context']}" in intent.stdout
+    assert "SPEC.md" not in intent.stdout
+    assert "PLAN.md" not in intent.stdout
+
+    legacy = _run_precheck_prompt_builder("legacy", {})
+    assert legacy.returncode == 0, legacy.stderr
+    assert "execution_mode: legacy" in legacy.stdout
+    assert "$BASE: /plan/base" in legacy.stdout
+    assert "frozen_intent_path:" not in legacy.stdout
+    assert "work_graph_path:" not in legacy.stdout
+
+    missing = _run_precheck_prompt_builder(
+        "intent", {**context, "dependency_context": ""}
+    )
+    assert missing.returncode != 0
+    assert "missing INTENT precheck context: dependency_context_path" in missing.stderr
 
 
 def test_runtime_inputs_reject_held_supervisor_and_all_frozen_exclusions(tmp_path: Path) -> None:

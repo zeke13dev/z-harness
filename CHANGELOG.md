@@ -33,6 +33,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 - _(auto)_ Add supervised planning lifecycle _(watchdog)_
 - _(auto)_ Add bounded retry and telemetry contracts _(z-execute)_
+- _(auto)_ Address aggregate review findings _(z-execute)_
 
 ## 2026-07-12
 

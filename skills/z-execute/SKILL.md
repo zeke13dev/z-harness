@@ -861,6 +861,117 @@ task_to_intent_mapping_required: true"
       exit 1
     fi
 
+    # ── Generation-boundary artifact-wide hard-exclusion validation ──
+    # A successful generator return is not dispatchable until every TASKS task
+    # and every durable work-graph node (including blocked/non-selected T nodes
+    # and non-implementation W nodes) has been checked against the frozen hard
+    # exclusions. This proof is deliberately separate from the selected-batch
+    # preflight: it cannot select, reorder, claim, or otherwise change fan-out.
+    INTENT_GENERATION_EXCLUSION_INPUT="$ARCHIVE_DIR/intent-generation-exclusion-level-${CURRENT_LEVEL}.json"
+    INTENT_GENERATION_EXCLUSION_RESULT="$ARCHIVE_DIR/intent-generation-exclusion-level-${CURRENT_LEVEL}.result.json"
+    python3 - "$LEVEL_TASKS_FILE" "$WORK_GRAPH_FILE" > "$INTENT_GENERATION_EXCLUSION_INPUT" <<'PYEOF'
+# GENERATION-EXCLUSION-INPUT-BUILDER-BEGIN
+import json
+import posixpath
+import re
+import sys
+from pathlib import Path
+
+tasks_file, graph_file = sys.argv[1:]
+
+def normalized_path(value):
+    if not isinstance(value, str):
+        return value
+    value = value.strip().strip("`")
+    value = re.sub(r"\s+\(new\)$", "", value)
+    return posixpath.normpath(value)
+
+task_entries = []
+task_text = Path(tasks_file).read_text(encoding="utf-8")
+for block in re.split(r"(?=^## T\d+\b)", task_text, flags=re.M):
+    heading = re.match(r"^## (T\d+)\b.*", block)
+    if not heading:
+        continue
+    files = re.search(r"^\*\*Files:\*\*\s*(.+)$", block, re.M)
+    task_entries.append({
+        "id": heading.group(1),
+        "paths": (
+            [normalized_path(path) for path in files.group(1).split(",")]
+            if files and files.group(1).strip() not in {"", "—", "-"}
+            else []
+        ),
+    })
+
+source_graph = json.loads(Path(graph_file).read_text(encoding="utf-8"))
+source_nodes = source_graph.get("nodes") if isinstance(source_graph, dict) else source_graph
+if isinstance(source_nodes, list):
+    graph_entries = []
+    for node in source_nodes:
+        if not isinstance(node, dict):
+            graph_entries.append(node)
+            continue
+        raw_paths = node.get("files", node.get("paths", []))
+        graph_entries.append({
+            "id": node.get("id"),
+            "paths": (
+                [normalized_path(path) for path in raw_paths]
+                if isinstance(raw_paths, list)
+                else raw_paths
+            ),
+        })
+else:
+    graph_entries = source_nodes
+
+hard_exclusions = [
+    "runtime/watchdog/",
+    "tests/fixtures/watchdog/",
+    "tests/test_config_watchdog.py",
+    "tests/test_config_session_watchdog.py",
+    "tests/test_watchdog_adapter_claude.py",
+    "tests/test_watchdog_adapter_codex.py",
+    "tests/test_watchdog_adapter_omp.py",
+    "tests/test_watchdog_cli.py",
+    "tests/test_watchdog_daemon_lifecycle.py",
+    "tests/test_watchdog_fanout.py",
+    "tests/test_watchdog_handoff.py",
+    "tests/test_watchdog_judge.py",
+    "tests/test_watchdog_needs_input.py",
+    "tests/test_watchdog_notify.py",
+    "tests/test_watchdog_poll.py",
+    "tests/test_watchdog_reconcile.py",
+    "tests/test_watchdog_registry.py",
+    "tests/test_watchdog_status.py",
+    "tests/test_watchdog_stuck.py",
+    "tests/test_watchdog_tmux_actuator.py",
+    "tests/deprecated/test_hermes_watchdog_webhook.py",
+    "tests/deprecated/test_hermes_supervisor.py",
+    "skills/z-plan/SKILL.md",
+    "skills/z-plan-split/SKILL.md",
+    "tests/test_z_plan_markdown_contract.py",
+]
+
+print(json.dumps({
+    "validation_scope": "generated_artifact",
+    "tasks": task_entries,
+    "graph": {"nodes": graph_entries},
+    "hard_exclusions": hard_exclusions,
+}, sort_keys=True))
+# GENERATION-EXCLUSION-INPUT-BUILDER-END
+PYEOF
+
+    if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-dispatch-preflight.py" \
+      < "$INTENT_GENERATION_EXCLUSION_INPUT" > "$INTENT_GENERATION_EXCLUSION_RESULT"; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+        "orchestration" intent_generation_exclusion_failed \
+        "$(python3 -c 'import json,sys; print(json.dumps({"level":int(sys.argv[2]),"result":json.load(open(sys.argv[1]))},sort_keys=True))' "$INTENT_GENERATION_EXCLUSION_RESULT" "$CURRENT_LEVEL" 2>/dev/null || echo '{"result":"unreadable"}')" 2>/dev/null || true
+      RB_HALT_REASON="generated INTENT artifact violates hard exclusions at scheduler depth ${CURRENT_LEVEL}"
+      # include: _fragments/run-brief-halt-finalize-execute.md
+      FINALIZE_STATUS=aborted
+      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+        --run-id "$RUN" --status aborted 2>/dev/null || true
+      exit 1
+    fi
+
     # ── T023-SEAM: Per-level execute ──────────────────────────────────
     # T023 will replace this seam with: run the existing per-task implementer→reviewer
     # loop over all tasks in TASKS.md for this level (optionally parallel across
@@ -1991,7 +2102,8 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 python3 - "$LEVEL_TASKS_FILE" "$WORK_GRAPH_FILE" "$SELECTED_BATCH_TASK_IDS" \
   "$SELECTED_BATCH_FANOUT" "$INTENT_PREFLIGHT_LEASE_SNAPSHOT" \
   "$ARCHIVE_DIR/INTENT.frozen.md" "$LEDGER_FILE" "$EXECUTION_STRATEGY_FILE" \
-  "$WORKSTREAMS_FILE" "$RUN" > "$INTENT_PREFLIGHT_INPUT" <<'PYEOF'
+  "$WORKSTREAMS_FILE" "$RUN" "$Z_HARNESS_SESSION_ID" \
+  > "$INTENT_PREFLIGHT_INPUT" <<'PYEOF'
 # PREFLIGHT-INPUT-BUILDER-BEGIN
 import json
 import os
@@ -2012,6 +2124,7 @@ from pathlib import Path
     strategy,
     dependency_context,
     run_id,
+    current_session_id,
 ) = sys.argv[1:]
 tasks_path = Path(tasks_file)
 graph_path = Path(graph_file)
@@ -2107,6 +2220,9 @@ for record in registry_records if isinstance(registry_records, list) else []:
         continue
     holder_run_id = record.get("run_id")
     if not isinstance(holder_run_id, str) or not holder_run_id or holder_run_id == run_id:
+        continue
+    holder_session_id = record.get("session_id", "") or ""
+    if holder_session_id and current_session_id and holder_session_id == current_session_id:
         continue
     try:
         lease_capable = int(record.get("schema_version", 1)) >= 2 and "held_paths" in record
@@ -2240,6 +2356,11 @@ execute_main_loop_steps_1_to_8() {
 
 **INTENT mode hard rules (apply when `LEVEL_EXECUTE_ACTIVE=1`):**
 
+- Step 4.5 (spec-precheck dispatch) MUST build `$SPEC_PRECHECK_PROMPT` with
+  `execution_mode: intent` and all five paths: `frozen_intent_path:`,
+  `work_graph_path:`, `ledger_path:`, `execution_strategy_path:`, and
+  `dependency_context_path:`. The precheck consumes those artifacts for the semantic
+  consistency gate and MUST NOT read or receive `SPEC.md` / `PLAN.md` in INTENT mode.
 - Steps 5 (implementer dispatch), 6 (reviewer dispatch), and 7a (retry-implementer dispatch)
   MUST include `$INTENT_MODE_CTX` in the `Agent(prompt=...)` via the
   `${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}` expansion already present in each prompt template.
@@ -2435,12 +2556,77 @@ If INDEX.json doesn't exist or no concept matches, `relevant_docs` is empty (no 
 
 Spawn the precheck before any code is written:
 
+Build the dispatch prompt through this mode-explicit contract. The INTENT branch must receive
+the same frozen narrative and execution context already validated at the selected-batch seam;
+it must not receive or imply `SPEC.md` / `PLAN.md`. The legacy branch retains the prior `$BASE`
+contract and does not require INTENT artifacts.
+
+```bash
+SPEC_PRECHECK_PROMPT="$(python3 - "$IMPLEMENT_MODE" "<task-id>" "<task block verbatim>" \
+  "$BASE" "<abs repo root>" "<relevant_docs paths>" "$KERNEL_PATH" \
+  "${ARCHIVE_DIR:-}/INTENT.frozen.md" "${WORK_GRAPH_FILE:-}" "${LEDGER_FILE:-}" \
+  "${EXECUTION_STRATEGY_FILE:-}" "${WORKSTREAMS_FILE:-}" <<'PYEOF'
+# SPEC-PRECHECK-PROMPT-BUILDER-BEGIN
+import sys
+
+(
+    mode,
+    task_id,
+    task_block,
+    base,
+    repo_root,
+    relevant_docs,
+    kernel_path,
+    frozen_intent_path,
+    work_graph_path,
+    ledger_path,
+    execution_strategy_path,
+    dependency_context_path,
+) = sys.argv[1:]
+
+if mode not in {"legacy", "intent"}:
+    raise SystemExit(f"unsupported execution mode: {mode}")
+
+lines = [
+    task_id,
+    "",
+    task_block,
+    "",
+    f"execution_mode: {mode}",
+    f"$BASE: {base}",
+    f"Repo root: {repo_root}",
+    "relevant_docs (paths from step 4b — Read these for concept grounding): "
+    + relevant_docs,
+]
+
+if mode == "intent":
+    intent_context = {
+        "frozen_intent_path": frozen_intent_path,
+        "work_graph_path": work_graph_path,
+        "ledger_path": ledger_path,
+        "execution_strategy_path": execution_strategy_path,
+        "dependency_context_path": dependency_context_path,
+    }
+    missing = [name for name, path in intent_context.items() if not path]
+    if missing:
+        raise SystemExit("missing INTENT precheck context: " + ", ".join(missing))
+    lines.extend(f"{name}: {path}" for name, path in intent_context.items())
+
+if kernel_path:
+    lines.append(f"kernel_path: {kernel_path}")
+
+print("\n".join(lines))
+# SPEC-PRECHECK-PROMPT-BUILDER-END
+PYEOF
+)"
+```
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The spec-precheck catches spec-drift before implementation; drivers that skip it should warn the user that spec validation is unavailable. -->
 ```
 Agent(
   subagent_type="spec-precheck",
   description="Spec precheck <task-id>",
-  prompt="<task-id>\n\n<task block verbatim>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths from step 4b — Read these for concept grounding): <paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="$SPEC_PRECHECK_PROMPT"
 )
 ```
 
@@ -2980,7 +3166,7 @@ suppresses a newly discovered finding, and it never changes the final aggregate-
 TASK_ARCHIVE="$BASE/archive/tasks/<task-id>"
 mkdir -p "$TASK_ARCHIVE"
 PREVIOUS_FINDINGS_JSON="${PREVIOUS_FINDINGS_JSON:-[]}"  # v1 starts empty
-CURRENT_FINDINGS_JSON="<normalized blocker/major findings from this full semantic review>"
+CURRENT_FINDINGS_JSON="<normalized findings from this full semantic review; each continuing finding carries the exact id from the supplied prior artifact, while each new finding omits id>"
 FINDING_STATE_INPUT="$(python3 -c '
 import json, sys
 print(json.dumps({"task_id": sys.argv[1], "prior_findings": json.loads(sys.argv[2]), "current_findings": json.loads(sys.argv[3])}))
@@ -3000,7 +3186,11 @@ PREVIOUS_FINDINGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.loa
 Every later reviewer or consult-off self-review receives the latest
 `review-findings-semantic-vN.json` artifact as historical state, plus the complete current task
 diff and normal task/acceptance context. A resolved prior item is recorded as `resolved`; an
-unchanged item is `still_open`; a new regression stays `new` and is review-blocking. The artifact
+open item may be reworded or change severity but must carry its exact prior `id`; a new regression
+must omit `id` and stays `new` and review-blocking. Reviewers must never invent or alter an ID.
+The helper accepts an explicit current ID only when it appears in the supplied prior artifact and
+fails closed on unknown IDs. Every prior finding, regardless of severity, is classified as
+`resolved` or `still_open`. The artifact
 guides continuity but never narrows review scope: every review remains a full semantic review of
 the entire current task diff. Do not treat a clean retry state as permission to omit that review,
 and do not let this artifact waive the conditional aggregate review.
@@ -3064,6 +3254,7 @@ task description: <title>
 acceptance criteria: <criteria verbatim from task block>
 review_mode: full_semantic_current_task
 semantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json
+finding_identity_contract: Reuse an exact prior id only for the same still-open semantic issue, even if reworded or re-severitized. Omit id for every new finding. Never invent an id.
 diff.patch path: $TASK_ARCHIVE/diff.patch
 changed files: <abs paths>
 related downstream files: <related_files paths>
@@ -3209,7 +3400,7 @@ If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `runtime.consult = "off"` in config
   Agent(
     subagent_type="self-reviewer",
     description="Self-review (consult=off) <task-id> v<CYCLE>",
-    prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
+    prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nfinding_identity_contract: Reuse an exact prior id only for the same still-open semantic issue, even if reworded or re-severitized. Omit id for every new finding. Never invent an id.\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
   )
   ```
 - Emit `self_review_completed` event after the self-review returns.
@@ -3223,7 +3414,7 @@ Otherwise (consult=on), spawn the external reviewer:
 Agent(
   subagent_type="reviewer",
   description="Codex review <task-id> v<CYCLE>",
-  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
+  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\nreview_mode: full_semantic_current_task\nsemantic_finding_state_path: $TASK_ARCHIVE/review-findings-semantic-v$((SEMANTIC_REVIEW_ROUND-1)).json\nfinding_identity_contract: Reuse an exact prior id only for the same still-open semantic issue, even if reworded or re-severitized. Omit id for every new finding. Never invent an id.\nImplementer's claim of what changed: <SUMMARY from implementer return>\nDelta patch (supplemental repair evidence): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\ndiff.patch path: $BASE/archive/tasks/<id>/diff.patch\nchanged files: <abs paths>\nrelated downstream files: <related_files paths>\nrelevant_docs: <relevant_docs paths>\n$BASE: <abs path>\n${INTENT_MODE_CTX:+$INTENT_MODE_CTX\n}[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nInspect the entire current task diff against all acceptance criteria and report prior unresolved findings plus any new regression anywhere in the diff."
 )
 ```
 

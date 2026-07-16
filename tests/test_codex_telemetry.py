@@ -23,6 +23,112 @@ def write_jsonl(path: Path, rows: list[object]) -> Path:
     return path
 
 
+def representative_current_rollout(session_id: str, sentinel: str) -> list[object]:
+    """Return a provenance-documented sanitized current rollout fixture.
+
+    Derived from the key/type shapes and event relationships in representative
+    live and archived local Codex rollouts inspected on 2026-07-16. Identifiers
+    and all content are invented; no original payload value is retained.
+    """
+    return [
+        {"timestamp": "2026-07-16T10:00:00Z", "type": "session_meta", "payload": {
+            "id": session_id, "session_id": "sanitized-logical-session",
+            "forked_from_id": "sanitized-parent", "cwd": sentinel,
+        }},
+        {"timestamp": "2026-07-16T10:00:01Z", "type": "event_msg", "payload": {
+            "type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 7, "output_tokens": 3, "total_tokens": 10,
+            }}, "rate_limits": {"secret": sentinel},
+        }},
+        {"timestamp": "2026-07-16T10:00:02Z", "type": "event_msg", "payload": {
+            "type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+            }},
+        }},
+        {"timestamp": "2026-07-16T10:00:03Z", "type": "event_msg", "payload": {
+            "type": "task_started", "turn_id": "sanitized-turn",
+            "started_at": "2026-07-16T10:00:03Z",
+        }},
+        {"timestamp": "2026-07-16T10:00:03.250Z", "type": "response_item", "payload": {
+            "type": "function_call", "call_id": "sanitized-call", "name": sentinel,
+            "arguments": sentinel,
+        }},
+        {"timestamp": "2026-07-16T10:00:03.500Z", "type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "sanitized-call", "output": sentinel,
+        }},
+        {"timestamp": "2026-07-16T10:00:03.550Z", "type": "response_item", "payload": {
+            "type": "custom_tool_call", "call_id": "sanitized-custom-call",
+            "name": sentinel, "input": sentinel,
+        }},
+        {"timestamp": "2026-07-16T10:00:03.700Z", "type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "call_id": "sanitized-custom-call",
+            "output": sentinel,
+        }},
+        {"timestamp": "2026-07-16T10:00:04Z", "type": "event_msg", "payload": {
+            "type": "task_complete", "turn_id": "sanitized-turn",
+            "completed_at": "2026-07-16T10:00:04Z", "duration_ms": 1000,
+            "time_to_first_token_ms": 200, "last_agent_message": sentinel,
+        }},
+    ]
+
+
+def test_current_rollout_live_archive_fixture_normalizes_end_to_end(tmp_path: Path) -> None:
+    sentinel = "PROMPT reasoning tool-output sk-secret /absolute/private/path"
+    fixture = representative_current_rollout("current-session", sentinel)
+    live = write_jsonl(tmp_path / "live-current.jsonl", fixture)
+    archive = write_jsonl(tmp_path / "archive-current.jsonl", fixture)
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--source", f"live:{live}", "--source", f"archive:{archive}"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert sentinel not in completed.stdout
+    assert str(tmp_path) not in completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["quality_flags"] == []
+    assert payload["sessions"] == [{
+        "idle_precision": "unknown",
+        "inferred_idle_ms": None,
+        "quality_flags": [],
+        "session_hash": telemetry.session_hash("current-session"),
+        "source": "both",
+        "token_count": 15,
+        "tool_wait_ms": 400,
+        "tool_wait_precision": "exact",
+        "ttft_ms": 200,
+        "ttft_precision": "exact",
+        "turn_count": 1,
+    }]
+
+
+def test_current_rollout_fork_counters_and_unknown_envelope_are_safe(tmp_path: Path) -> None:
+    sentinel = "PROMPT reasoning tool-argument sk-secret /absolute/private/path"
+    parent = representative_current_rollout("parent", sentinel)[:3]
+    child = [
+        {"timestamp": "2026-07-16T11:00:00Z", "type": "session_meta", "payload": {
+            "id": "child", "forked_from_id": "parent", "base_instructions": sentinel,
+        }},
+        {"timestamp": "2026-07-16T11:00:01Z", "type": "event_msg", "payload": {
+            "type": "token_count", "info": {"total_token_usage": {"total_tokens": 4}},
+        }},
+        {"timestamp": "2026-07-16T11:00:02Z", "type": "future_envelope", "payload": {
+            "private": sentinel,
+        }},
+    ]
+    source = write_jsonl(tmp_path / "fork-current.jsonl", parent + child)
+
+    rendered = json.dumps(telemetry.summarize([("live", source)]))
+
+    assert sentinel not in rendered
+    sessions = {item["session_hash"]: item for item in json.loads(rendered)["sessions"]}
+    assert sessions[telemetry.session_hash("parent")]["token_count"] == 15
+    assert sessions[telemetry.session_hash("child")]["token_count"] == 4
+    assert "unknown_schema" in sessions[telemetry.session_hash("child")]["quality_flags"]
+
+
 def test_dedup_fork_segments_and_exact_timing(tmp_path: Path) -> None:
     live = write_jsonl(tmp_path / "live.jsonl", [
         {"session_id": "parent", "event": "usage", "timestamp": 1, "total_tokens": 10},
