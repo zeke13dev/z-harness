@@ -437,6 +437,7 @@ _PROD_PUBLIC_DOCUMENT_PATHS = frozenset(
         "CHANGELOG.md",
         "LICENSE",
         "README.md",
+        "docs/human/GITHUB_RELEASE_SETUP.md",
         "docs/human/INSTALL.md",
         "docs/human/MULTI-IDE.md",
         "docs/human/PROVIDERS.md",

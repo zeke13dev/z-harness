@@ -63,7 +63,7 @@ Artifacts managed by z-harness at the repository root (not under `docs/`).
 | [PLAN-LAYOUT.md](./PLAN-LAYOUT.md) | — | Plan directory layout and plugin directory layout. |
 | [MULTI-IDE.md](./MULTI-IDE.md) | — | Exporting z-harness to Cursor, Codex CLI, and Antigravity. |
 | [environment-knobs.md](./environment-knobs.md) | — | Environment variable reference for all tunables. |
+| [GITHUB_RELEASE_SETUP.md](./GITHUB_RELEASE_SETUP.md) | — | GitHub branch, environment, runner, and public-visibility release setup. |
 | [telemetry.md](./telemetry.md) | — | Telemetry event kinds, compaction policy. |
 | [plugin-author-conventions.md](./plugin-author-conventions.md) | — | Conventions for downstream `.claude/skills/` authors. |
 | [limitations.md](./limitations.md) | — | Known v1 limitations. |
-

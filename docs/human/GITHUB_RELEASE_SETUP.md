@@ -1,0 +1,95 @@
+# GitHub release setup
+
+This document records the repository settings required before z-harness is made public or a release is published. The workflows enforce candidate integrity in code; these GitHub settings supply the administrative protection around those workflows.
+
+## Current publication order
+
+1. Push the reviewed `main` history while the repository is still private.
+2. Let all `main` CI jobs complete successfully.
+3. Protect `main` using the exact successful check names reported by GitHub.
+4. Create the protected `release-evidence` environment and add its release-only secrets.
+5. Register a repository-owned self-hosted runner carrying the `z-harness-release-evidence` label.
+6. Prepare and protect `prod` only when cutting a release candidate.
+7. Run release evidence, conformance, and publication against the exact `prod` SHA.
+8. Make the repository public only after the public-page and secret-history checks pass.
+
+Do not push `prod`, create a release tag, or make the repository public merely to test the setup.
+
+## Protect `main`
+
+Use a branch ruleset or classic branch protection with these properties:
+
+- target: the `main` branch;
+- block force pushes and branch deletion;
+- require a pull request before future merges;
+- require conversation resolution;
+- require branches to be up to date before merging;
+- require every successful `main` CI check that is intended to remain blocking; and
+- include administrators after the initial private `main` push is complete.
+
+For a single-maintainer repository, requiring a pull request with zero mandatory approving reviews prevents direct pushes without creating an impossible self-approval requirement. Increase the approval count when another maintainer is available.
+
+Do not guess required-check context names from workflow YAML. Push first, let CI create the checks, and select the exact names GitHub reports for the successful commit.
+
+## Protect release evidence
+
+Create an Actions environment named exactly `release-evidence`. The workflow contract validates this exact name.
+
+Configure the environment to:
+
+- allow deployment only from protected branches;
+- require an explicit approval before the evidence job starts, if the repository plan and maintainer topology support a non-deadlocking reviewer rule; and
+- store the following environment secrets, never repository variables or committed files:
+  - `Z_HARNESS_RELEASE_ANTHROPIC_API_KEY`
+  - `Z_HARNESS_RELEASE_CODEX_OPENAI_API_KEY`
+  - `Z_HARNESS_RELEASE_OMP_OPENAI_API_KEY`
+
+The evidence runner must be repository-owned and carry all labels required by `.github/workflows/release-evidence.yml`:
+
+```text
+self-hosted
+linux
+x64
+z-harness-release-evidence
+```
+
+Use a dedicated runner account or machine with no persistent provider credentials. The workflow supplies release-only credentials through the protected environment and creates isolated host homes for execution.
+
+## Protect `prod` when a candidate is cut
+
+`prod` is the public-release branch, not a development branch. Create or refresh it only from a clean, reviewed `main`, carrying the explicitly approved release surface.
+
+Before running release evidence:
+
+- push the exact candidate to `prod`;
+- protect `prod` from force pushes and deletion;
+- confirm the candidate SHA is the authoritative `origin/prod` tip; and
+- stop all further mutation of the candidate.
+
+The evidence, conformance, and release workflows independently refetch authoritative refs and reject stale or mismatched SHAs.
+
+## Public visibility checklist
+
+Before changing repository visibility from private to public, confirm:
+
+- `README.md`, `LICENSE`, repository description, and topics render correctly;
+- the default branch is `main` and its protection is active;
+- CI is green at the public tip;
+- no credentials, local state, plan archives, generated exports, or maintainer-specific paths exist anywhere in the published history;
+- Actions has read-only default token permissions;
+- no release-only secret is stored outside the protected environment;
+- Issues and any intentionally enabled community features have appropriate templates or are disabled; and
+- the first public release remains unpublished until protected exact-candidate evidence succeeds.
+
+Visibility changes and release publication are separate decisions. A repository may be public while the first release is still pending.
+
+## Release workflow order
+
+For a canonical version and protected `prod` SHA:
+
+1. Run `Produce exact release evidence` with `candidate_version` and `candidate_sha`.
+2. Record the successful immutable evidence run ID.
+3. Run `Exact release-candidate conformance` with the same version, SHA, and evidence run ID.
+4. Run `Release reviewed prod candidate` with the version, reviewed `main` SHA, `prod` SHA, and evidence run ID.
+
+Publication creates the tag and release only after all exact-candidate and freshness checks pass.
