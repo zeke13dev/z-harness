@@ -141,7 +141,7 @@ rm -f "$TMPFILE"
 
 ## Phase 5 — Explicit user approval gate
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this approval question (approve / cancel) via their native channel. Silent omission is forbidden — approval must never be automatic. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this approval question (approve / cancel) via their native channel. Silent omission is forbidden — approval must never be automatic. -->
 
 **This gate is mandatory and is the core invariant: approval is always explicit.**
 

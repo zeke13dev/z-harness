@@ -139,7 +139,7 @@ Use explicit `--concept` when present. Otherwise read the concept slugs and
 summaries from `docs/llm/INDEX.json`; use `--concept-hints` only to rank the
 choices.
 
-<!-- RUNTIME-GATE: ask_user required for interactive concept selection. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; required for interactive concept selection. -->
 Ask once to choose an existing concept, create a new kebab-case concept, or
 cancel. Cancel is the recommended no-op when there is no durable lesson and
 returns `STATUS: skipped`. A new slug must match
@@ -148,7 +148,7 @@ passed and dry-run has been ruled out.
 
 ## Phase 3 — Collect and validate one memory
 
-<!-- RUNTIME-GATE: ask_user required for interactive memory collection. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; required for interactive memory collection. -->
 Collect the full entry in one bounded prompt where the host supports it:
 
 - type: one of `anti_pattern`, `abandoned_path`, `incident`,

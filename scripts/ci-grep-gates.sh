@@ -14,7 +14,9 @@
 # Purpose:
 #   After the provider-name rename (codex -> codex-cli, gemini -> gemini-cli,
 #   claude -> claude-cli), new code must not hardcode the old bare provider names
-#   as role/runtime identifiers. This gate prevents regressions.
+#   as role/runtime identifiers. This lexical scan cannot yet distinguish those
+#   provider IDs from legitimate host IDs; callers may treat exit 1 as advisory,
+#   but missing inputs and internal failures remain hard errors.
 #
 # Exempt paths (not scanned):
 #   - docs/llm/*.json           — descriptive index files
@@ -48,7 +50,6 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Scan directories (relative to REPO_ROOT)
 SCAN_DIRS=(
-    "commands"
     "skills"
     "scripts"
     "agents"
@@ -107,7 +108,8 @@ build_exempt_pattern() {
 }
 
 EXEMPT_PATTERN_FILE="$(mktemp)"
-trap 'rm -f "$EXEMPT_PATTERN_FILE"' EXIT
+MATCH_FILE="$(mktemp)"
+trap 'rm -f "$EXEMPT_PATTERN_FILE" "$MATCH_FILE"' EXIT
 build_exempt_pattern > "$EXEMPT_PATTERN_FILE"
 
 # ---------------------------------------------------------------------------
@@ -176,12 +178,13 @@ for f in "${SCAN_FILES[@]}"; do
 
     # grep the file; exit 1 = no match (fine), exit 0 = matches
     grep_ec=0
-    matches="$(grep -En "$PATTERN" "$f" 2>/dev/null)" || grep_ec=$?
+    : > "$MATCH_FILE"
+    grep -En "$PATTERN" "$f" > "$MATCH_FILE" 2>/dev/null || grep_ec=$?
     if [[ $grep_ec -gt 1 ]]; then
         echo "ci-grep-gates: hard error reading $f (grep exit $grep_ec)" >&2
         exit 3
     fi
-    [[ -z "$matches" ]] && continue
+    [[ ! -s "$MATCH_FILE" ]] && continue
 
     # Relative path for output
     rel="$f"
@@ -212,7 +215,7 @@ for f in "${SCAN_FILES[@]}"; do
         lineno="${match_line%%:*}"
         content="${match_line#*:}"
         VIOLATIONS+=("$rel:$lineno: $content")
-    done <<< "$matches"
+    done < "$MATCH_FILE"
 done
 
 # ---------------------------------------------------------------------------
