@@ -56,9 +56,11 @@ Use a dedicated runner account or machine with no persistent provider credential
 
 ## Authorize one protected-main candidate
 
-Before running release evidence, confirm the reviewed candidate is the exact `origin/main` tip and stop further mutation until publication completes. Evidence, conformance, and publication independently fetch `origin/main`, require a clean detached checkout at that exact SHA, and reject stale or mismatched bindings. Publication refreshes `origin/main` again immediately before creating the release and targets the authorized candidate SHA.
+Before running release evidence, confirm the reviewed candidate is the exact `origin/main` tip and stop further mutation until publication completes. Evidence, conformance, and publication independently fetch `origin/main`, require a clean detached checkout at that exact SHA, and reject stale or mismatched bindings. Publication refreshes `origin/main` again immediately before publication, creates the canonical tag with a non-force push that fails if the tag already exists, verifies the remote tag resolves to the authorized candidate SHA, and only then creates the release.
 
 These workflows verify Git identities and immutable evidence; they do not query or prove GitHub ruleset configuration. Branch protection is the administrative prerequisite described above and must be checked in repository settings.
+
+Protect the canonical release-tag namespace (`v*`) with a repository ruleset that permits the release workflow to create tags but prevents tag updates and deletion. The non-force tag push closes competing-creation races; the ruleset keeps the verified tag immutable afterward.
 
 ## Public visibility checklist
 
@@ -67,7 +69,7 @@ Before changing repository visibility from private to public, confirm:
 - `README.md`, `LICENSE`, repository description, and topics render correctly;
 - the default branch is `main` and its protection is active;
 - CI is green at the public tip;
-- no credentials, local state, plan archives, generated exports, or maintainer-specific paths exist anywhere in the published history;
+- a full-history credential and privacy scan has passed, and any benign historical plan metadata or maintainer-local path strings retained for provenance have been explicitly reviewed and accepted;
 - Actions has read-only default token permissions;
 - no release-only secret is stored outside the protected environment;
 - Issues and any intentionally enabled community features have appropriate templates or are disabled; and

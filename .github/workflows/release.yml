@@ -302,6 +302,18 @@ jobs:
             --host-evidence-root "$RUNNER_TEMP/release-host-evidence" \
             --evidence "$RUNNER_TEMP/publication-candidate-evidence.json" \
             --authorization "$RUNNER_TEMP/release-authorization.json"
+      - name: Atomically publish and verify the canonical candidate tag
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+        run: |
+          set -euo pipefail
+          TAG="v$CANDIDATE_VERSION"
+          git tag "$TAG" "$CANDIDATE_SHA"
+          git push origin "refs/tags/$TAG:refs/tags/$TAG"
+          REMOTE_TAG="$(git ls-remote --refs origin "refs/tags/$TAG" | awk '{print $1}')"
+          [[ "$REMOTE_TAG" == "$CANDIDATE_SHA" ]] || { echo "canonical release tag does not target the authorized candidate" >&2; exit 1; }
       - name: Create GitHub release from the exact allowlist
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
