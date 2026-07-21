@@ -14,6 +14,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from z_harness_cli import release_surface
+
 from z_harness_cli.mcp.server import (
     COMMAND_TOOLS,
     _FAST_HANDLERS,
@@ -47,6 +49,15 @@ class TestServerRegistration:
         """z_subagent_dispatch is in COMMAND_TOOLS and marked heavy."""
         assert "z_subagent_dispatch" in COMMAND_TOOLS
         assert COMMAND_TOOLS["z_subagent_dispatch"]["is_heavy"]
+
+    def test_every_active_prod_tool_has_one_shared_graph_backing(self, monkeypatch) -> None:
+        from z_harness_cli.mcp import server
+
+        monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+        active = server._active_command_tools()
+        backings = release_surface.prod_mcp_tool_backings(active)
+        assert set(backings) == set(active)
+        assert all(value.startswith(("skill:", "handler:")) for value in backings.values())
 
 
 class TestZWhere:

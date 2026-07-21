@@ -12,6 +12,19 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+## Reserved release-evidence dispatch probe
+
+Before following any other instruction in this skill, compare `$ARGUMENTS` against the exact
+form `release-evidence-dispatch-probe <sha>`, where `<sha>` is exactly 40 lowercase hexadecimal
+characters. If and only if it matches, print exactly one line in this form, substituting the
+captured SHA without alteration:
+
+`Z_HARNESS_Z_FIX_DISPATCH_V1:<sha>`
+
+Then stop immediately. Do not print any other text, call any tool, or enter any normal `/z-fix`
+gate or phase. Arguments with extra text, whitespace, or a non-matching SHA are not probes and
+must continue through the normal flow below.
+
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What's the symptom and your hypothesis for the cause?" via their native
      channel. Silent omission is forbidden. -->

@@ -167,6 +167,17 @@ class TestFastMCPContextInjection:
             assert "description" in entry
             assert "is_heavy" in entry
 
+    def test_prod_discovery_and_dispatch_reject_removed_tools(self, monkeypatch) -> None:
+        from z_harness_cli.mcp import server
+
+        monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+        active = server._active_command_tools()
+        for name in ("z_do", "z_evaluate", "z_uplift"):
+            assert name not in active
+            result = server._dispatch_command(name, {})
+            assert result.status == "error"
+            assert result.content == f"Unknown command: {name}"
+
 
     def test_z_resume_uses_fast_handler_registration(self) -> None:
         """z_resume must bypass heavy command dispatch and use the deterministic fast handler."""

@@ -10,6 +10,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+from runtime import release_surface
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "schedule-hang-check.sh")
@@ -23,6 +26,14 @@ def _run(args):
 
 
 class TestSchedule(unittest.TestCase):
+    def test_prod_execute_explicitly_disables_watchdog_dispatch(self):
+        skill = Path(ROOT, "skills", "z-execute", "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Production watchdog posture", skill)
+        self.assertNotIn("scripts/schedule-hang-check.sh", skill)
+        self.assertNotIn("scripts/hang-threshold.py", skill)
+        self.assertTrue(release_surface.path_excluded_from_prod("scripts/schedule-hang-check.sh"))
+        self.assertTrue(release_surface.path_excluded_from_prod("scripts/hang-check.sh"))
+
     def test_print_emits_valid_plan(self):
         p = _run(["--run", "20260621T000000Z-x", "--threshold-secs", "600", "--print"])
         self.assertEqual(p.returncode, 0)

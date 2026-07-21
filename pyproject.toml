@@ -25,6 +25,7 @@ dependencies = [
     "typer>=0.9",
     "rich>=13",
     "fastmcp>=3.4.2",
+    "packaging>=24",
 ]
 
 [project.urls]
@@ -51,7 +52,7 @@ fallback-version = "0.0.0.dev0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["z_harness_cli", "runtime"]
-force-include = { "scripts" = "scripts", "skills" = "skills", "agents" = "agents", "personas" = "personas", "docs" = "docs", "_fragments" = "_fragments", "install.sh" = "install.sh", "plugin.json" = "plugin.json", ".claude-plugin" = ".claude-plugin", ".codex-plugin" = ".codex-plugin", "LICENSE" = "LICENSE", "README.md" = "README.md", "CAPABILITIES.md" = "CAPABILITIES.md", "VERSION" = "VERSION" }
+force-include = { "scripts" = "scripts", "skills" = "skills", "agents" = "agents", "docs" = "docs", "install.sh" = "install.sh", "plugin.json" = "plugin.json", ".claude-plugin" = ".claude-plugin", "LICENSE" = "LICENSE", "README.md" = "README.md", "CAPABILITIES.md" = "CAPABILITIES.md", "VERSION" = "VERSION" }
 
 [dependency-groups]
 dev = [

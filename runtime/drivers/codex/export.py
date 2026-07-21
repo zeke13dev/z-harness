@@ -204,14 +204,21 @@ def _resolve_version(repo_root: Path) -> str | None:
         return None
 
 
-def _render_plugin_manifest(repo_root: Path) -> str:
-    """Return the JSON content for .codex-plugin/plugin.json."""
+def _render_plugin_manifest(
+    repo_root: Path | None = None,
+    *,
+    candidate_version: str | None = None,
+    candidate_commit: str | None = None,
+) -> str:
+    """Return deterministic JSON content for .codex-plugin/plugin.json."""
     manifest = dict(_CODEX_PLUGIN_MANIFEST)
-    version = _resolve_version(repo_root)
+    version = candidate_version or (_resolve_version(repo_root) if repo_root is not None else None)
     if version:
         # Insert version right after name for readability.
         manifest = {"name": manifest["name"], "version": version,
                     **{k: v for k, v in manifest.items() if k != "name"}}
+    if candidate_commit:
+        manifest["candidate_commit"] = candidate_commit
     return json.dumps(manifest, indent=2) + "\n"
 
 

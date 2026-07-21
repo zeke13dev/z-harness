@@ -597,11 +597,21 @@ def _release_surface() -> str:
 def _active_command_tools() -> dict[str, dict[str, Any]]:
     if _release_surface() == "dev":
         return COMMAND_TOOLS
-    return {
+    active = {
         name: meta
         for name, meta in COMMAND_TOOLS.items()
         if release_surface.is_prod_visible("mcp_tools", name, "prod")
     }
+    backings = release_surface.prod_mcp_tool_backings(active)
+    for tool_name, backing in backings.items():
+        if not backing.startswith("handler:"):
+            continue
+        handler_name = backing.removeprefix("handler:")
+        if not callable(globals().get(handler_name)):
+            raise RuntimeError(
+                f"prod MCP tool {tool_name} has unavailable reviewed handler {handler_name}"
+            )
+    return active
 
 
 

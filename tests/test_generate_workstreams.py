@@ -27,6 +27,17 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPT = str(_REPO_ROOT / "scripts" / "generate-workstreams.py")
 
 
+def test_default_prod_planning_backend_is_shipped_and_referenced() -> None:
+    from runtime import release_surface
+
+    inventory = release_surface.release_contract()["prod_inventory"]
+    assert "scripts/generate-workstreams.py" in inventory["scripts_backends"]
+    assert not release_surface.path_excluded_from_prod("scripts/generate-workstreams.py")
+    for skill_id in ("z-plan", "z-execute"):
+        text = (_REPO_ROOT / "skills" / skill_id / "SKILL.md").read_text(encoding="utf-8")
+        assert "scripts/generate-workstreams.py" in text
+
+
 # ---------------------------------------------------------------------------
 # Load module (hyphenated filename — cannot use normal import)
 # ---------------------------------------------------------------------------

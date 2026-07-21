@@ -1,41 +1,52 @@
 #!/usr/bin/env bash
-# bundle-plugin.sh — build a distributable z-harness tarball
+# bundle-plugin.sh — build a distributable z-harness tarball from a canonical stage
 #
-# Usage: bash scripts/bundle-plugin.sh
+# Usage: bash scripts/bundle-plugin.sh --stage DIR --candidate-version VERSION --candidate-commit SHA
+# Example: bash scripts/bundle-plugin.sh --stage /tmp/z-harness-release-stage --candidate-version 0.2.0-beta.1 --candidate-commit abc123
 #
 # Output: dist/z-harness-<version>.tar.gz
-#
-# Exclusions (never included in the tarball):
-#   .git/
-#   exports/
-#   temp/
-#   z-harness/ runtime state
-#   archive/, improvements/, research/
-#   .agent/, .pi/, .local/, .pytest_cache/, .claude/worktrees/, .antigravitycli/
-#   dist/
-#   .z-harness/
-#   __pycache__/
-#   providers.json (any location)
-#   z-harness/<slug>/ dirs containing PLAN.md/SPEC.md/TASKS.md (legacy plans)
-#
-# After building, runs scripts/audit-tarball.sh on the output.
-# Fails (non-zero) and deletes the tarball on any audit violation.
+# The supplied stage must carry matching candidate metadata. After building,
+# the script audits the output and deletes it on any violation.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-cd "$REPO_ROOT"
+if [[ $# -ne 6 || "$1" != "--stage" || "$3" != "--candidate-version" || "$5" != "--candidate-commit" ]]; then
+  printf 'usage: %s --stage DIR --candidate-version VERSION --candidate-commit SHA\n' "$0" >&2
+  exit 2
+fi
 
-# Resolve version
-VERSION_JSON="$(bash "$SCRIPT_DIR/version.sh")"
-VERSION="$(printf '%s' "$VERSION_JSON" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get("z_harness_tag") or d["z_harness_version"])')"
+STAGE_DIR="$2"
+VERSION="$4"
+CANDIDATE_COMMIT="$6"
+MANIFEST="$STAGE_DIR/.codex-plugin/plugin.json"
 
-if [[ -z "$VERSION" ]]; then
-  printf 'bundle-plugin.sh: ERROR: could not determine version\n' >&2
+if [[ ! -d "$STAGE_DIR" || ! -f "$MANIFEST" ]]; then
+  printf 'bundle-plugin.sh: ERROR: canonical stage or plugin metadata is missing\n' >&2
   exit 1
 fi
+
+python3 - "$MANIFEST" "$VERSION" "$CANDIDATE_COMMIT" <<'PY'
+import json
+import pathlib
+import sys
+from z_harness_cli.release import parse_release_candidate
+
+manifest_path, version, commit = sys.argv[1:]
+try:
+    candidate = parse_release_candidate(version)
+except ValueError as exc:
+    raise SystemExit(f"bundle-plugin.sh: ERROR: invalid release candidate: {exc}") from exc
+manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
+try:
+    manifest_candidate = parse_release_candidate(manifest.get("version", ""))
+except ValueError as exc:
+    raise SystemExit("bundle-plugin.sh: ERROR: canonical stage candidate identity mismatch") from exc
+if manifest_candidate != candidate or manifest.get("candidate_commit") != commit:
+    raise SystemExit("bundle-plugin.sh: ERROR: canonical stage candidate identity mismatch")
+PY
 
 DIST_DIR="$REPO_ROOT/dist"
 mkdir -p "$DIST_DIR"
@@ -44,66 +55,53 @@ OUTPUT="$DIST_DIR/z-harness-${VERSION}.tar.gz"
 
 printf 'bundle-plugin.sh: building %s\n' "$OUTPUT"
 
-# Build exclusion list for tar
-# Note: tar --exclude patterns match relative to the source dir
-EXCLUDES=(
-  "--exclude=./.git"
-  "--exclude=./exports"
-  "--exclude=./prompts"
-  "--exclude=./temp"
-  "--exclude=./z-harness"
-  "--exclude=./archive"
-  "--exclude=./improvements"
-  "--exclude=./research"
-  "--exclude=./.agent"
-  "--exclude=./.pi"
-  "--exclude=./.local"
-  "--exclude=./.pytest_cache"
-  "--exclude=./.claude/worktrees"
-  "--exclude=./.antigravitycli"
-  "--exclude=./.venv"
-  "--exclude=./dist"
-  "--exclude=./.z-harness"
-  "--exclude=./__pycache__"
-  "--exclude=*/__pycache__"
-  "--exclude=*/providers.json"
-  "--exclude=./providers.json"
-)
+python3 - "$STAGE_DIR" "$OUTPUT" <<'PY'
+import gzip
+import pathlib
+import sys
+import tarfile
 
-SURFACE="${Z_HARNESS_RELEASE_SURFACE:-dev}"
-if [[ "$SURFACE" == "prod" || "$SURFACE" == "production" ]]; then
-  while IFS= read -r exclude_arg; do
-    [[ -n "$exclude_arg" ]] && EXCLUDES+=("$exclude_arg")
-  done < <(python3 -m z_harness_cli.release_surface tar-excludes --surface "$SURFACE")
-fi
+stage = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+paths = sorted(stage.rglob("*"), key=lambda path: path.relative_to(stage).as_posix())
 
-# Enumerate legacy plan dirs — any z-harness/<slug>/ that contains PLAN.md,
-# SPEC.md, or TASKS.md — and exclude them from the tarball.
-# Skip the canonical directories that are either already excluded above or
-# are intentionally included.
-_SKIP_SLUGS=("plans" "archive" "improvements")
-if [[ -d "$REPO_ROOT/z-harness" ]]; then
-  while IFS= read -r -d '' dir; do
-    slug="$(basename "$dir")"
-    # Skip already-excluded canonical dirs
-    skip=0
-    for s in "${_SKIP_SLUGS[@]}"; do
-      [[ "$slug" == "$s" ]] && skip=1 && break
-    done
-    [[ "$skip" -eq 1 ]] && continue
-    # Exclude if the dir contains any of the plan marker files
-    if [[ -f "$dir/PLAN.md" || -f "$dir/SPEC.md" || -f "$dir/TASKS.md" ]]; then
-      EXCLUDES+=("--exclude=./z-harness/${slug}")
-    fi
-  done < <(find "$REPO_ROOT/z-harness" -maxdepth 1 -mindepth 1 -type d -print0)
-fi
-
-tar -czf "$OUTPUT" "${EXCLUDES[@]}" -C "$REPO_ROOT" .
+with output.open("wb") as raw:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for path in paths:
+                relative = path.relative_to(stage).as_posix()
+                info = archive.gettarinfo(str(path), arcname=relative)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = 0
+                info.mode = 0o755 if path.is_dir() or info.mode & 0o111 else 0o644
+                info.pax_headers = {}
+                if path.is_file():
+                    with path.open("rb") as source:
+                        archive.addfile(info, source)
+                else:
+                    archive.addfile(info)
+PY
 
 printf 'bundle-plugin.sh: tarball created at %s\n' "$OUTPUT"
 printf 'bundle-plugin.sh: running audit...\n'
 
-if ! bash "$SCRIPT_DIR/audit-tarball.sh" "$OUTPUT"; then
+SURFACE="${Z_HARNESS_RELEASE_SURFACE:-dev}"
+if [[ "$SURFACE" == "prod" || "$SURFACE" == "production" ]]; then
+  # The source ownership contract deliberately excludes generated files. Audit
+  # every source entry against it, allowing only the stager-owned metadata.
+  if ! tar -tzf "$OUTPUT" \
+    | grep -Ev '^\.codex-plugin/?$|^\.codex-plugin/plugin\.json$|^\./\.codex-plugin/?$|^\./\.codex-plugin/plugin\.json$' \
+    | python3 -m z_harness_cli.release_surface audit-listing --surface prod; then
+    printf 'bundle-plugin.sh: FAIL — staged source is outside the prod ownership contract\n' >&2
+    rm -f "$OUTPUT"
+    exit 1
+  fi
+fi
+
+if ! Z_HARNESS_RELEASE_SURFACE=dev bash "$SCRIPT_DIR/audit-tarball.sh" "$OUTPUT"; then
   printf 'bundle-plugin.sh: FAIL — audit violation; deleting tarball\n' >&2
   rm -f "$OUTPUT"
   exit 1

@@ -1298,24 +1298,9 @@ JSON
      prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: <$INTENT_FILE>\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all\nreview_contract: intent\nledger_path: <$LEDGER_FILE>"
    )
    ```
-4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
-
-    If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
-
-    ```bash
-    AXIOM_READY_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | grep '^AXIOM_READY ' || true)"
-    ```
-
-    ```
-    Agent(
-      subagent_type="axiom-extractor",
-      description="Axiom extraction for <slug>",
-      prompt="mode: post-run <RRUN>
-    repo_root: <REPO_ROOT>"
-    )
-    ```
-
-    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later human review or dev-only `z-axiom-*` workflows. Do not block on the axiom-extractor's return or error if it is unavailable.
+4a. **Production axiom posture.** Axiom extraction is development-only and is not
+    reachable from the production final-review workflow. Ignore any axiom-ready marker;
+    the exported review agent remains the sole memory-review dispatch.
 
 5. Parse the agent's return: extract the single fenced ```json block. On parse failure → emit `review_agent_malformed` event, soft-skip with a push-notify hint, and exit phase:
    ```bash

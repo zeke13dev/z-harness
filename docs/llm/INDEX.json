@@ -1,7 +1,7 @@
 {
   "version": "1",
-  "generated_at": "2026-07-12",
-  "z_harness_version": "7c8d09a",
+  "generated_at": "2026-07-21",
+  "z_harness_version": "07ebcff",
   "concepts": [
     {
       "slug": "active-plan-registry",
@@ -857,7 +857,7 @@
         ".z-harness/providers.json",
         "scripts/omp-consult.sh"
       ],
-      "last_updated": "2026-07-09",
+      "last_updated": "2026-07-21",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -871,7 +871,7 @@
         "personas-and-roles",
         "reviewer-capture"
       ],
-      "summary": "Provider CLI resolution and role binding. OMP provider entries (omp-gemini/omp-codex/omp-cursor-terra/omp-cursor-sol) are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract. As of the host-aware-model-tiers plan (T007) plus the openai-codex OAuth rebind, default role bindings are consultant_primary=omp-antigravity-pro, consultant_secondary=omp-codex (GPT-5.6 via omp openai-codex OAuth), reviewer=codex-cli (gpt-5-codex); the earlier cursor-provider bindings were retired when cursor OAuth broke."
+      "summary": "Provider CLI resolution and role binding. OMP provider entries are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract. Current repository defaults are consultant_primary=omp-antigravity-pro (google-antigravity/gemini-3.1-pro), consultant_secondary=omp-openai-sol (openai-codex/gpt-5.6-sol), and reviewer=omp-openai-terra (openai-codex/gpt-5.6-terra). google-antigravity and openai-codex auth are required; Cursor is optional and not role-bound. Compatibility history: Cursor entries and omp-codex/codex-cli role bindings are retained only for manual use or as retired history, not current defaults."
     },
     {
       "slug": "review-agent",
@@ -1350,7 +1350,7 @@
         "z_harness_cli/commands/update.py",
         "z_harness_cli/release.py"
       ],
-      "last_updated": "2026-07-09",
+      "last_updated": "2026-07-21",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -1358,7 +1358,7 @@
         "release-packaging"
       ],
       "consumed_by": [],
-      "summary": "Deterministic z-harness update path: a thin /z-update host skill delegates all release-manifest fetch, version comparison, and install-mode dispatch to z_harness_cli/commands/update.py + release.py, with install.sh owning the actual symlink/tarball plugin install and atomic-swap mechanics."
+      "summary": "Explicit candidate-alignment workflow that inventories CLI/Claude/Codex and transactionally updates packaged, uv-tool, or source components with durable recovery."
     }
   ]
 }

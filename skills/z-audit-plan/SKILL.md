@@ -72,9 +72,15 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
          # Interactive -> AskUserQuestion: abort / continue-uncoordinated (clearly labeled: peer may clobber).
          # Unattended (Z_HARNESS_NO_ASK) -> abort. Release first (we held the claim), no deregister
          # (nothing registered yet at this point in Phase 0).
+         # NO-REGISTRY RELEASE: capture failure; never claim success silently.
+         RELEASE_RC=0
          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
            --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-           --command /z-audit-plan || true
+           --command /z-audit-plan || RELEASE_RC=$?
+         if [[ $RELEASE_RC -ne 0 ]]; then
+           printf 'z-audit-plan: pre-registration claim release failed (exit %s); manual retry required\n' "$RELEASE_RC" >&2
+           exit "$RELEASE_RC"
+         fi
          exit 1
        fi
      fi
@@ -128,9 +134,15 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    - `1` (live peer holds the claim) → show the printed holder JSON (session / command / heartbeat-age). **Interactive** → `AskUserQuestion`: **proceed anyway / abort**. **Unattended** (`Z_HARNESS_NO_ASK`) → abort (`exit 1`) UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1` (then proceed). On abort here: exit WITHOUT register (nothing registered yet) and WITHOUT release (we never acquired the lock).
    - `2` (stale-takeover succeeded — **we now hold the lock**) → show the prior holder + idle age. **Interactive** → `AskUserQuestion`: **proceed / abort** (default ABORT — the prior session's partial artifacts may exist). **Unattended** → abort UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1`. **On abort here, CALL `release` FIRST** (we hold the lock we just took over), then exit WITHOUT register:
      ```bash
+     # NO-REGISTRY RELEASE: capture failure; never claim success silently.
+     RELEASE_RC=0
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
        --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-       --command /z-audit-plan || true
+       --command /z-audit-plan || RELEASE_RC=$?
+     if [[ $RELEASE_RC -ne 0 ]]; then
+       printf 'z-audit-plan: pre-registration claim release failed (exit %s); manual retry required\n' "$RELEASE_RC" >&2
+       exit "$RELEASE_RC"
+     fi
      exit 1
      ```
    - `3` (corrupt / invalid — **we do NOT hold the lock**) → loud error. Proceeding does NOT acquire the slug. **Interactive** → `AskUserQuestion`: **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other; manual-cleanup hint `rm <claims_dir>/<slug>.lock*` then retry). **Unattended** → abort UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1` (proceed uncoordinated). Do NOT call release (we never held it).
@@ -150,9 +162,15 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
        - **proceed** → continue; skip heartbeats and deregister later (no record to update). The claim is still held.
        - **abort** → push-notify, **release the claim first** (we hold it — register failed AFTER a successful acquire), do **NOT** call deregister (no record exists), then `exit 1`:
          ```bash
+         # NO-REGISTRY RELEASE: capture failure; never claim success silently.
+         RELEASE_RC=0
          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
            --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-           --command /z-audit-plan || true
+           --command /z-audit-plan || RELEASE_RC=$?
+         if [[ $RELEASE_RC -ne 0 ]]; then
+           printf 'z-audit-plan: no-registry claim release failed (exit %s); manual retry required\n' "$RELEASE_RC" >&2
+           exit "$RELEASE_RC"
+         fi
          exit 1
          ```
      - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1` → release the claim (as above) and halt (`exit 1`). No deregister either way (no record).
@@ -162,7 +180,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
      "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
    ```
 
-   **FINALIZE_STATUS / teardown rule (single source of truth for the entire run):** the audit is now claim-first (acquire → register), so teardown is gated per-resource. On any run-ending halt that occurs AFTER a successful **claim**, `release` BEFORE `deregister` (both best-effort `|| true`); release only if the claim was acquired, deregister only if `REG_RC == 0`. Release+deregister teardown is wired into every post-claim exit path below (normal-end after Phase 9, and all halt-finalize paths). Heartbeat is called at each phase boundary and before every AskUserQuestion gate.
+   **FINALIZE_STATUS / teardown rule (single source of truth for the entire run):** after registration succeeds, every run-ending path delegates atomically to `scripts/z-teardown.sh` with the exact `--run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan --session "$Z_HARNESS_SESSION_ID" --status complete|aborted` identity. Every call captures its exit code. A nonzero teardown is an operational failure: surface it and exit nonzero; never independently deregister, because the wrapper intentionally retains the registry record and omits terminal `run_end` when claim release is unconfirmed. A no-registry abort may call `plan-claim.sh release` directly, but it must capture/report nonzero and fail rather than use `|| true`. Heartbeat is called at each phase boundary and before every AskUserQuestion gate.
 
    **Plan-start awareness read (advisory; Invariant 1 — never a hard gate).** After a successful claim and register, read the lockless registry and surface concurrent peers. Read-only, deterministic, non-fatal:
    ```bash
@@ -303,7 +321,7 @@ Inline inventory JSON:
    Recommended next step: /z-execute <slug>
    ```
 
-   Then jump to the **Normal-end teardown** in Phase 9 (release + deregister) and `exit 0`. Do NOT run Phases 1–5 for a skip_recommended plan.
+   Then jump to the **Normal-end teardown** in Phase 9 (the canonical wrapper owns release + deregister) and `exit 0`. Do NOT run Phases 1–5 for a skip_recommended plan.
 
 ---
 
@@ -321,13 +339,14 @@ if [[ $HB_RC -eq 9 ]]; then
   # Lost-claim gate: warn user prominently. Offer abort (default) / continue-uncoordinated.
   # Interactive -> AskUserQuestion: "Another session took over this slug. Abort (default) or continue-uncoordinated (you and the peer may clobber each other)?".
   # Unattended (Z_HARNESS_NO_ASK) -> abort unless Z_HARNESS_CLAIM_OVERRIDE=1 (continue-uncoordinated).
-  # On abort: release BEFORE deregister (per invariant); per-resource gating.
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  # On abort after registration: canonical teardown retains registry state if release is unconfirmed.
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 1
 fi
@@ -364,12 +383,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" hea
 if [[ $HB_RC -eq 9 ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
     "$(printf '{"slug":"%s","run_id":"%s","gate":"phase2_start"}' "$Z_HARNESS_SLUG" "$RUN")"
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 1
 fi
@@ -494,12 +514,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" hea
 if [[ $HB_RC -eq 9 ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
     "$(printf '{"slug":"%s","run_id":"%s","gate":"phase3_start"}' "$Z_HARNESS_SLUG" "$RUN")"
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 1
 fi
@@ -539,12 +560,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" hea
 if [[ $HB_RC -eq 9 ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
     "$(printf '{"slug":"%s","run_id":"%s","gate":"phase4_start"}' "$Z_HARNESS_SLUG" "$RUN")"
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 1
 fi
@@ -629,13 +651,14 @@ if [[ $HB_RC -eq 9 ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
     "$(printf '{"slug":"%s","run_id":"%s","gate":"audit_gate"}' "$Z_HARNESS_SLUG" "$RUN")"
   # Lost-claim gate: Interactive -> AskUserQuestion abort (default) / continue-uncoordinated.
-  # Unattended (Z_HARNESS_NO_ASK) -> abort. Release BEFORE deregister (per invariant).
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  # Unattended (Z_HARNESS_NO_ASK) -> abort through canonical teardown.
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 1
 fi
@@ -686,6 +709,14 @@ fi
      echo "z-audit-plan Phase 5: PLAN_AUDIT_REPORT.md not found at $BASE/PLAN_AUDIT_REPORT.md — cannot extract findings." >&2
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_artifact_missing \
        "$(printf '{"artifact":"PLAN_AUDIT_REPORT.md","base":"%s"}' "$BASE")" || true
+     TEARDOWN_RC=0
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+       --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+     if [[ $TEARDOWN_RC -ne 0 ]]; then
+       printf 'z-audit-plan: missing-report teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+       exit "$TEARDOWN_RC"
+     fi
      exit 1
    fi
    ```
@@ -935,15 +966,14 @@ JSON
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_end \
   "$(printf '{"status":"halted","findings":%d,"blockers":%d,"majors":%d}' "${N_FINDINGS:-0}" "${N_BLOCKERS:-0}" "${N_MAJORS:-0}")"
-# Halt-finalize teardown: release BEFORE deregister; per-resource gating.
-if [[ "${CLAIM_RC:-1}" -eq 0 ]]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-fi
-if [[ "${REG_RC:-1}" -eq 0 ]]; then
-  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-    --run-id "$RUN" --status aborted || true
+# Halt-finalize teardown: the wrapper alone owns release-before-deregister.
+TEARDOWN_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+  --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+if [[ $TEARDOWN_RC -ne 0 ]]; then
+  printf 'z-audit-plan: halted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+  exit "$TEARDOWN_RC"
 fi
 exit 0
 ```
@@ -989,14 +1019,14 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" hea
 if [[ $HB_RC -eq 9 ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
     "$(printf '{"slug":"%s","run_id":"%s","gate":"phase9_elevation"}' "$Z_HARNESS_SLUG" "$RUN")"
-  # Lost-claim gate at Phase 9 elevation: skip elevation proposal and fall through to teardown.
-  # Release BEFORE deregister (per invariant); run is effectively complete; Phase 9 is optional.
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-  if [[ "${REG_RC:-1}" -eq 0 ]]; then
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted || true
+  # Lost-claim gate at Phase 9 elevation: skip elevation and abort through canonical teardown.
+  TEARDOWN_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+    --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+    --session "$Z_HARNESS_SESSION_ID" --status aborted || TEARDOWN_RC=$?
+  if [[ $TEARDOWN_RC -ne 0 ]]; then
+    printf 'z-audit-plan: aborted teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+    exit "$TEARDOWN_RC"
   fi
   exit 0
 fi
@@ -1070,18 +1100,15 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 
-**Normal-end teardown (after Phase 9 or when Phase 9 is skipped — release BEFORE deregister; per-resource gating):**
+**Normal-end teardown (after Phase 9 or when Phase 9 is skipped — canonical wrapper is the only release/deregister owner):**
 ```bash
-# release only if claim was acquired (CLAIM_RC==0 means acquired or self-reentry or disabled)
-if [[ "${CLAIM_RC:-1}" -eq 0 ]]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
-    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
-    --command /z-audit-plan || true
-fi
-# deregister only if register succeeded
-if [[ "${REG_RC:-1}" -eq 0 ]]; then
-  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-    --run-id "$RUN" --status complete || true
+TEARDOWN_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
+  --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan \
+  --session "$Z_HARNESS_SESSION_ID" --status complete || TEARDOWN_RC=$?
+if [[ $TEARDOWN_RC -ne 0 ]]; then
+  printf 'z-audit-plan: completion teardown incomplete (exit %s); registry retained for retry\n' "$TEARDOWN_RC" >&2
+  exit "$TEARDOWN_RC"
 fi
 ```
 

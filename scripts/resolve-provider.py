@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-resolve-provider.py <role>
+resolve-provider.py <role> | --preflight-all
 
 Resolves a provider role to its full JSON descriptor.
 
@@ -27,6 +27,7 @@ Exit codes:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -175,8 +176,11 @@ def _validate_provider_entry(provider_name: str, entry: dict, config_path: str) 
 
     # auth_env: optional environment variable name, never its value.
     auth_env = entry.get("auth_env")
-    if auth_env is not None and not isinstance(auth_env, str):
-        _fail("auth_env", "str or null", auth_env)
+    if auth_env is not None:
+        if not isinstance(auth_env, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", auth_env
+        ):
+            _fail("auth_env", "environment-variable name or null", auth_env)
 
 
 def load_configs() -> tuple[dict, dict, str, str]:
@@ -231,6 +235,30 @@ def _validate_aliases(aliases: object, config_path: str) -> None:
             print(
                 f"[providers] {config_path}: 'aliases' must be dict[str, str]; "
                 f"got key={k!r} (type {type(k).__name__}), value={v!r} (type {type(v).__name__})",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+
+def _validate_alias_targets(aliases: dict, providers: dict, config_path: str) -> None:
+    """Reject aliases the resolver's single-substitution semantics cannot resolve."""
+    for source in sorted(aliases):
+        target = aliases[source]
+        if target in aliases:
+            reason = (
+                "cyclic alias"
+                if target == source or aliases.get(target) == source
+                else "chained aliases are unsupported"
+            )
+            print(
+                f"[providers] {config_path}: invalid alias {source!r} -> {target!r}: {reason}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if target not in providers:
+            print(
+                f"[providers] {config_path}: dangling alias {source!r} -> {target!r}: "
+                "target provider is not defined",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -715,6 +743,11 @@ def _preflight_provider(
 _CONSULT_OFF_ROLES: frozenset[str] = frozenset(
     {"consultant_primary", "consultant_secondary", "reviewer"}
 )
+_MANDATORY_ROLES: tuple[str, ...] = (
+    "consultant_primary",
+    "consultant_secondary",
+    "reviewer",
+)
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -898,52 +931,85 @@ def _resolve_models_override(role: str, merged: dict) -> dict | None:
     )
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        print("usage: resolve-provider.py <role>", file=sys.stderr)
-        sys.exit(2)
-
-    role = sys.argv[1]
-
-    # runtime.consult = "off": return sentinel "none" for consultant/reviewer roles
-    # and skip the distinctness check.  Consumers that see "none" must skip the
-    # external-model dispatch entirely (see z-plan.md Phase 3/7 and
-    # z-execute.md reviewer gate).
-    consult_val = _config_get("runtime.consult", "on").strip().lower()
-    if consult_val == "off" and role in _CONSULT_OFF_ROLES:
-        print("none")
-        sys.exit(0)
-
+def _load_validated_configs() -> dict:
+    """Load, merge, and schema-check the effective provider registry."""
     global_data, repo_data, global_path, repo_path = load_configs()
     merged = merge_with_shadow(global_data, repo_data, global_path, repo_path)
-
     # Validate each provider entry in the merged config.
     # Use repo_path as the config_path since it is the effective source after merge;
     # for entries that came solely from global, fall back to global_path.
     _merged_providers = merged.get("providers", {})
+    _validate_alias_targets(
+        merged.get("aliases", {}), _merged_providers, f"{global_path} + {repo_path}"
+    )
     _global_providers = global_data.get("providers", {}) if global_data else {}
     _repo_providers = repo_data.get("providers", {}) if repo_data else {}
     for _pname, _entry in _merged_providers.items():
         _config_src = repo_path if _pname in _repo_providers else global_path
         _validate_provider_entry(_pname, _entry, _config_src)
+    return merged
+
+
+def _resolve_effective_role(role: str, merged: dict) -> dict:
+    """Resolve and preflight one role through the normal precedence chain."""
 
     # External provider role override: [roles.default.<role>].runtime is the
     # preferred TOML binding surface and stays separate from native model classes.
     role_runtime_override = _resolve_role_runtime_override(role, merged)
     if role_runtime_override is not None:
-        print(json.dumps(role_runtime_override))
-        return
+        return role_runtime_override
 
     # Compatibility fallback: older configs used [models.<role>] to select an
     # external provider.  Preserve it, but keep it below the role runtime axis.
     override = _resolve_models_override(role, merged)
     if override is not None:
-        print(json.dumps(override))
-        return
+        return override
 
     check_consultant_distinctness(role, merged)
+    return resolve(role, merged)
 
-    descriptor = resolve(role, merged)
+
+def _preflight_all(merged: dict) -> dict[str, dict]:
+    """Resolve all mandatory roles and reject any provider identity collision."""
+    descriptors = {role: _resolve_effective_role(role, merged) for role in _MANDATORY_ROLES}
+    providers = [descriptors[role]["provider"] for role in _MANDATORY_ROLES]
+    if len(set(providers)) != len(providers):
+        print(
+            "[providers] mandatory primary, secondary, and reviewer roles must "
+            f"resolve to DISTINCT providers (got {providers!r})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return descriptors
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        print("usage: resolve-provider.py <role> | --preflight-all", file=sys.stderr)
+        sys.exit(2)
+
+    role = sys.argv[1]
+
+    # runtime.consult = "off": return sentinel "none" for consultant/reviewer roles
+    # and skip the distinctness check. Consumers that see "none" must skip the
+    # external-model dispatch entirely.
+    consult_val = _config_get("runtime.consult", "on").strip().lower()
+    if consult_val == "off" and role in _CONSULT_OFF_ROLES:
+        print("none")
+        sys.exit(0)
+
+    merged = _load_validated_configs()
+    if role == "--preflight-all":
+        if consult_val == "off":
+            print(
+                "[providers] cannot preflight mandatory roles while runtime.consult=off",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(json.dumps({"roles": _preflight_all(merged)}, sort_keys=True))
+        return
+
+    descriptor = _resolve_effective_role(role, merged)
     print(json.dumps(descriptor))
 
 

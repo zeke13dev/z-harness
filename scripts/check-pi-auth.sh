@@ -8,8 +8,8 @@
 # Required = the providers the z-harness omp consult/reviewer arms are actually bound to by
 # default role (see .z-harness/providers.json "roles" + provider entries):
 #   consultant_primary   -> omp-antigravity-pro -> google-antigravity/gemini-3.1-pro
-#   consultant_secondary -> omp-cursor-sol      -> cursor/gpt-5.6-sol-medium
-#   reviewer             -> omp-cursor-terra    -> cursor/gpt-5.6-terra-medium
+#   consultant_secondary -> omp-openai-sol      -> openai-codex/gpt-5.6-sol
+#   reviewer             -> omp-openai-terra    -> openai-codex/gpt-5.6-terra
 # Optional = arms that are feasible but not bound to any default role.
 #
 # Always exits 0 (report, do not fail) unless a required provider is missing AND --strict is set.
@@ -20,14 +20,14 @@ STRICT=0
 
 if ! command -v omp >/dev/null 2>&1; then
   echo "check-pi-auth: 'omp' not on PATH — install oh-my-pi first (~/.local/bin/omp)." >&2
-  exit 0
+  exit "$STRICT"
 fi
 
 # provider | required(1/0) | what it powers
 PROVIDERS=(
   "google-antigravity|1|omp-antigravity-pro consultant_primary arm (Gemini 3.1 Pro, Antigravity OAuth)"
-  "cursor|1|omp-cursor-sol/omp-cursor-terra consultant_secondary+reviewer arms (Cursor OAuth)"
-  "openai-codex|0|omp-codex arm (GPT-5.5, ChatGPT sub) — not bound to any default role"
+  "openai-codex|1|omp-openai-sol/omp-openai-terra consultant_secondary+reviewer arms (GPT-5.6 Sol/Terra, OpenAI Codex OAuth)"
+  "cursor|0|optional manual compatibility entries — not bound to any default role"
 )
 
 missing_required=0

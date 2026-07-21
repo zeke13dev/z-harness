@@ -1,7 +1,7 @@
 {
   "concept": "providers-registry",
   "summary": "Runtime provider registry (.z-harness/providers.json) resolving consultant/reviewer roles to CLI invocation descriptors, layered under a TOML role-runtime override axis with legacy [models]/providers.json.roles fallbacks, alias resolution, and per-dispatch auth/PATH preflight.",
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-21",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -143,7 +143,8 @@
     "OMP provider entries are consult-provider compatibility and do not imply OmpAdapter support or native command tiers.",
     "scripts/omp-consult.sh is the only documented --no-rules --no-session OMP path; native OMP command dispatch must bypass it.",
     "omp-consult.sh classifies stderr into auth/session failures (_is_omp_auth_or_session_failure) vs generic failures; auth/session failures always fail loud (exit 3, provider_preflight_failed) and never silently degrade to --fallback, even when a fallback command was configured.",
-    "As of the openai-codex OAuth rebind (post-T007), default roles bind consultant_primary=omp-antigravity-pro, consultant_secondary=omp-codex (GPT-5.6 via omp openai-codex OAuth), and reviewer=codex-cli (gpt-5-codex); the T007 cursor bindings (omp-cursor-sol/omp-cursor-terra) were retired when cursor OAuth broke."
+    "Current repository defaults exactly follow .z-harness/providers.json: consultant_primary=omp-antigravity-pro (google-antigravity/gemini-3.1-pro), consultant_secondary=omp-openai-sol (openai-codex/gpt-5.6-sol), and reviewer=omp-openai-terra (openai-codex/gpt-5.6-terra). google-antigravity and openai-codex authentication are required; Cursor is optional and not role-bound.",
+    "Compatibility history: omp-cursor-sol/omp-cursor-terra were former defaults, the intermediate consultant_secondary=omp-codex and reviewer=codex-cli bindings are retired, and all remain available only where the registry still exposes them for manual/custom use."
   ],
   "gotchas": [
     "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely \u2014 setting it is sufficient; no providers.json change needed.",
@@ -170,6 +171,9 @@
   "omp_consult_boundary": {
     "provider_entries": [
       "omp-antigravity-pro",
+      "omp-openai-sol",
+      "omp-openai-terra",
+      "omp-openai-luna",
       "omp-codex",
       "omp-cursor-terra",
       "omp-cursor-sol"
@@ -179,5 +183,22 @@
     "shim": "scripts/omp-consult.sh",
     "argv": "omp -p --no-session --no-rules --model <provider/model> <prompt>",
     "native_omp_rule": "OmpHostDriver must not call this shim; native dispatch keeps rules/session/profile/model semantics through .omp/z-harness discovery"
+  },
+  "default_role_bindings": {
+    "consultant_primary": {
+      "provider": "omp-antigravity-pro",
+      "model": "google-antigravity/gemini-3.1-pro",
+      "auth": "google-antigravity"
+    },
+    "consultant_secondary": {
+      "provider": "omp-openai-sol",
+      "model": "openai-codex/gpt-5.6-sol",
+      "auth": "openai-codex"
+    },
+    "reviewer": {
+      "provider": "omp-openai-terra",
+      "model": "openai-codex/gpt-5.6-terra",
+      "auth": "openai-codex"
+    }
   }
 }

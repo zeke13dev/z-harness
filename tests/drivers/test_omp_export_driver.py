@@ -11,10 +11,11 @@ import pytest
 
 pi_export = importlib.import_module("runtime.drivers.pi.export")
 pi_pkg = importlib.import_module("runtime.drivers.pi")
+from runtime import release_surface
 from runtime.drivers.omp.export import export
 
 
-def _make_skill(repo_root: Path, skill_id: str = "z-safe") -> None:
+def _make_skill(repo_root: Path, skill_id: str = "z-plan") -> None:
     skill_dir = repo_root / "skills" / skill_id
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
@@ -134,12 +135,12 @@ def test_repeated_export_reconciles_owned_package_without_touching_siblings(tmp_
     omp_sibling = export_root / ".omp" / "user-owned.yml"
 
     export(repo_root, export_root)
-    stale_skill = package_root / "skills" / "z-safe" / "SKILL.md"
-    stale_prompt = package_root / "prompts" / "z-safe.md"
+    stale_skill = package_root / "skills" / "z-plan" / "SKILL.md"
+    stale_prompt = package_root / "prompts" / "z-plan.md"
     assert stale_skill.is_file()
     assert stale_prompt.is_file()
 
-    shutil.rmtree(repo_root / "skills" / "z-safe")
+    shutil.rmtree(repo_root / "skills" / "z-plan")
     _make_skill(repo_root, "z-new")
     omp_sibling.write_text("user-owned omp sibling\n", encoding="utf-8")
 
@@ -153,7 +154,7 @@ def test_repeated_export_reconciles_owned_package_without_touching_siblings(tmp_
     config_text = (export_root / ".omp" / "config.yml").read_text(encoding="utf-8")
     assert "enableAgentsProject: false" in config_text
 
-def test_prod_export_filters_hidden_resources_and_records_gate_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prod_export_rejects_extra_hidden_resources_before_emission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = _make_repo(tmp_path)
     _make_skill(repo_root, "z-research")
     _make_skill(repo_root, "z-explore")
@@ -161,28 +162,54 @@ def test_prod_export_filters_hidden_resources_and_records_gate_claims(tmp_path: 
     agents_dir = repo_root / "agents"
     agents_dir.mkdir(parents=True)
     (agents_dir / "axiom-extractor.md").write_text("---\nname: axiom-extractor\n---\n\nhidden\n", encoding="utf-8")
-    (agents_dir / "safe-agent.md").write_text("---\nname: safe-agent\n---\n\nsafe\n", encoding="utf-8")
+    (agents_dir / "implementer.md").write_text("---\nname: implementer\n---\n\nimplement\n", encoding="utf-8")
     out = tmp_path / "out"
 
     monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
-    result = export(repo_root, out)
+    with pytest.raises(ValueError, match="agents/axiom-extractor.md"):
+        export(repo_root, out)
 
-    from z_harness_cli.adapters.omp_parity_gate import omp_export_fidelity
+    assert not (out / ".omp" / "z-harness" / "manifest.yml").exists()
 
-    package_root = out / ".omp" / "z-harness"
-    assert (out / ".omp" / "config.yml").read_text(encoding="utf-8") == (
-        "# z-harness OMP export discovery guidance.\n"
-        "# Point OMP_PLUGIN_ROOT at the sibling .omp/z-harness package root.\n"
-        "# Keep project AGENTS.md autoload disabled so OMP does not ingest unrelated root context.\n"
-        "skills:\n"
-        "  enableAgentsProject: false\n"
+
+def test_prod_export_consumes_the_canonical_skill_agent_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = _make_repo(tmp_path)
+    agents_dir = repo_root / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "implementer.md").write_text(
+        "---\nname: implementer\ndescription: Implement\n---\n\nDo the task.\n",
+        encoding="utf-8",
     )
-    assert (package_root / "manifest.yml").is_file()
-    assert f"fidelity: {omp_export_fidelity()}" in (package_root / "manifest.yml").read_text(encoding="utf-8")
-    assert result.fidelity == omp_export_fidelity()
-    assert (package_root / "skills" / "z-safe" / "SKILL.md").is_file()
-    assert (package_root / "agents" / "safe-agent.md").is_file()
-    assert not (package_root / "skills" / "z-research").exists()
-    assert not (package_root / "skills" / "z-explore").exists()
-    assert not (package_root / "skills" / "z-axiom-scan").exists()
-    assert not (package_root / "agents" / "axiom-extractor.md").exists()
+    _make_skill(repo_root, "z-research")
+    (agents_dir / "axiom-extractor.md").write_text(
+        "---\nname: axiom-extractor\n---\n\ndev only\n",
+        encoding="utf-8",
+    )
+    (repo_root / ".git").mkdir()
+    contract = {
+        "prod_inventory": {
+            "skills": ["z-plan"],
+            "agents": ["implementer"],
+            "mcp_tools": [],
+            "export_targets": ["omp"],
+            "scripts_backends": [],
+            "schemas": [],
+            "public_documents": [],
+            "generated_requirements": [],
+        }
+    }
+    monkeypatch.setattr(release_surface, "release_contract", lambda: contract)
+    monkeypatch.setattr(release_surface, "reviewed_dynamic_dependencies", lambda: ())
+    monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+
+    result = export(repo_root, tmp_path / "out")
+
+    package_root = result.dest
+    assert {path.parent.name for path in (package_root / "skills").glob("*/SKILL.md")} == {
+        "z-plan"
+    }
+    assert {path.stem for path in (package_root / "agents").glob("*.md")} == {
+        "implementer"
+    }

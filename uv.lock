@@ -1520,6 +1520,7 @@ name = "z-harness"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "packaging" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -1544,6 +1545,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.2" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.26" },
+    { name = "packaging", specifier = ">=24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
     { name = "referencing", marker = "extra == 'dev'", specifier = ">=0.36" },

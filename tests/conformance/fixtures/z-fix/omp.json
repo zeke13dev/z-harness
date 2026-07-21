@@ -1,0 +1,43 @@
+{
+  "artifact": {
+    "name": "z_harness-0.1.0b13-py3-none-any.whl",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "blocking": true,
+  "candidate_sha": "1111111111111111111111111111111111111111",
+  "claim": {
+    "condition": "clean_installed_wheel_proof",
+    "status": "conditional",
+    "tier": "native"
+  },
+  "claim_fingerprint": "ab559765be5f66827986002ec0a658c6893dbff45820300edfd822eaeec85383",
+  "command": "z-fix",
+  "diagnostics": [
+    "Deterministic schema sample proving the installed-wheel fields are present."
+  ],
+  "evidence_kind": "clean_installed_wheel_proof",
+  "exit_code": 0,
+  "fixture_mode": true,
+  "host": "omp",
+  "proof": {
+    "candidate_sha": "1111111111111111111111111111111111111111",
+    "dev_dependencies": false,
+    "distribution": "z-harness==0.1.0b13",
+    "import_path": "/isolated/venv/lib/python3.12/site-packages/z_harness_cli/__init__.py",
+    "imported_from_installed_wheel": true,
+    "installed_outside_checkout": true,
+    "kind": "clean_installed_wheel",
+    "runner": "omp with isolated installed-wheel environment",
+    "wheel_filename": "z_harness-0.1.0b13-py3-none-any.whl",
+    "wheel_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "provenance": {
+    "environment": "outside-checkout-installed-wheel",
+    "evidence_root_kind": "checked-test-schema-sample",
+    "fixture_candidate_sha": "1111111111111111111111111111111111111111",
+    "fixture_set_id": "z-fix-c1-regression-v1",
+    "runner": "conformance-fixture-recorder-v1"
+  },
+  "schema_version": 1,
+  "status": "passed"
+}

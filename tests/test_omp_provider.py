@@ -407,25 +407,25 @@ class TestOmpLiveEntries(unittest.TestCase):
                 True,
             )
 
-    def test_live_roles_route_reviewer_and_secondary_to_cursor_gpt56(self):
-        """T007: reviewer -> gpt-5.6-terra-medium, consultant_secondary -> gpt-5.6-sol-medium,
+    def test_live_roles_route_reviewer_and_secondary_to_openai_gpt56(self):
+        """T009: reviewer -> gpt-5.6-terra, consultant_secondary -> gpt-5.6-sol,
         consultant_primary stays gemini-3.1-pro; the two consultants remain distinct providers."""
         cfg = Path(__file__).parent.parent / ".z-harness" / "providers.json"
         data = json.loads(cfg.read_text())
         roles = data["roles"]
         providers = data["providers"]
 
-        self.assertEqual(roles["reviewer"], "omp-cursor-terra")
-        self.assertEqual(roles["consultant_secondary"], "omp-cursor-sol")
+        self.assertEqual(roles["reviewer"], "omp-openai-terra")
+        self.assertEqual(roles["consultant_secondary"], "omp-openai-sol")
         self.assertEqual(roles["consultant_primary"], "omp-antigravity-pro")
 
         self.assertEqual(
-            providers["omp-cursor-terra"]["args_template"][0],
-            "cursor/gpt-5.6-terra-medium",
+            providers["omp-openai-terra"]["args_template"][0],
+            "openai-codex/gpt-5.6-terra",
         )
         self.assertEqual(
-            providers["omp-cursor-sol"]["args_template"][0],
-            "cursor/gpt-5.6-sol-medium",
+            providers["omp-openai-sol"]["args_template"][0],
+            "openai-codex/gpt-5.6-sol",
         )
         self.assertEqual(
             providers["omp-antigravity-pro"]["args_template"][0],

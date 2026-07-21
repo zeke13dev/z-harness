@@ -1,6 +1,6 @@
 # Providers Registry
 
-> Last updated: 2026-07-09
+> Last updated: 2026-07-21
 > Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json
 
 ## Overview
@@ -9,9 +9,11 @@ The providers registry is the runtime dispatch layer for external LLM CLIs. It d
 
 Resolution has three binding paths. If `Z_HARNESS_CONSULT=off` is set for `consultant_primary`, `consultant_secondary`, or `reviewer`, `scripts/resolve-provider.py` returns the plaintext sentinel `none` before loading provider config. Otherwise `[roles.<command>.<role>].runtime` then `[roles.default.<role>].runtime` from `config.toml` are the preferred external-provider override layers; legacy `[models.<role>]` provider selectors remain as a compatibility fallback; if all are absent, the legacy `providers.json.roles` map is used. Global and repo provider files merge per key, v1 registries are upgraded in memory to v2, aliases map old provider names to canonical names, and consultant-primary/secondary distinctness is enforced after alias canonicalization across TOML and legacy paths.
 
-OMP provider entries (`omp-antigravity-pro`, `omp-codex`, `omp-cursor-terra`, `omp-cursor-sol`) are consult-provider compatibility, not native OMP host support. `omp-gemini` remains an alias for the Antigravity-backed Gemini 3.1 Pro provider, while direct `gemini-cli` remains available only as an explicitly named direct provider or as an explicit fallback command. OMP entries resolve through `scripts/omp-consult.sh`, which adapts the registry's stdin prompt contract to `omp -p --no-session --no-rules --model ... <prompt>`. Native OMP host dispatch must bypass this shim and use the `OmpHostDriver` contract instead.
+OMP provider entries (`omp-antigravity-pro`, `omp-openai-sol`, `omp-openai-terra`, plus manual compatibility entries such as `omp-codex`, `omp-cursor-terra`, and `omp-cursor-sol`) are consult-provider compatibility, not native OMP host support. `omp-gemini` remains an alias for the Antigravity-backed Gemini 3.1 Pro provider, while direct `gemini-cli` remains available only as an explicitly named direct provider or as an explicit fallback command. OMP entries resolve through `scripts/omp-consult.sh`, which adapts the registry's stdin prompt contract to `omp -p --no-session --no-rules --model ... <prompt>`. Native OMP host dispatch must bypass this shim and use the `OmpHostDriver` contract instead.
 
-As of the host-aware-model-tiers plan (T007), this repo's default role bindings are `consultant_primary = omp-antigravity-pro`, `consultant_secondary = omp-cursor-sol` (`cursor/gpt-5.6-sol-medium`), and `reviewer = omp-cursor-terra` (`cursor/gpt-5.6-terra-medium`) — both `gpt-5.6-*` models resolve only via the `cursor` omp provider, so `cursor` auth readiness gates those two roles (see `_auth_backend_for` → `"OMP OAuth / Cursor"` in `scripts/resolve-provider.py`).
+The repository registry is the release authority for current defaults: `consultant_primary = omp-antigravity-pro` (`google-antigravity/gemini-3.1-pro`), `consultant_secondary = omp-openai-sol` (`openai-codex/gpt-5.6-sol`), and `reviewer = omp-openai-terra` (`openai-codex/gpt-5.6-terra`). Thus `google-antigravity` and `openai-codex` auth are required, while Cursor is optional and not role-bound.
+
+**Compatibility history:** `omp-cursor-sol`/`omp-cursor-terra` were former defaults, and the intermediate `omp-codex`/`codex-cli` role bindings are retired; these entries remain only for manual/custom use.
 
 ## Key entry points
 
@@ -27,7 +29,7 @@ As of the host-aware-model-tiers plan (T007), this repo's default role bindings 
 - `runtime/compat.py:15` — Python runtime wrapper around `resolve-provider.py`.
 - `runtime/contract/provider.schema.json:1` — Draft 7 schema for `.z-harness/providers.json`, accepting versions 1 and 2 and optional runtime-contract fields.
 - `scripts/log-providers.sh:34` — handles the `none` sentinel before JSON parsing and emits provider-resolution summary telemetry.
-- `.z-harness/providers.json:1` — repo-local v2 provider registry; this repo currently binds `consultant_primary` to `omp-antigravity-pro`, `consultant_secondary` to `omp-cursor-sol`, and `reviewer` to `omp-cursor-terra`, with `omp-gemini` as a compatibility alias for `omp-antigravity-pro`.
+- `.z-harness/providers.json:1` — repo-local v2 provider registry; this repo currently binds `consultant_primary` to `omp-antigravity-pro` (`google-antigravity/gemini-3.1-pro`), `consultant_secondary` to `omp-openai-sol` (`openai-codex/gpt-5.6-sol`), and `reviewer` to `omp-openai-terra` (`openai-codex/gpt-5.6-terra`), with `omp-gemini` as a compatibility alias for `omp-antigravity-pro`.
 - `scripts/omp-consult.sh:1` — `omp-consult.sh` — Compatibility adapter for provider-registry consult calls; reads prompt from stdin, invokes `omp -p --no-session --no-rules --model <provider/model> <prompt>`, and optionally falls back to a native vendor CLI.
 
 ## How it interacts with others
@@ -61,10 +63,10 @@ _No memories recorded yet._
 runtime = "omp-antigravity-pro"
 
 [roles.default.consultant_secondary]
-runtime = "omp-cursor-sol"
+runtime = "omp-openai-sol"
 
 [roles.default.reviewer]
-runtime = "omp-cursor-terra"
+runtime = "omp-openai-terra"
 ```
 
 ```bash

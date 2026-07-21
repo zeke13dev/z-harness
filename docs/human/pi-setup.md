@@ -1,6 +1,6 @@
 # oh-my-pi (omp) setup for z-harness
 
-> Last updated: 2026-07-09 (host-aware-model-tiers T007 — reviewer/consultant_secondary reconfigured to omp Cursor OAuth; superseded prior D2 decision)
+> Last updated: 2026-07-21 (default advisory roles aligned to the repository provider registry)
 
 `omp` / [oh-my-pi](https://github.com/can1357/oh-my-pi) (`@earendil-works/pi-coding-agent`) has
 two distinct roles in z-harness. Understanding the difference is important:
@@ -8,7 +8,7 @@ two distinct roles in z-harness. Understanding the difference is important:
 | Role | What it does | When to use |
 |------|-------------|-------------|
 | **OMP native host** | `z-harness launch --host omp` runs z-harness commands directly in OMP; OMP is the execution environment | When you want to run `/z-execute`, `/z-consult`, `/z-gate`, or `/z-panel` natively in OMP (four families proven at Claude-parity, T009) |
-| **OMP consult-provider** | `scripts/omp-consult.sh` adapts stdin prompts for the provider registry; `omp-antigravity-pro`/`omp-cursor-sol`/`omp-cursor-terra` route advisory consultant/reviewer roles through OMP's OAuth | When Claude Code is the primary host and you want advisory consultant/reviewer roles to use Gemini 3.1 Pro / gpt-5.6 Sol / gpt-5.6 Terra via OMP's OAuth subscriptions |
+| **OMP consult-provider** | `scripts/omp-consult.sh` adapts stdin prompts for the provider registry; `omp-antigravity-pro`/`omp-openai-sol`/`omp-openai-terra` route advisory consultant/reviewer roles through OMP's OAuth | When Claude Code is the primary host and you want advisory consultant/reviewer roles to use Gemini 3.1 Pro / GPT-5.6 Sol / GPT-5.6 Terra via OMP's OAuth subscriptions |
 
 These two paths are explicitly separate. The consult-provider path (`omp-consult.sh`) uses
 `--no-rules --no-session` and is only for advisory uses. The native host path keeps
@@ -101,17 +101,14 @@ All three consult/reviewer roles are wired through omp by default (`.z-harness/p
 | Role | Provider entry | Model | Auth |
 |------|----------------|-------|------|
 | `consultant_primary` | `omp-antigravity-pro` (alias `omp-gemini`) | `google-antigravity/gemini-3.1-pro` | Antigravity OAuth |
-| `consultant_secondary` | `omp-cursor-sol` | `cursor/gpt-5.6-sol-medium` | Cursor OAuth |
-| `reviewer` | `omp-cursor-terra` | `cursor/gpt-5.6-terra-medium` | Cursor OAuth |
+| `consultant_secondary` | `omp-openai-sol` | `openai-codex/gpt-5.6-sol` | OpenAI Codex OAuth |
+| `reviewer` | `omp-openai-terra` | `openai-codex/gpt-5.6-terra` | OpenAI Codex OAuth |
 
-> **Superseded (host-aware-model-tiers plan, T007):** the blocking **reviewer** gate previously
-> stayed on the native codex CLI so an OAuth token-refresh hiccup could never stall a review
-> (former plan decision D2). That decision no longer holds — `reviewer` now routes through omp's
-> Cursor OAuth (`omp-cursor-terra`), same as `consultant_secondary`. Provider preflight fails loud
-> with an actionable re-auth path if `cursor` is not authed in omp; it does not silently fall back.
-> This means `cursor` OAuth is now a **required** login for both `reviewer` and
-> `consultant_secondary` — `scripts/check-pi-auth.sh` marks `cursor` as required accordingly (see
-> below).
+> **Compatibility history:** `consultant_secondary = omp-cursor-sol` and
+> `reviewer = omp-cursor-terra` were former defaults; the later intermediate
+> `consultant_secondary = omp-codex` and `reviewer = codex-cli` bindings are retired too.
+> Cursor-backed entries and `omp-codex` remain available for manual/custom binding, but none is a
+> current default. Cursor authentication is optional and not bound to a default role.
 
 ## `pi` vs `omp` — which binary
 
@@ -127,7 +124,7 @@ Login is interactive (browser); run it in your terminal:
 ```
 pi            # or: omp
 /login        # select a provider:
-              #   ChatGPT Plus/Pro (Codex)   -> openai-codex   (GPT-5.5)
+              #   ChatGPT Plus/Pro (Codex)   -> openai-codex   (GPT-5.6 Sol/Terra roles)
               #   google-antigravity         -> Gemini 3.1 Pro, pooled Google/Anthropic/OpenAI
               #   (optional) Claude Pro/Max, GitHub Copilot, xAI Grok
 ```
@@ -152,18 +149,18 @@ scripts/check-pi-auth.sh
 
 Read-only; probes `omp token <provider>` (never prints secrets) and reports which providers are
 authenticated. Exit 0 always (add `--strict` to fail when a required arm is missing). Example
-output (reflects the T007 role reconfig — `cursor` is required, `openai-codex` is optional):
+output (`google-antigravity` and `openai-codex` are required; Cursor is optional):
 
 ```
 PROVIDER               STATUS     POWERS
 google-antigravity     authed     omp-antigravity-pro consultant_primary arm (Gemini 3.1 Pro, Antigravity OAuth)
-cursor                 authed     omp-cursor-sol/omp-cursor-terra consultant_secondary+reviewer arms (Cursor OAuth)
-openai-codex           authed     omp-codex arm (GPT-5.5, ChatGPT sub) — not bound to any default role
+openai-codex           authed     omp-openai-sol/omp-openai-terra consultant_secondary+reviewer arms (GPT-5.6 Sol/Terra)
+cursor                 authed     optional manual compatibility entries; not bound to a default role
 ```
 
-`cursor` is the required backend for both `reviewer` and `consultant_secondary` (the two roles
-that route through omp's Cursor OAuth); `openai-codex` is no longer bound to any default role
-(the `omp-codex` provider entry still exists for manual binding).
+`openai-codex` is the required backend for both `consultant_secondary` and `reviewer`.
+`google-antigravity` is required for `consultant_primary`. Cursor is optional and not role-bound;
+its provider entries remain for manual compatibility only.
 
 ## How the consult dispatch works
 
@@ -171,8 +168,8 @@ The provider registry pipes the prompt to a command's **stdin**, but `omp -p` ig
 takes the prompt as a positional **argument**. `scripts/omp-consult.sh` bridges the two:
 
 ```bash
-printf '%s' "$PROMPT" | omp-consult.sh openai-codex/gpt-5.5
-# == omp -p --no-session --no-rules --model openai-codex/gpt-5.5 "$PROMPT"
+printf '%s' "$PROMPT" | omp-consult.sh openai-codex/gpt-5.6-sol
+# == omp -p --no-session --no-rules --model openai-codex/gpt-5.6-sol "$PROMPT"
 ```
 
 The model id is stored in each entry's `args_template` (not `model_arg_template`) because the

@@ -1,7 +1,46 @@
 # Host Capabilities Matrix
 
-> Last updated: 2026-07-09
+> Last updated: 2026-07-17
 > Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/codex_parity_gate.py, z_harness_cli/adapters/omp.py, z_harness_cli/adapters/omp_parity_gate.py, runtime/drivers/codex/probe.py, runtime/drivers/codex/export.py, runtime/drivers/codex/mcp.py, runtime/drivers/omp/export.py, runtime/drivers/omp/subprocess_driver.py, runtime/drivers/windsurf/export.py, runtime/drivers/kiro/export.py, runtime/drivers/cline/export.py, runtime/drivers/copilot/export.py, .omp/config.yml, runtime/release_surface.py
+
+## Public release contract
+
+`z_harness_cli.release_surface.release_contract()` is the thin CLI alias for the
+canonical contract in `runtime.release_surface`. The first public train is
+`pre-1.0-beta`; it makes no stable 1.x compatibility promise and selects no
+concrete version or tag.
+
+The public host claims are evidence-bounded:
+
+| Host / surface | Public tier | Public status | Evidence boundary |
+|---|---|---|---|
+| Claude Code | `native` | `primary` | `blocking_clean_plugin` |
+| CLI | `supported` | `release` | bootstrap, install, and update |
+| Codex | `partial` | `preview` | `blocking_clean_plugin` |
+| OMP | `native` | `conditional` | `clean_installed_wheel_proof` |
+| Antigravity, Cursor | `dev_advanced` | `not_release_default` | development/advanced use only |
+| Cline, Copilot, Kiro, pi, Windsurf | `export_only` | `not_release_default` | export use only |
+
+The public surface excludes `/z-attend`, `/z-explore`, `/z-map`,
+`/z-overnight`, `/z-research`, user-facing `z-axiom-*`, the
+`axiom-extractor` and `research-judge` agents, Hermes/Discord orchestration,
+watchdog/runtime state, and generated development mirrors. These remain
+experiments or development resources unless a later release-readiness decision
+promotes them with blocking evidence.
+
+A clean candidate uses `exact_reviewed_identity` for both source and artifacts,
+comes from a `tracked_clean_checkout_or_archive`, and is exercised with
+`isolated` HOME and config, an `installed` wheel, `installed` plugin payloads,
+and `blocking_for_every_claim` host evidence. It cannot depend on
+`ignored_files`, `untracked_files`, `user_configuration`, or
+`dev_only_dependencies`.
+
+C2-C6 consume this contract without redefining it: C2 owns deterministic
+assembly, C3 owns dependency closure, C4 owns transactional lifecycle behavior,
+C5 owns version provenance, and C6 owns verification and promotion. The
+adapter-fidelity detail below is implementation evidence; in particular, it
+does not turn OMP's conditional public claim into an unconditional release
+default or promote Codex beyond partial/preview.
 
 ## Overview
 

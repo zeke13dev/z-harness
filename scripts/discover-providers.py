@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 import json
 import shutil
-import subprocess
-import sys
+
+MANDATORY_ROLES = (
+    "consultant_primary",
+    "consultant_secondary",
+    "reviewer",
+)
 
 KNOWN_CLIS = {
     "codex": {
@@ -60,19 +64,17 @@ def discover():
     for name, spec in KNOWN_CLIS.items():
         if shutil.which(spec["command"]):
             found[name] = spec
-            
-    # Default roles binding (just a proposal)
-    roles = {}
-    if "codex" in found:
-        roles["consultant_primary"] = "codex"
-        roles["reviewer"] = "codex"
-    if "gemini" in found:
-        roles["consultant_secondary"] = "gemini"
-    elif "claude" in found:
-        roles["consultant_secondary"] = "claude"
-    elif "ollama" in found:
-        roles["consultant_secondary"] = "ollama"
-        
+
+    # A complete proposal is safe to approve only when every mandatory role
+    # can use a distinct provider. KNOWN_CLIS insertion order is the stable
+    # preference order, independent of PATH ordering.
+    provider_names = list(found)
+    roles = (
+        dict(zip(MANDATORY_ROLES, provider_names[:len(MANDATORY_ROLES)]))
+        if len(provider_names) >= len(MANDATORY_ROLES)
+        else {}
+    )
+
     return {
         "version": 1,
         "providers": found,
@@ -81,4 +83,4 @@ def discover():
 
 if __name__ == "__main__":
     result = discover()
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, sort_keys=True))

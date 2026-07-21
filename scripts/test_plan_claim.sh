@@ -18,11 +18,12 @@
 #   TC06 — transient/corrupt read during heartbeat → heartbeat_error + exit 0, NOT exit 9
 #   TC07 — stale-takeover via tiny TTL → exit 2
 #   TC08 — release matching expected-holder frees the slug
-#   TC09 — release NON-matching expected-holder: true no-op (peer daemon alive, peer record intact)
+#   TC09 — release NON-matching expected-holder: explicit non-success, peer intact
 #   TC10 — corrupt lock → exit 3
 #   TC11 — Z_HARNESS_CLAIM_DISABLE=1 → acquire/heartbeat/release all exit 0 no-op
 #   TC12 — acquire with </dev/null succeeds (non-interactive)
 #   TC13 — read-holder / status JSON shape for held / free / stale / corrupt
+#   TC14 — release retries rc=5 exactly twice, then confirms success
 
 set -euo pipefail
 
@@ -487,12 +488,18 @@ printf '\nTC08: release with matching holder frees the slug\n'
   FREE_JSON="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
   FREE_STATE="$(json_get "$FREE_JSON" state)"
   assert_eq "TC08: slug is free after matching release" "free" "$FREE_STATE"
+
+  REL_AGAIN_RC=0
+  Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
+    release --slug "$SLUG" --run-id "$RUN" --session "$SESSION" --command "$CMD" \
+    >/dev/null 2>/dev/null || REL_AGAIN_RC=$?
+  assert_rc 0 "TC08: already-free primitive rc=1 maps to idempotent success" "$REL_AGAIN_RC"
 }
 
 # ---------------------------------------------------------------------------
 # TC09 — Release NON-matching holder: peer daemon alive, peer record intact
 # ---------------------------------------------------------------------------
-printf '\nTC09: release with non-matching holder is a no-op (peer record intact)\n'
+printf '\nTC09: release with non-matching holder fails safely (peer record intact)\n'
 
 {
   tmp="$(_tmpdir)"
@@ -515,7 +522,7 @@ printf '\nTC09: release with non-matching holder is a no-op (peer record intact)
     release --slug "$SLUG" --run-id "$RUN_OTHER" --session "$SESSION_OTHER" --command "$CMD" \
     >/dev/null 2>/dev/null || REL_RC=$?
 
-  assert_rc 0 "TC09: non-matching release exits 0 (best-effort)" "$REL_RC"
+  assert_rc 4 "TC09: non-matching release reports ownership mismatch" "$REL_RC"
 
   # Owner's record must still be intact — same holder string
   HJ_AFTER="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
@@ -536,6 +543,50 @@ printf '\nTC09: release with non-matching holder is a no-op (peer record intact)
   Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
     release --slug "$SLUG" --run-id "$RUN_OWNER" --session "$SESSION_OWNER" --command "$CMD" \
     >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
+# TC14 — Deterministic retry contract: a stub primitive returns rc=5 twice,
+# then rc=0. All three calls must carry the identical expected-holder guard.
+# ---------------------------------------------------------------------------
+printf '\nTC14: release retries transient timeout twice, then confirms success\n'
+
+{
+  tmp="$(_tmpdir)"
+  FIXTURE_DIR="$tmp/retry-fixture"
+  STUB_STATE_DIR="$tmp/stub-state"
+  mkdir -p "$FIXTURE_DIR" "$STUB_STATE_DIR"
+  cp "$PLAN_CLAIM" "$SCRIPTS_DIR/plan-path.sh" "$SCRIPTS_DIR/log-event.sh" "$FIXTURE_DIR/"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'count_file="$STUB_STATE_DIR/count"' \
+    'args_file="$STUB_STATE_DIR/args"' \
+    'count=0' \
+    '[[ -f "$count_file" ]] && count="$(cat "$count_file")"' \
+    'count=$((count + 1))' \
+    'printf "%s" "$count" > "$count_file"' \
+    'printf "%s\\n" "$*" >> "$args_file"' \
+    'if [[ "$count" -lt 3 ]]; then' \
+    '  printf "forced transient timeout %s\\n" "$count" >&2' \
+    '  exit 5' \
+    'fi' \
+    'exit 0' > "$FIXTURE_DIR/sink-lock.sh"
+  chmod +x "$FIXTURE_DIR/sink-lock.sh"
+
+  REL_RC=0
+  STUB_STATE_DIR="$STUB_STATE_DIR" Z_HARNESS_BASE_DIR="$tmp" \
+    bash "$FIXTURE_DIR/plan-claim.sh" release \
+      --slug "tc14-slug" --run-id "run14" --session "ses14" --command "/z-plan" \
+      >/dev/null 2>"$tmp/release.err" || REL_RC=$?
+
+  assert_rc 0 "TC14: third attempt confirms release" "$REL_RC"
+  assert_eq "TC14: exactly three total attempts" "3" "$(cat "$STUB_STATE_DIR/count")"
+  EXPECTED_LOCK="$(Z_HARNESS_BASE_DIR="$tmp" bash "$FIXTURE_DIR/plan-path.sh" claims_dir)/tc14-slug.lock"
+  EXPECTED_ARGS="release $EXPECTED_LOCK --expected-holder=ses14::run14::/z-plan"
+  UNIQUE_ARGS="$(sort -u "$STUB_STATE_DIR/args")"
+  assert_eq "TC14: every attempt preserves exact expected-holder" "$EXPECTED_ARGS" "$UNIQUE_ARGS"
+  assert_eq "TC14: expected-holder was attempted exactly three times" "3" \
+    "$(grep -cFx "$EXPECTED_ARGS" "$STUB_STATE_DIR/args")"
+  assert_eq "TC14: successful retry emits no failure diagnostic" "" "$(cat "$tmp/release.err")"
 }
 
 # ---------------------------------------------------------------------------

@@ -154,23 +154,11 @@ if [ "$REG_RC" -eq 0 ]; then
 fi
 ```
 
-**1b. Schedule hang-check (gated — register success + watchdog enabled + registry enabled).** Skip when register failed (no record) or when the watchdog is disabled or the registry is off. Only fires when `REG_RC == 0`.
-
-This replaces the retired daemon poller (`watchdog-spawn.sh`/`watchdog-sweep.sh`). Instead of a long-lived background sweep, `schedule-hang-check.sh` schedules a **one-shot** `hang-check.sh` (via launchd on macOS; detached fallback elsewhere) at a run-level horizon — the per-class threshold from `hang-threshold.py` (p90×margin), falling back to `watchdog.stale_secs`. At the horizon, if work is still outstanding past threshold it notifies via the retained `notify-watchdog.sh` (config-gated, notify-once). The hard-deadline kill layer (`supervised-run.sh`) is unaffected.
-
-```bash
-if [ "$REG_RC" -eq 0 ]; then
-  WATCHDOG_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
-    get watchdog.enabled 2>/dev/null || echo false)"
-  if [ "$WATCHDOG_ENABLED" = "true" ] && [ "${Z_HARNESS_REGISTRY_ENABLED:-1}" != "0" ]; then
-    _HANG_THRESH="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/hang-threshold.py" \
-      for --kind implement_end 2>/dev/null || echo 300)"
-    Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" \
-      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/schedule-hang-check.sh" \
-      --run "$RUN" --threshold-secs "$_HANG_THRESH" --delay-secs "$_HANG_THRESH" || true
-  fi
-fi
-```
+**1b. Production watchdog posture.** The public production surface does not ship or
+advertise the optional watchdog chain. `/z-execute` therefore performs no watchdog
+configuration lookup and schedules no hang check. This is an explicit release-surface
+decision, not a best-effort skip; development-only watchdog tooling remains outside the
+production dependency graph. The hard-deadline supervision layer is independent.
 
 **2. Seed scope (best-effort, non-fatal).** Dispatch the `scope-extractor` (Haiku) subagent with
 `repo_root` + `base` to produce a scope JSON array, write it to a temp file, and feed it to
@@ -4179,25 +4167,9 @@ This phase fires once per run, after Run Brief finalize (Finalize §), before th
    )
    ```
 
-4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
-
-    If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
-
-    ```bash
-    AXIOM_READY_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | grep '^AXIOM_READY ' || true)"
-    ```
-
-    ```
-    log_execute_efficiency_event subagent_dispatch '{"role":"axiom_extractor","count":1}' orchestration
-    Agent(
-      subagent_type="axiom-extractor",
-      description="Axiom extraction for <SLUG_FOR_DESC>",
-      prompt="mode: post-run <RUN>
-    repo_root: <REPO_ROOT>"
-    )
-    ```
-
-    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later human review or dev-only `z-axiom-*` workflows. Do not block on the axiom-extractor's return or error if it is unavailable.
+4a. **Production axiom posture.** Axiom extraction is a development-only surface.
+    `/z-execute` does not parse an axiom-ready marker or dispatch an extractor in the
+    production workflow; memory review continues solely through the exported review agent.
 
 5. **Parse agent return — extract single fenced ```json block:**
 

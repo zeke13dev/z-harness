@@ -83,7 +83,18 @@ for role, provider in roles.items():
 '
 ```
 
-Print that output to the user. `scripts/setup.py wizard` (launched below) displays the currently-bound `consultant_primary` / `consultant_secondary` / `reviewer` roles from `providers.json` and flags any gap; if a role is unbound and discovery above suggested a binding for it, tell the user to add that stanza to `providers.json` — the skill never writes configuration directly (see Invariants).
+Print that output to the user. A complete proposal contains distinct
+`consultant_primary`, `consultant_secondary`, and `reviewer` providers. An empty
+proposal means fewer than three usable CLIs were found; do not suggest a
+partial or colliding binding.
+
+The public `z-harness setup` command owns user-global provider onboarding. It
+shows the same proposal with `--dry-run`, requires `--yes` before persistence,
+rejects missing roles, collisions, or secret-bearing fields, and runs
+`resolve-provider.py --preflight-all` before writing
+`${XDG_CONFIG_HOME:-~/.config}/z-harness/providers.json`. This skill only
+previews discovery and launches `scripts/setup.py wizard`; it never bypasses
+that approval boundary.
 
 The wizard runs interactively as a subprocess — the user interacts with it directly via the terminal. For v1, the skill's role is to launch it and report the outcome.
 
@@ -212,6 +223,8 @@ After install, `scripts/check-timeout.sh` auto-detects `gtimeout` with no config
 ## Invariants
 
 - The skill NEVER writes configuration directly — all writes are delegated to `scripts/setup.py`.
+- User-global provider persistence occurs only through approved `z-harness setup --yes`; dry-run and unapproved setup never write the registry.
+- A provider proposal is complete only when primary, secondary, and reviewer resolve to three distinct providers and `resolve-provider.py --preflight-all` succeeds.
 - `AskUserQuestion` for the apply confirmation runs with `Z_HARNESS_NO_ASK` unset (the skill does not set it).
 - A dry-run failure always prevents the write step from running.
 - User cancellation at the confirmation gate always results in a clean exit (exit code 0).

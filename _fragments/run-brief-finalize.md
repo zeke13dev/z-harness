@@ -160,18 +160,6 @@ fi
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
 
-#### 5.5. Discord render (when notify policy + webhook URL allow)
-
-```bash
-if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
-  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
-  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
-fi
-```
-
-Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
-
 #### 6. Hard gate — `--require` before deregister
 
 Run **after** chat/push renders, **before** `active-plan-registry.py deregister` or any terminal `FINALIZE_STATUS` handoff:

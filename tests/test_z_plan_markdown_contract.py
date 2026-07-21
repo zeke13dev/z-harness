@@ -28,13 +28,6 @@ def index_after(text: str, needle: str, start: int = 0) -> int:
     return idx
 
 
-def supervision_ingress_contract(path: Path) -> str:
-    text = path.read_text(encoding="utf-8")
-    start = index_after(text, "<!-- SUPERVISION_INGRESS_CONTRACT_START -->")
-    end = index_after(text, "<!-- SUPERVISION_INGRESS_CONTRACT_END -->", start)
-    return text[start:end]
-
-
 class RecordingWatchdogRegistry:
     def __init__(self) -> None:
         self.registration_calls: list[tuple[Any, ...]] = []
@@ -49,40 +42,21 @@ def manifest_shape(value: Any) -> Any:
     return type(value).__name__
 
 
-def test_planning_skills_share_default_off_supervision_ingress_contract() -> None:
-    contracts = [supervision_ingress_contract(path) for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL)]
+def test_prod_planning_skills_omit_excluded_watchdog_ingress() -> None:
+    excluded_contract_fragments = (
+        "runtime.watchdog.planning_ingress",
+        "SUPERVISION_INGRESS_CONTRACT",
+        "SUPERVISION_CHOICE",
+        "SUPERVISION_WAIT_TOKEN",
+        "supervised —",
+        "watchdog registry",
+    )
 
-    for block in contracts:
-        prose = " ".join(block.split())
-        assert "exactly one supervision choice" in block
-        assert block.count("AskUserQuestion") == 1
-        assert "off — Off (Recommended default)" in block
-        assert "In unattended/no-ask mode" in prose
-        assert "enabling supervision must not open follow-up" in prose
-        assert "leave `SUPERVISION_WAIT_TOKEN` empty without asking" in prose
-        assert "run `begin-wait` immediately before" in prose
-        assert "capture its raw answer" in prose
-        assert block.count("python3 -m runtime.watchdog.planning_ingress") == 2
-        assert "--plan-dir \"$Z_HARNESS_PLAN_DIR\"" in block
-        assert "--run \"$RUN\"" in block
-        assert "--source /z-plan" in block
-        assert "--phase " in block
-        assert "helper owns timing, normalization" in prose
-        assert "log-event.sh" not in block
-        assert "log-decision.sh" not in block
-        assert "time.monotonic_ns()" not in block
-        assert "date +%s%3N" not in block
-
-
-def test_planning_skills_delegate_shared_ingress_mechanics_instead_of_copying_them() -> None:
-    contracts = [supervision_ingress_contract(path) for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL)]
-
-    for block in contracts:
-        code = block.split("```bash", 1)[1].split("```", 1)[0]
-        assert len([line for line in code.splitlines() if line.strip()]) == 3
-        assert "SUPERVISION_WAIT_START_MS=" not in block
-        assert "if [[" not in block
-        assert "case \"$SUPERVISION_CHOICE\"" not in block
+    for path in (Z_PLAN_SKILL, Z_PLAN_SPLIT_SKILL):
+        text = path.read_text(encoding="utf-8")
+        for fragment in excluded_contract_fragments:
+            assert fragment not in text
+        assert "scripts/generate-workstreams.py" in text
 
 
 def test_planning_skills_serialize_same_versioned_manifest_shape_without_enrollment(

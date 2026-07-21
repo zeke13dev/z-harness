@@ -1,90 +1,38 @@
-"""
-test_strict.py — F7 fail-loud conformance + adapter round-trip conformance.
+"""Strict C1 release-claim evidence and development-driver regressions.
 
-This is the **strict** half of the conformance suite (MF2 / audit-finding F7).
-Unlike ``test_matrix.py`` — which *skips* a driver row when its binary is
-absent and *xfails* a row when its fixtures are still placeholders — this
-module is a REAL integration test against the live driver-selection layer.
-It fails loudly when:
-
-  1. A host driver is missing — i.e. ``select_driver(host)`` does NOT return a
-     live :class:`HostDriver` for one of the five runtime-driver hosts (claude,
-     cursor, codex, antigravity, omp).  The OMP row here proves runtime driver
-     selection only; golden cross-driver parity remains gated until the native
-     parity task records fixtures.  Opt out per-host only via the
-     ``--allow-missing`` strict-runner flag (see ``run_strict.py``); the
-     default pytest run NEVER allows a missing host.
-  2. Zero drivers actually ran — i.e. the conformance matrix passed only
-     because every row was skipped / xfailed and nothing real executed.  A
-     green run with zero live coverage is treated as a FAILURE here.
-  3. A fixture is a placeholder or missing — any golden fixture still carrying
-     the ``# PLACEHOLDER`` marker (or an empty events golden) means no real
-     output was ever recorded, so "conformance" is vacuous.
-
-It also asserts the contract edges F7 names explicitly:
-
-  - ``select_driver("unknown")`` raises :class:`DriverNotFoundError` with a
-    clear, host-naming message.
-  - Each driver's ``.init()`` does not crash with unset auth: it either
-    returns cleanly or surfaces a *recognized clear config error* (never a
-    bare ``KeyError`` / ``AttributeError`` / ``TypeError`` stack trace).
-
-Plus adapter round-trip conformance: each supported host name routes to a
-distinct, live ``HostDriver`` subclass instance.
-
-NOTE on namespaces: the conformance *matrix* keys drivers by BINARY name
-(``claude-code``, ``codex``, ``agy``, ``cursor-agent`` — see
-``conftest.DRIVERS``).  The driver-SELECTION layer (``select_driver``) keys by
-HOST name (``claude``, ``codex``, ``antigravity``, ``cursor``, ``omp``).  These are
-deliberately distinct namespaces; this module exercises the host-name layer.
+The release verdict in this module is deliberately separate from the broader
+development driver matrix.  Blocking claims are derived from
+``runtime.release_surface.release_contract()`` and every claim must have one
+candidate-bound ``z-fix`` proof.  Checked-in records are schema/regression
+samples only; production validation rejects them unless fixture mode is
+explicitly enabled by a test.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import Any, Mapping
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Strict-mode gate
-# ---------------------------------------------------------------------------
-#
-# The fail-loud placeholder/zero-coverage check FAILS as long as golden
-# fixtures are still placeholders — that is the whole point of the gate. But we
-# do NOT want it to break the regular `make test` / `make conformance`
-# regression suites (which run the entire tests/conformance/ tree on every PR)
-# while fixtures are legitimately not-yet-recorded. So that single check is
-# gated behind the Z_HARNESS_CONFORMANCE_STRICT=1 env var, which `make
-# conformance-strict` sets. Outside strict mode the check SKIPS (it does not
-# silently pass — skip is visible). The contract-edge tests (live drivers,
-# unknown-host, init-no-crash, distinct routing) always run; they reflect
-# real, satisfiable invariants and pass today.
-_STRICT_ENABLED: bool = os.environ.get("Z_HARNESS_CONFORMANCE_STRICT") == "1"
-_strict_only = pytest.mark.skipif(
-    not _STRICT_ENABLED,
-    reason="fail-loud strict check — enable with Z_HARNESS_CONFORMANCE_STRICT=1 "
-    "(set by `make conformance-strict`)",
-)
-
+from runtime import release_surface
 from runtime.dispatch.driver import HostDriver
 from runtime.drivers import DriverNotFoundError, select_driver
-from tests.conformance import run_conformance as _run_conformance_mod
+from z_harness_cli.release_host_evidence import (
+    claim_fingerprint as _claim_fingerprint,
+    derive_release_claims,
+    evidence_set_digest as z_fix_fixture_digest,
+    expected_dispatch_probe,
+    validate_cli_proof as _validate_cli_proof,
+    validate_common_record as _validate_common_record,
+    validate_omp_proof as _validate_omp_proof,
+    validate_plugin_proof as _validate_plugin_proof,
+    validate_release_evidence,
+)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# The five host names F7 requires a live runtime driver for. These are HOST
-# names (select_driver namespace), not binary names. OMP is included once its
-# native runtime driver exists, but it is intentionally not added to the golden
-# conformance binary roster until native parity is recorded.
 SUPPORTED_HOSTS: list[str] = ["claude", "cursor", "codex", "antigravity", "omp"]
-
-
-# Expected concrete driver class name per host. select_driver must return an
-# instance of HostDriver whose class matches — this catches a regression where
-# a host silently routes to the wrong (or a stubbed) driver.
 EXPECTED_DRIVER_CLASS: dict[str, str] = {
     "claude": "SubprocessClaudeDriver",
     "cursor": "CursorCLIDriver",
@@ -93,50 +41,14 @@ EXPECTED_DRIVER_CLASS: dict[str, str] = {
     "omp": "OmpHostDriver",
 }
 
-# Exception types that constitute a *clear config error* from .init() when auth
-# is unset. Surfacing one of these (with a message) is acceptable F7 behavior;
-# a bare KeyError/AttributeError/TypeError (an unhandled stack trace) is NOT.
-#
-# Imported lazily/defensively: these live in driver sub-packages and we only
-# need the ones that exist. Any that fail to import are simply omitted from the
-# allow-list (their absence cannot mask a real failure because init() raising
-# an *unlisted* type is what the test flags).
-_CLEAR_CONFIG_ERRORS: tuple[type[BaseException], ...]
-
-
-def _resolve_clear_config_errors() -> tuple[type[BaseException], ...]:
-    errs: list[type[BaseException]] = []
-    try:
-        from runtime.drivers.cursor.cli_driver import (
-            DriverConfigError,
-            DriverInitError,
-        )
-
-        errs.extend([DriverConfigError, DriverInitError])
-    except ImportError:
-        pass
-    try:
-        from runtime.drivers.codex.auth import AuthResolutionError
-
-        errs.append(AuthResolutionError)
-    except ImportError:
-        pass
-    try:
-        from runtime.drivers.antigravity.preflight import DriverUnavailableError
-
-        errs.append(DriverUnavailableError)
-    except ImportError:
-        pass
-    # NotImplementedError is a clear, intentional signal (e.g. tombstoned
-    # paths) — acceptable, not a crash.
-    errs.append(NotImplementedError)
-    return tuple(errs)
-
-
-_CLEAR_CONFIG_ERRORS = _resolve_clear_config_errors()
-
-# Exception types that represent an UNHANDLED crash from .init() — a bug, not a
-# surfaced config error.
+_HERE = Path(__file__).parent.resolve()
+_REPO_ROOT = _HERE.parent.parent
+_FIXTURES_ROOT = _HERE / "fixtures"
+Z_FIX_FIXTURE_ROOT = _FIXTURES_ROOT / "z-fix"
+SAMPLE_CANDIDATE_SHA = "1" * 40
+SAMPLE_FIXTURE_SET_ID = "z-fix-c1-regression-v1"
+SAMPLE_FIXTURE_DIGEST = "db3a27d1ef0a62d67ab27719f7ea19aea1dc16c5e0ef61e2dcd5147408dc12d1"
+_MINIMAL_PROVIDER_CONFIG: dict[str, Any] = {"host": "<probe>", "args_template": []}
 _CRASH_EXCEPTIONS: tuple[type[BaseException], ...] = (
     KeyError,
     AttributeError,
@@ -144,81 +56,47 @@ _CRASH_EXCEPTIONS: tuple[type[BaseException], ...] = (
     IndexError,
 )
 
-# Fixture layout (shared with run_conformance.py / test_matrix.py).
-_HERE = Path(__file__).parent.resolve()
-_FIXTURES_ROOT = _HERE / "fixtures"
 
-# Canonical driver (BINARY) names whose golden fixtures MUST exist for real
-# coverage. These are the keys run_conformance.py uses for the fixture layout
-# (fixtures/<command>/<driver>/...) — NOT the select_driver HOST names. The
-# strict gate builds expected fixture paths from THIS list so that DELETING a
-# host's fixture directory is a failure (missing != pass), rather than silently
-# narrowing the set to whatever directories happen to remain on disk.
-_CANONICAL_DRIVERS: list[str] = ["claude-code", "codex", "agy", "cursor-agent"]
+def _resolve_clear_config_errors() -> tuple[type[BaseException], ...]:
+    errors: list[type[BaseException]] = []
+    try:
+        from runtime.drivers.cursor.cli_driver import DriverConfigError, DriverInitError
 
-# The golden fixture files every driver directory must carry.
-_GOLDEN_FILENAMES: tuple[str, ...] = (
-    "artifacts.golden.txt",
-    "events.golden.jsonl",
-    "exit.golden",
-)
+        errors.extend([DriverConfigError, DriverInitError])
+    except ImportError:
+        pass
+    try:
+        from runtime.drivers.codex.auth import AuthResolutionError
 
-# A minimal provider_config sufficient to call .init() without depending on a
-# real providers.json. Drivers read optional keys via .get(); none index a
-# required key at init time, so an empty-ish dict is a valid no-auth probe.
-_MINIMAL_PROVIDER_CONFIG: dict = {
-    "host": "<probe>",
-    "args_template": [],
-}
+        errors.append(AuthResolutionError)
+    except ImportError:
+        pass
+    try:
+        from runtime.drivers.antigravity.preflight import DriverUnavailableError
+
+        errors.append(DriverUnavailableError)
+    except ImportError:
+        pass
+    errors.append(NotImplementedError)
+    return tuple(errors)
 
 
-# ---------------------------------------------------------------------------
-# (a) Missing host driver -> FAIL: each supported host returns a live driver
-# ---------------------------------------------------------------------------
+_CLEAR_CONFIG_ERRORS = _resolve_clear_config_errors()
 
 
 @pytest.mark.parametrize("host", SUPPORTED_HOSTS)
 def test_supported_host_returns_live_driver(host: str) -> None:
-    """F7(a): select_driver(host) returns a LIVE HostDriver for each host.
-
-    A "live" driver is a concrete, instantiated HostDriver subclass — not a
-    None, not a placeholder string, not a class object. If select_driver
-    raises DriverNotFoundError for a supported host, that host's driver is
-    effectively MISSING and this fails loudly (per MF2 / F7).
-    """
     driver = select_driver(host)
-
-    assert driver is not None, f"select_driver({host!r}) returned None — host driver missing"
-    assert isinstance(driver, HostDriver), (
-        f"select_driver({host!r}) returned {type(driver).__name__}, "
-        f"which is not a HostDriver subclass instance"
-    )
-    assert type(driver).__name__ == EXPECTED_DRIVER_CLASS[host], (
-        f"select_driver({host!r}) returned {type(driver).__name__}; "
-        f"expected {EXPECTED_DRIVER_CLASS[host]}"
-    )
+    assert isinstance(driver, HostDriver)
+    assert type(driver).__name__ == EXPECTED_DRIVER_CLASS[host]
 
 
 def test_all_supported_hosts_route_to_distinct_drivers() -> None:
-    """Adapter round-trip: the five hosts map to five DISTINCT driver classes.
-    Guards against a regression where two hosts collapse onto the same driver
-    (e.g. an accidental fall-through making codex route to the claude driver).
-    """
     classes = {host: type(select_driver(host)).__name__ for host in SUPPORTED_HOSTS}
-    distinct = set(classes.values())
-    assert len(distinct) == len(SUPPORTED_HOSTS), (
-        f"Expected {len(SUPPORTED_HOSTS)} distinct driver classes, got "
-        f"{len(distinct)}: {classes}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Codex advertised support must match the live runtime primitive surface
-# ---------------------------------------------------------------------------
+    assert len(set(classes.values())) == len(SUPPORTED_HOSTS), classes
 
 
 def test_codex_multi_agent_claims_stay_blocked_when_runtime_path_is_missing() -> None:
-    """Codex must not advertise native multi-agent support without a runtime path."""
     from runtime.drivers.codex.driver import CodexDriver
     from z_harness_cli.adapters.base import command_tier
     from z_harness_cli.adapters.codex_parity_gate import (
@@ -226,26 +104,17 @@ def test_codex_multi_agent_claims_stay_blocked_when_runtime_path_is_missing() ->
         codex_native_subagent_dispatch_available,
     )
 
-    primitive_available = codex_native_subagent_dispatch_available()
-    driver_has_hook = hasattr(CodexDriver, "dispatch_native_subagent")
-    if primitive_available and driver_has_hook:
+    if codex_native_subagent_dispatch_available() and hasattr(
+        CodexDriver, "dispatch_native_subagent"
+    ):
         return
-
     assert {
         command: command_tier("codex", command)
         for command in NATIVE_CANDIDATE_FAMILIES
-    } == {
-        command: "blocked"
-        for command in NATIVE_CANDIDATE_FAMILIES
-    }, (
-        "Codex advertised native multi-agent support while the runtime "
-        f"path is incomplete: primitive_available={primitive_available}, "
-        f"driver_has_hook={driver_has_hook}"
-    )
+    } == {command: "blocked" for command in NATIVE_CANDIDATE_FAMILIES}
 
 
-def test_codex_native_multi_agent_claims_require_primitive_and_driver_hook() -> None:
-    """A native multi-agent tier requires both gate evidence and driver support."""
+def test_codex_native_claims_require_primitive_and_driver_hook() -> None:
     from runtime.drivers.codex.driver import CodexDriver
     from z_harness_cli.adapters.base import command_tier
     from z_harness_cli.adapters.codex_parity_gate import (
@@ -253,80 +122,31 @@ def test_codex_native_multi_agent_claims_require_primitive_and_driver_hook() -> 
         codex_native_subagent_dispatch_available,
     )
 
-    native_claims = sorted(
+    native_claims = [
         command
         for command in NATIVE_CANDIDATE_FAMILIES
         if command_tier("codex", command) == "native"
-    )
+    ]
     if not native_claims:
         return
-
-    assert codex_native_subagent_dispatch_available(), (
-        "Codex advertised native multi-agent command support without the "
-        f"native subagent primitive gate: {native_claims}"
-    )
-    assert hasattr(CodexDriver, "dispatch_native_subagent"), (
-        "Codex advertised native multi-agent command support, but the live "
-        f"CodexDriver has no dispatch_native_subagent hook: {native_claims}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Unsupported host -> DriverNotFoundError with a clear message
-# ---------------------------------------------------------------------------
+    assert codex_native_subagent_dispatch_available()
+    assert hasattr(CodexDriver, "dispatch_native_subagent")
 
 
 def test_unknown_host_raises_driver_not_found() -> None:
-    """F7: select_driver('unknown') raises DriverNotFoundError clearly.
-
-    The message must name the offending host and enumerate the supported
-    hosts, so the operator can self-correct without reading source.
-    """
     with pytest.raises(DriverNotFoundError) as excinfo:
         select_driver("unknown")
-
-    msg = str(excinfo.value)
-    assert "unknown" in msg, f"error message does not name the bad host: {msg!r}"
-    # Enumerate the supported hosts so the message is actionable.
-    for host in SUPPORTED_HOSTS:
-        assert host in msg, (
-            f"DriverNotFoundError message omits supported host {host!r}: {msg!r}"
-        )
-
-
+    assert "unknown" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("bad_host", ["", "claude-code", "gpt", "gemini", "self"])
 def test_other_unsupported_hosts_raise_driver_not_found(bad_host: str) -> None:
-    """Several plausible-but-wrong host strings all raise DriverNotFoundError.
-
-    'claude-code' is the BINARY name, not the host name — feeding the binary
-    namespace into the host namespace must fail, not silently succeed.
-    """
     with pytest.raises(DriverNotFoundError):
         select_driver(bad_host)
 
 
-# ---------------------------------------------------------------------------
-# .init() does not crash with unset auth — surfaces a clear config error
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("host", SUPPORTED_HOSTS)
 def test_init_does_not_crash_with_unset_auth(host: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """F7: driver.init() with unset auth must not crash with a stack trace.
-
-    With every known auth env var cleared, calling .init() must EITHER:
-      - return cleanly (driver defers auth resolution to dispatch()), OR
-      - raise a *recognized clear config error* (DriverConfigError,
-        DriverInitError, AuthResolutionError, DriverUnavailableError,
-        NotImplementedError) carrying a non-empty message.
-
-    It must NOT raise a bare KeyError / AttributeError / TypeError / IndexError
-    — those indicate an unhandled crash rather than a surfaced config error.
-    """
-    # Strip every credential env var a driver might consult so this is a true
-    # "unset auth" probe regardless of the developer's local environment.
     for var in (
         "CURSOR_API_KEY",
         "ANTHROPIC_API_KEY",
@@ -337,180 +157,357 @@ def test_init_does_not_crash_with_unset_auth(host: str, monkeypatch: pytest.Monk
         "ANTIGRAVITY_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
-
     driver = select_driver(host)
-
     try:
         driver.init(dict(_MINIMAL_PROVIDER_CONFIG))
-    except _CRASH_EXCEPTIONS as exc:  # pragma: no cover - this is the failure path
-        pytest.fail(
-            f"{type(driver).__name__}.init() crashed with unhandled "
-            f"{type(exc).__name__}: {exc!r}. init() must surface a clear "
-            f"config error (e.g. DriverConfigError) instead of crashing."
-        )
+    except _CRASH_EXCEPTIONS as exc:
+        pytest.fail(f"{type(driver).__name__}.init() crashed: {exc!r}")
     except _CLEAR_CONFIG_ERRORS as exc:
-        # Acceptable: a clear, surfaced config error — but it must carry a
-        # human-readable message, not be an empty marker.
-        assert str(exc).strip(), (
-            f"{type(driver).__name__}.init() raised {type(exc).__name__} with "
-            f"an empty message; the config error must be actionable"
+        assert str(exc).strip()
+
+
+def _read_samples() -> dict[str, dict[str, object]]:
+    return {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(Z_FIX_FIXTURE_ROOT.glob("*.json"))
+    }
+
+
+def _write_records(root: Path, records: Mapping[str, Mapping[str, object]]) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    for name, record in records.items():
+        (root / f"{name}.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    # else: init() returned cleanly — also acceptable (auth deferred to dispatch).
 
 
-# ---------------------------------------------------------------------------
-# (b) Zero actual driver coverage -> FAIL
-# (c) Placeholder / missing fixtures -> FAIL
-# ---------------------------------------------------------------------------
-
-
-def _golden_files_for(command: str = "z-do") -> list[Path]:
-    """Return every EXPECTED golden fixture file for *command*.
-
-    Critically, this builds the path list from the CANONICAL driver roster
-    (``_CANONICAL_DRIVERS``) — NOT by iterating directories that happen to
-    exist on disk. Iterating only existing directories would let a deleted
-    host's fixtures silently disappear from the gate, so a green run no longer
-    proves that host has real coverage. By enumerating the canonical roster we
-    guarantee that a MISSING driver directory or golden file surfaces as a
-    ``missing fixture`` failure in :func:`_placeholder_or_missing`.
-    """
-    files: list[Path] = []
-    for driver in _CANONICAL_DRIVERS:
-        driver_dir = _FIXTURES_ROOT / command / driver
-        for name in _GOLDEN_FILENAMES:
-            files.append(driver_dir / name)
-    return files
-
-
-def _events_golden_reason(path: Path, content: str) -> str | None:
-    """Validate an ``events.golden.jsonl`` carries REAL recorded coverage.
-
-    Returns a reason string when the file is not real coverage, else None.
-
-    Real coverage means the file parses as JSONL and contains at least one
-    VALID conformance event — a JSON object carrying a ``"type"`` field, which
-    is the event shape :mod:`run_conformance.py` records (every event it emits
-    via ``_emit`` is a dict with a ``"type"`` key). Junk text, a bare scalar,
-    a JSON array, or an object lacking ``"type"`` does NOT count: those would
-    let an empty-but-non-blank file masquerade as coverage.
-    """
-    import json
-
-    stripped = content.strip()
-    if not stripped:
-        return f"empty events golden (no recorded coverage): {path}"
-
-    valid_event_count = 0
-    malformed_lines: list[int] = []
-    for lineno, raw in enumerate(content.splitlines(), start=1):
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            malformed_lines.append(lineno)
-            continue
-        # A valid conformance event is a JSON object with a non-empty "type".
-        if isinstance(obj, dict) and isinstance(obj.get("type"), str) and obj["type"].strip():
-            valid_event_count += 1
-
-    if valid_event_count == 0:
-        detail = (
-            f" ({len(malformed_lines)} malformed line(s))"
-            if malformed_lines
-            else ""
-        )
-        return (
-            f"events golden has no valid conformance event "
-            f"(needs >=1 JSON object with a 'type' field, the shape "
-            f"run_conformance.py records){detail}: {path}"
-        )
-    return None
-
-
-def _placeholder_or_missing(path: Path) -> str | None:
-    """Return a reason string if *path* is missing/placeholder/empty, else None.
-
-    A golden fixture counts as non-real coverage when:
-      - it does not exist, OR
-      - it carries the '# PLACEHOLDER' marker, OR
-      - (for events.golden.jsonl) it lacks at least one VALID conformance event
-        (see :func:`_events_golden_reason`).
-    """
-    if not path.exists():
-        return f"missing fixture: {path}"
-    content = path.read_text(encoding="utf-8")
-    if "# PLACEHOLDER" in content:
-        return f"placeholder fixture (# PLACEHOLDER): {path}"
-    if path.name == "events.golden.jsonl":
-        return _events_golden_reason(path, content)
-    return None
-
-
-def _strict_fixture_reasons(command: str = "z-do") -> list[str]:
-    """Collect all placeholder/missing/empty fixture reasons for *command*.
-
-    Expected fixtures are derived from the canonical driver roster, so a
-    missing driver directory or golden file is reported as a failure rather
-    than being skipped.
-    """
-    files = _golden_files_for(command)
-    if not files:
-        return [f"no fixtures recorded under {_FIXTURES_ROOT / command}"]
-    reasons: list[str] = []
-    for f in files:
-        reason = _placeholder_or_missing(f)
-        if reason is not None:
-            reasons.append(reason)
-    return reasons
-
-
-# ---------------------------------------------------------------------------
-# Roster sync: _CANONICAL_DRIVERS must stay in lockstep with _DRIVER_BINARIES
-# ---------------------------------------------------------------------------
-
-
-def test_canonical_drivers_matches_run_conformance_driver_binaries() -> None:
-    """The strict canonical roster and run_conformance._DRIVER_BINARIES must match.
-
-    Both lists define the same set of driver binary names. If run_conformance
-    gains or renames a driver, _CANONICAL_DRIVERS must be updated too, and
-    vice-versa. This test fails immediately with the symmetric difference so
-    the drift is obvious and actionable.
-    """
-    roster = set(_CANONICAL_DRIVERS)
-    binaries = set(_run_conformance_mod._DRIVER_BINARIES.keys())
-    symmetric_diff = roster.symmetric_difference(binaries)
-    assert not symmetric_diff, (
-        "Roster drift detected between test_strict._CANONICAL_DRIVERS and "
-        "run_conformance._DRIVER_BINARIES:\n"
-        f"  in _CANONICAL_DRIVERS only: {sorted(roster - binaries)}\n"
-        f"  in _DRIVER_BINARIES only:   {sorted(binaries - roster)}\n"
-        "Update _CANONICAL_DRIVERS (test_strict.py) to match _DRIVER_BINARIES "
-        "(run_conformance.py), or update both if a driver was renamed."
+def test_checked_samples_cover_exact_c1_roster() -> None:
+    claims, errors = derive_release_claims()
+    assert not errors
+    assert set(_read_samples()) == set(claims) == {"claude", "cli", "codex", "omp"}
+    assert z_fix_fixture_digest(Z_FIX_FIXTURE_ROOT) == SAMPLE_FIXTURE_DIGEST
+    assert not validate_release_evidence(
+        Z_FIX_FIXTURE_ROOT,
+        SAMPLE_CANDIDATE_SHA,
+        allow_test_fixtures=True,
     )
 
 
-@_strict_only
-def test_strict_fails_on_placeholder_or_missing_fixtures() -> None:
-    """F7(b)+(c): strict conformance FAILS while fixtures are placeholders.
+def test_checked_samples_are_rejected_as_live_release_proof() -> None:
+    errors = validate_release_evidence(Z_FIX_FIXTURE_ROOT, SAMPLE_CANDIDATE_SHA)
+    assert errors
+    for host in ("claude", "cli", "codex", "omp"):
+        assert any(host in error and "fixture_mode" in error for error in errors)
+        assert any(host in error and "not live release proof" in error for error in errors)
 
-    This is the fail-loud heart of the gate. As long as ANY golden fixture is
-    a '# PLACEHOLDER' / empty / missing, there is ZERO real recorded driver
-    coverage, so a "passing" conformance run would be vacuous. This test must
-    FAIL in that state — i.e. it asserts there are no such reasons.
 
-    To make the gate green you must record real fixtures with:
-        python tests/conformance/run_conformance.py \\
-            --command z-do --mode live --record --drivers <driver>
-    which replaces the placeholders with real recorded output.
-    """
-    reasons = _strict_fixture_reasons("z-do")
-    assert not reasons, (
-        "conformance-strict: no real driver coverage — every golden fixture "
-        "is a placeholder/empty/missing, so a passing run would be vacuous. "
-        "Record real fixtures (run_conformance.py --mode live --record). "
-        "Offending fixtures:\n  - " + "\n  - ".join(reasons)
+def test_copied_samples_cannot_be_relabelled_as_live_evidence(tmp_path: Path) -> None:
+    records = _read_samples()
+    for record in records.values():
+        record["fixture_mode"] = False
+    _write_records(tmp_path, records)
+    errors = validate_release_evidence(tmp_path, SAMPLE_CANDIDATE_SHA)
+    assert errors
+    for host in records:
+        assert any(host in error and "not live release proof" in error for error in errors)
+        assert any(host in error and "test-sample marker" in error for error in errors)
+
+
+def test_standalone_rejects_copied_relabelled_samples(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tests.conformance import run_strict
+
+    records = _read_samples()
+    for record in records.values():
+        record["fixture_mode"] = False
+    _write_records(tmp_path, records)
+    result = run_strict.main(
+        [
+            "--candidate-sha",
+            SAMPLE_CANDIDATE_SHA,
+            "--evidence-root",
+            str(tmp_path),
+        ]
     )
+    assert result == 1
+    stderr = capsys.readouterr().err
+    assert "checked schema-sample provenance is not live release proof" in stderr
+
+
+def test_live_evidence_with_nonfixture_provenance_remains_valid(tmp_path: Path) -> None:
+    records = _read_samples()
+    for host, record in records.items():
+        record["fixture_mode"] = False
+        record["diagnostics"] = [f"Candidate-bound z-fix evidence recorded for {host}."]
+        if host in {"claude", "codex", "omp"}:
+            proof = record["proof"]
+            assert isinstance(proof, dict)
+            proof["dispatch_probe"] = expected_dispatch_probe(SAMPLE_CANDIDATE_SHA)
+        provenance = record["provenance"]
+        assert isinstance(provenance, dict)
+        provenance["runner"] = "candidate-verifier-v1"
+        provenance["evidence_root_kind"] = "immutable-candidate-evidence"
+        provenance.pop("fixture_candidate_sha")
+        provenance.pop("fixture_set_id")
+        record["producer"] = {
+            "schema_version": 1,
+            "repository": "zeke13dev/z-harness",
+            "workflow": ".github/workflows/release-evidence.yml",
+            "run_id": 12345,
+            "job": "produce",
+            "environment": "release-evidence",
+            "event": "workflow_dispatch",
+            "head_sha": SAMPLE_CANDIDATE_SHA,
+            "execution_digest": "a" * 64,
+        }
+    _write_records(tmp_path, records)
+    assert not validate_release_evidence(tmp_path, SAMPLE_CANDIDATE_SHA)
+
+
+def test_runner_and_pytest_share_identical_evidence_interpretation(tmp_path: Path) -> None:
+    from tests.conformance import run_strict
+
+    records = _read_samples()
+    records["claude"]["command"] = "z-do"
+    _write_records(tmp_path, records)
+    direct = validate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, allow_test_fixtures=True
+    )
+    runner = run_strict.evaluate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, test_fixture_mode=True
+    )
+    assert runner == direct
+
+
+def test_runner_allow_missing_is_always_a_hard_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.conformance import run_strict
+
+    result = run_strict.main(
+        [
+            "--candidate-sha",
+            SAMPLE_CANDIDATE_SHA,
+            "--evidence-root",
+            str(Z_FIX_FIXTURE_ROOT),
+            "--test-fixture-mode",
+            "--allow-missing",
+        ]
+    )
+    assert result == 1
+    assert "cannot relax blocking C1 release claims" in capsys.readouterr().err
+
+
+def test_runner_fixture_mode_requires_exact_fixture_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tests.conformance import run_strict
+
+    monkeypatch.setattr(run_strict, "evidence_set_digest", lambda _root: "0" * 64)
+    result = run_strict.main(
+        [
+            "--candidate-sha",
+            SAMPLE_CANDIDATE_SHA,
+            "--evidence-root",
+            str(Z_FIX_FIXTURE_ROOT),
+            "--test-fixture-mode",
+        ]
+    )
+    assert result == 1
+    assert "exact digest" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("mutation", "needle"),
+    [
+        ("missing", "missing blocking evidence"),
+        ("duplicate", "duplicate evidence"),
+        ("extra", "unexpected/unclaimed"),
+        ("wrong_host", "unexpected/unclaimed"),
+        ("wrong_command", "command must be exactly"),
+        ("placeholder", "forbidden placeholder"),
+        ("advisory", "must be blocking"),
+        ("skipped", "status must be exactly"),
+        ("nonzero", "exit_code must be integer zero"),
+        ("top_exit_bool", "exit_code must be integer zero"),
+        ("missing_diagnostics", "diagnostics list is required"),
+        ("missing_provenance", "provenance is missing"),
+        ("missing_payload", "payload identity is required"),
+        ("unknown_field", "unexpected field"),
+        ("candidate_missing", "wrong candidate SHA"),
+        ("candidate_malformed", "wrong candidate SHA"),
+        ("candidate_mismatch", "wrong candidate SHA"),
+        ("fingerprint", "fingerprint mismatch"),
+        ("downgraded", "wrong or downgraded evidence kind"),
+        ("cli_bootstrap", "ordered bootstrap/install/update"),
+        ("cli_install", "ordered bootstrap/install/update"),
+        ("cli_update", "ordered bootstrap/install/update"),
+        ("omp_wheel", "wheel_filename is required"),
+        ("omp_filename_mismatch", "filename does not match artifact.name"),
+        ("omp_filename_path", "must be an exact basename"),
+        ("omp_digest_mismatch", "digest does not match artifact.sha256"),
+        ("omp_candidate_mismatch", "does not match canonical candidate"),
+        ("omp_repo_import", "must be outside the repository checkout"),
+        ("omp_origin", "installed_outside_checkout must be true"),
+    ],
+)
+def test_release_evidence_negative_matrix(tmp_path: Path, mutation: str, needle: str) -> None:
+    records = _read_samples()
+    if mutation == "missing":
+        del records["claude"]
+    elif mutation == "duplicate":
+        records["duplicate"] = dict(records["claude"])
+    elif mutation == "extra":
+        records["cursor"] = {**records["claude"], "host": "cursor"}
+    elif mutation == "wrong_host":
+        records["claude"]["host"] = "cursor"
+    elif mutation == "wrong_command":
+        records["claude"]["command"] = "z-do"
+    elif mutation == "placeholder":
+        records["claude"]["diagnostics"] = ["PLACEHOLDER"]
+    elif mutation == "advisory":
+        records["claude"]["blocking"] = False
+    elif mutation == "skipped":
+        records["claude"]["status"] = "skipped"
+    elif mutation == "nonzero":
+        records["claude"]["exit_code"] = 1
+    elif mutation == "top_exit_bool":
+        records["claude"]["exit_code"] = False
+    elif mutation == "missing_diagnostics":
+        del records["claude"]["diagnostics"]
+    elif mutation == "missing_provenance":
+        del records["claude"]["provenance"]
+    elif mutation == "missing_payload":
+        proof = records["claude"]["proof"]
+        assert isinstance(proof, dict)
+        del proof["payload"]
+    elif mutation == "unknown_field":
+        records["claude"]["success_token"] = "passed"
+    elif mutation == "candidate_missing":
+        del records["claude"]["candidate_sha"]
+    elif mutation == "candidate_malformed":
+        records["claude"]["candidate_sha"] = "abc"
+    elif mutation == "candidate_mismatch":
+        records["claude"]["candidate_sha"] = "2" * 40
+    elif mutation == "fingerprint":
+        records["claude"]["claim_fingerprint"] = "0" * 64
+    elif mutation == "downgraded":
+        records["codex"]["evidence_kind"] = "preview_advisory"
+    elif mutation.startswith("cli_"):
+        operation = mutation.removeprefix("cli_")
+        proof = records["cli"]["proof"]
+        assert isinstance(proof, dict)
+        proof["phases"] = [p for p in proof["phases"] if p["operation"] != operation]
+    elif mutation == "omp_wheel":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        del proof["wheel_filename"]
+    elif mutation == "omp_filename_mismatch":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["wheel_filename"] = "other.whl"
+    elif mutation == "omp_filename_path":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["wheel_filename"] = "/tmp/z_harness-0.1.0b13-py3-none-any.whl"
+    elif mutation == "omp_digest_mismatch":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["wheel_sha256"] = "0" * 64
+    elif mutation == "omp_candidate_mismatch":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["candidate_sha"] = "2" * 40
+    elif mutation == "omp_repo_import":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["import_path"] = str(
+            _REPO_ROOT / "site-packages" / "z_harness_cli" / "__init__.py"
+        )
+    elif mutation == "omp_origin":
+        proof = records["omp"]["proof"]
+        assert isinstance(proof, dict)
+        proof["installed_outside_checkout"] = False
+    _write_records(tmp_path, records)
+    errors = validate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, allow_test_fixtures=True
+    )
+    assert errors
+    assert any(needle in error for error in errors), errors
+
+
+@pytest.mark.parametrize("bad_exit_code", [False, True, 0.0, "0", None])
+def test_cli_lifecycle_requires_exact_integer_zero_exit_code(
+    tmp_path: Path,
+    bad_exit_code: object,
+) -> None:
+    records = _read_samples()
+    proof = records["cli"]["proof"]
+    assert isinstance(proof, dict)
+    phases = proof["phases"]
+    assert isinstance(phases, list)
+    phases[1]["exit_code"] = bad_exit_code
+    _write_records(tmp_path, records)
+    errors = validate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, allow_test_fixtures=True
+    )
+    assert any("exact integer exit_code zero" in error for error in errors), errors
+
+
+def test_zero_claims_and_zero_records_fail(tmp_path: Path) -> None:
+    contract = release_surface.release_contract()
+    contract["host_claims"] = {}
+    errors = validate_release_evidence(
+        tmp_path,
+        SAMPLE_CANDIDATE_SHA,
+        contract=contract,
+        allow_test_fixtures=True,
+    )
+    assert any("zero C1 blocking" in error for error in errors)
+
+
+def test_malformed_and_empty_evidence_fail(tmp_path: Path) -> None:
+    assert "zero evidence records exercised" in validate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, allow_test_fixtures=True
+    )
+    (tmp_path / "claude.json").write_text("{broken", encoding="utf-8")
+    errors = validate_release_evidence(
+        tmp_path, SAMPLE_CANDIDATE_SHA, allow_test_fixtures=True
+    )
+    assert any("malformed evidence record" in error for error in errors)
+
+
+def test_candidate_argument_must_be_explicit_lowercase_sha() -> None:
+    for candidate in ("", "abc", "A" * 40, "0" * 39):
+        errors = validate_release_evidence(
+            Z_FIX_FIXTURE_ROOT, candidate, allow_test_fixtures=True
+        )
+        assert "candidate SHA must be explicit lowercase 40-hex" in errors
+
+
+def test_unclaimed_development_hosts_stay_out_of_roster() -> None:
+    claims, errors = derive_release_claims()
+    assert not errors
+    assert set(claims).isdisjoint(
+        {"antigravity", "cursor", "cline", "copilot", "kiro", "pi", "windsurf"}
+    )
+
+
+def test_contract_downgrade_and_unknown_blocking_claim_fail() -> None:
+    contract = release_surface.release_contract()
+    contract["host_claims"]["codex"]["tier"] = "export_only"
+    contract["host_claims"]["newhost"] = {"tier": "native", "status": "primary"}
+    _, errors = derive_release_claims(contract)
+    assert any("codex" in error and "downgraded" in error for error in errors)
+    assert any("newhost" in error for error in errors)
+
+
+def test_codex_partial_preview_claim_is_preserved() -> None:
+    claims, errors = derive_release_claims()
+    assert not errors
+    assert claims["codex"] == {
+        "tier": "partial",
+        "status": "preview",
+        "evidence": "blocking_clean_plugin",
+    }

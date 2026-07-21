@@ -2,11 +2,9 @@
 #
 # sync-version.sh — single-source-of-truth version propagation.
 #
-# The human-controlled MAJOR.MINOR lives in ./VERSION (e.g. "1.0"). The PATCH is
-# auto-derived from the git commit count, so the version string changes on every
-# commit and the plugin cache can never silently go stale (the failure mode that
-# bit us with the pinned "0.1.0"). Combined with marketplace auto-update, every
-# new session re-fetches the latest.
+# Development stamps retain the human-controlled MAJOR.MINOR from ./VERSION and
+# the commit-count PATCH. Release stamps must instead provide
+# --candidate-version; Git state never supplies a public artifact version.
 #
 #     full version = "<VERSION>.<commit-count>"
 #
@@ -18,6 +16,8 @@
 #   --pending   count the in-progress commit too (used by the pre-commit hook,
 #               where `git rev-list --count HEAD` is one behind the commit that
 #               is about to be created)
+#   --candidate-version VERSION
+#               stamp the explicit stable/beta release candidate
 #
 # Manifests kept in sync (the version-resolution surfaces each host reads):
 #   .claude-plugin/marketplace.json   Claude marketplace entry (first in chain)
@@ -39,20 +39,40 @@ if ! printf '%s' "$BASE" | grep -Eq '^[0-9]+\.[0-9]+$'; then
   echo "[z-harness] VERSION must be MAJOR.MINOR (e.g. 1.0); got '$BASE'" >&2; exit 1
 fi
 
-mode="sync"; pending=0
-for a in "$@"; do
-  case "$a" in
+mode="sync"; pending=0; candidate=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     sync)          mode="sync" ;;
     --check|check) mode="check" ;;
     --print|print) mode="print" ;;
     --pending)     pending=1 ;;
-    *) echo "Usage: $0 [sync|--check|--print] [--pending]" >&2; exit 1 ;;
+    --candidate-version)
+      [[ $# -ge 2 ]] || { echo "Usage: $0 [sync|--check|--print] [--pending | --candidate-version VERSION]" >&2; exit 2; }
+      candidate="$2"
+      shift
+      ;;
+    *) echo "Usage: $0 [sync|--check|--print] [--pending | --candidate-version VERSION]" >&2; exit 2 ;;
   esac
+  shift
 done
 
-COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
-[ "$pending" -eq 1 ] && COUNT=$((COUNT + 1))
-FULL="${BASE}.${COUNT}"
+if [[ -n "$candidate" ]]; then
+  [[ "$pending" -eq 0 ]] || { echo "[z-harness] --pending cannot be combined with --candidate-version" >&2; exit 2; }
+  FULL="$(python3 - "$candidate" <<'PY'
+import sys
+from z_harness_cli.release import parse_release_candidate
+
+try:
+    print(parse_release_candidate(sys.argv[1]).plugin_version)
+except ValueError as exc:
+    raise SystemExit(f"[z-harness] invalid release candidate: {exc}") from exc
+PY
+)"
+else
+  COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+  [ "$pending" -eq 1 ] && COUNT=$((COUNT + 1))
+  FULL="${BASE}.${COUNT}"
+fi
 
 if [ "$mode" = "print" ]; then echo "$FULL"; exit 0; fi
 

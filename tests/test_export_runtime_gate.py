@@ -892,9 +892,10 @@ class TestUnsupportedCallBlockRewrites(unittest.TestCase):
             (".agent", "skills", "z-audit-plan-style", "SKILL.md"),
         )
         self.assertIn("RUNTIME-GATE: subagent", content)
-        self.assertNotIn("subagent_type=", content)
-        self.assertNotIn("model=", content)
-        self.assertNotIn("description=", content)
+        self.assertIn("No model= override", content)
+        self.assertNotIn('subagent_type="plan-style-reviewer"', content)
+        self.assertNotIn('description="Plan-style review for <Z_HARNESS_SLUG>"', content)
+        self.assertNotIn('model="sonnet"', content)
 
     def test_pi_agent_rewrite_skips_empty_prose_but_rewrites_real_calls(self) -> None:
         from runtime.drivers.pi.export import _rewrite_body
@@ -924,7 +925,7 @@ class TestUnsupportedCallBlockRewrites(unittest.TestCase):
         "install.sh is_repo_clone() requires .git to be a directory; in a git worktree "
         ".git is a file, so this test only runs on a normal clone (see LEDGER, T020)",
     )
-    def test_pi_preserves_gate_comments_with_legacy_line_based_agent_args(self) -> None:
+    def test_pi_preserves_gate_comments_with_config_routed_agent(self) -> None:
         content = self._rendered(
             "runtime.drivers.pi.export",
             ("prompts", "z-audit-plan-style.md"),
@@ -933,8 +934,9 @@ class TestUnsupportedCallBlockRewrites(unittest.TestCase):
         self.assertIn("requirement to the user and skip the Agent() call.", content)
         self.assertIn("> [pi] Dispatch a subagent here via the subagent tool", content)
         self.assertIn('subagent_type="plan-style-reviewer"', content)
-        self.assertIn('model="sonnet"', content)
         self.assertIn('description="Plan-style review for <Z_HARNESS_SLUG>"', content)
+        self.assertIn("No model= override: plan-style-reviewer is a config-routed fleet agent", content)
+        self.assertNotIn('model="sonnet"', content)
 
 if __name__ == "__main__":
     unittest.main()

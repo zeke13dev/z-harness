@@ -490,42 +490,6 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 The `planning_mode_chosen` event is mandatory and is emitted exactly once per run, before `cost_gate_decision`. Downstream telemetry must treat it as the source of truth for `planning_mode`.
 
-<!-- SUPERVISION_INGRESS_CONTRACT_START -->
-## Bundled supervision/topology choice (default off)
-
-Present exactly one supervision choice alongside the other predictable up-front
-planning choices. This is one bundled decision: enabling supervision must not
-open follow-up topology or reconciliation prompts.
-
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the same two-option supervision/topology choice via their native channel. Silent omission is forbidden. -->
-
-- **off — Off (Recommended default):** persist the disabled manifest and keep
-  the future execution workflow unsupervised.
-- **supervised — Supervise the future coordinator:** admit dynamic descendants
-  only within the approved plan policy, keep semantic reconciliation with the
-  coordinator, and pause on ambiguity. This planning session remains excluded;
-  a later integration consumes the durable manifest for the next session.
-
-In unattended/no-ask mode, set `SUPERVISION_CHOICE=off` and leave
-`SUPERVISION_WAIT_TOKEN` empty without asking. Otherwise run `begin-wait`
-immediately before the single native question above and capture its raw answer;
-an unavailable or empty answer is `off`. Finish through the shared production
-ingress using these runnable calls (the helper owns timing, normalization,
-fail-open telemetry, and atomic persistence):
-
-```bash
-SUPERVISION_WAIT_TOKEN="$(python3 -m runtime.watchdog.planning_ingress begin-wait --plan-dir "$Z_HARNESS_PLAN_DIR" --run "$RUN" --phase supervision-ingress 2>/dev/null || true)"
-# ... AskUserQuestion once; capture its raw answer in SUPERVISION_CHOICE ...
-python3 -m runtime.watchdog.planning_ingress complete --plan-dir "$Z_HARNESS_PLAN_DIR" --run "$RUN" --source /z-plan --phase supervision-ingress --choice "${SUPERVISION_CHOICE:-off}" --wait-token "${SUPERVISION_WAIT_TOKEN:-}"
-```
-
-Both choices serialize the same versioned shape and differ only in `enabled`.
-The planning run producing this artifact MUST NOT call any watchdog registry
-mutation or daemon-ensure surface. Its existing active-plan registry lifecycle
-is separate and remains unchanged.
-<!-- SUPERVISION_INGRESS_CONTRACT_END -->
-
-
 ## Pre-subagent cost gate (hard)
 
 This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and the **explicit planning mode gate** above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, the Phase 7 pre-dispatch `task-tree-generator` guard, and any other Agent dispatch.

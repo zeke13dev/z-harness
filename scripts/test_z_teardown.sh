@@ -23,11 +23,10 @@
 #   TC06 — INTEGRATION: full preflight -> teardown cleans up claim + registry
 #          (registry list no longer shows the run; lock file free)
 #   TC07 — idempotent: calling teardown twice on the same run both exit 0
-#   TC08 — teardown on a run with NO run-brief.json / no claim ever taken
-#          still exits 0 and reports a warning (best-effort, never hard-fails)
-#   TC09 — claim release with a non-matching --session/--command is a safe
-#          no-op (does not error, exits 0, does not touch a peer's lock)
+#   TC08 — teardown with no persisted session fails closed and warns
+#   TC09 — claim release mismatch fails closed, preserves holder + run record
 #   TC10 — --status aborted is honored (deregister status + run_end payload)
+#   TC11 — persistent stopped holder retains registry/no run_end; retry completes
 
 set -euo pipefail
 
@@ -233,10 +232,10 @@ printf '\nTC07: idempotent — teardown called twice both exit 0\n'
 }
 
 # ---------------------------------------------------------------------------
-# TC08 — teardown with no prior preflight (no run-brief.json, no claim) is
-# still best-effort: exits 0, reports a warning for the missing brief.
+# TC08 — teardown with no prior preflight has no persisted holder identity,
+# so it fails closed and reports both the missing brief and release warning.
 # ---------------------------------------------------------------------------
-printf '\nTC08: teardown with no prior preflight is best-effort (exit 0, warns)\n'
+printf '\nTC08: teardown with no persisted holder identity fails closed\n'
 {
   tmp="$(_tmpdir)"
   RUN="never-preflighted-run"
@@ -244,43 +243,50 @@ printf '\nTC08: teardown with no prior preflight is best-effort (exit 0, warns)\
 
   RC=0
   OUT="$(Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" --run "$RUN" --slug "$SLUG" --command /z-test-fixture 2>/dev/null)" || RC=$?
-  assert_rc 0 "TC08: teardown on never-preflighted run still exits 0" "$RC"
+  assert_rc 1 "TC08: unresolved holder identity is operational failure" "$RC"
 
   # `warnings` is a JSON list; json_get only extracts scalar top-level
   # fields, so just check the summary line's raw text for the flagged step.
   assert_contains "TC08: summary flags run_brief_finalize as a warning" "run_brief_finalize" "$OUT"
+  assert_contains "TC08: summary flags claim_release as a warning" "claim_release" "$OUT"
 }
 
 # ---------------------------------------------------------------------------
-# TC09 — claim release with non-matching session/command is a safe no-op:
-# a live peer's lock on the SAME slug survives our teardown call untouched.
+# TC09 — claim release with a non-matching session is an explicit operational
+# failure. The guarded holder and registry record survive untouched.
 # ---------------------------------------------------------------------------
-printf '\nTC09: teardown with wrong session/command does not disturb a peer lock\n'
+printf '\nTC09: teardown with wrong session fails closed and preserves coordination\n'
 {
   tmp="$(_tmpdir)"
   SLUG="tc09-slug"
+  preflight_and_capture "$tmp" "$SLUG"
+  RUN="$LAST_RUN"
+  STATUS_BEFORE="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
+  HOLDER_BEFORE="$(json_get "$STATUS_BEFORE" holder)"
 
-  # A "peer" acquires the slug directly (simulating a live, unrelated holder).
-  Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
-    acquire --slug "$SLUG" --run-id "peer-run" --session "peer-session" --command "/peer-cmd" \
-    >/dev/null 2>/dev/null
-
-  # We call teardown for an UNRELATED run/session/command against the same slug.
   RC=0
-  Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" \
-    --run "not-the-peer-run" --slug "$SLUG" --command "/not-the-peer-cmd" \
-    --session "not-the-peer-session" >/dev/null 2>/dev/null || RC=$?
-  assert_rc 0 "TC09: teardown against a peer's slug exits 0 (no-op release)" "$RC"
+  OUT="$(Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" \
+    --run "$RUN" --slug "$SLUG" --command "/z-test-fixture" \
+    --session "not-the-owner-session" 2>"$tmp/mismatch.err")" || RC=$?
+  assert_rc 1 "TC09: ownership mismatch is an operational failure" "$RC"
+  assert_contains "TC09: summary records claim_release warning" "claim_release" "$OUT"
 
-  # The peer's lock must still be held (untouched).
   STATUS_JSON="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
-  assert_eq "TC09: peer's slug is still held" "held" "$(json_get "$STATUS_JSON" state)"
-  assert_contains "TC09: holder is still the peer" "peer-session" "$(json_get "$STATUS_JSON" holder)"
+  assert_eq "TC09: guarded slug is still held" "held" "$(json_get "$STATUS_JSON" state)"
+  assert_eq "TC09: holder bytes are unchanged" "$HOLDER_BEFORE" "$(json_get "$STATUS_JSON" holder)"
 
-  # Cleanup: release the peer's own lock.
-  Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
-    release --slug "$SLUG" --run-id "peer-run" --session "peer-session" --command "/peer-cmd" \
-    >/dev/null 2>&1 || true
+  LIST_JSON="$(Z_HARNESS_BASE_DIR="$tmp" python3 "$REGISTRY_PY" list --json 2>/dev/null)"
+  assert_eq "TC09: registry retains the ambiguous run" "1" \
+    "$(printf '%s' "$LIST_JSON" | grep -c "\"$RUN\"" || true)"
+  EVENTS_PATH="$LAST_PLAN_DIR/archive/$RUN/events.jsonl"
+  assert_eq "TC09: no terminal run_end is emitted" "0" \
+    "$(grep -c '"kind":"run_end"' "$EVENTS_PATH" 2>/dev/null || true)"
+
+  RC_RETRY=0
+  Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" \
+    --run "$RUN" --slug "$SLUG" --command "/z-test-fixture" \
+    >/dev/null 2>/dev/null || RC_RETRY=$?
+  assert_rc 0 "TC09: later exact-holder retry completes" "$RC_RETRY"
 }
 
 # ---------------------------------------------------------------------------
@@ -306,6 +312,62 @@ printf '\nTC10: --status aborted is honored\n'
     printf '  FAIL: TC10: events.jsonl missing at %s\n' "$EVENTS_PATH"
     FAIL=$((FAIL + 1))
   fi
+}
+
+# ---------------------------------------------------------------------------
+# TC11 — A persistently stopped exact holder exhausts all release attempts.
+# Teardown must retain the registry entry and omit run_end. Resuming the daemon
+# allows the same idempotent teardown request to complete.
+# ---------------------------------------------------------------------------
+printf '\nTC11: persistent release timeout retains state; later retry completes\n'
+{
+  tmp="$(_tmpdir)"
+  SLUG="tc11-slug"
+  preflight_and_capture "$tmp" "$SLUG"
+  RUN="$LAST_RUN"
+  STATUS_BEFORE="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
+  HOLDER_PID="$(json_get "$STATUS_BEFORE" pid)"
+  kill -STOP "$HOLDER_PID"
+
+  RC=0
+  OUT="$(Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" \
+    --run "$RUN" --slug "$SLUG" --command "/z-test-fixture" \
+    2>"$tmp/timeout.err")" || RC=$?
+  assert_rc 1 "TC11: exhausted claim release fails teardown" "$RC"
+  assert_contains "TC11: summary records claim_release warning" "claim_release" "$OUT"
+  assert_contains "TC11: diagnostic records timeout exhaustion" "timeout_exhausted" \
+    "$(cat "$tmp/timeout.err")"
+  assert_contains "TC11: diagnostic records exactly three attempts" "attempts=3" \
+    "$(cat "$tmp/timeout.err")"
+
+  STATUS_HELD="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
+  assert_eq "TC11: stopped exact holder remains held" "held" "$(json_get "$STATUS_HELD" state)"
+  assert_eq "TC11: exact holder identity is retained" "$(json_get "$STATUS_BEFORE" holder)" \
+    "$(json_get "$STATUS_HELD" holder)"
+  LIST_JSON="$(Z_HARNESS_BASE_DIR="$tmp" python3 "$REGISTRY_PY" list --json 2>/dev/null)"
+  assert_eq "TC11: registry retains run after unconfirmed release" "1" \
+    "$(printf '%s' "$LIST_JSON" | grep -c "\"$RUN\"" || true)"
+  EVENTS_PATH="$LAST_PLAN_DIR/archive/$RUN/events.jsonl"
+  assert_eq "TC11: failed teardown emits no terminal run_end" "0" \
+    "$(grep -c '"kind":"run_end"' "$EVENTS_PATH" 2>/dev/null || true)"
+  assert_eq "TC11: failed teardown emits no false plan_claim_released" "0" \
+    "$(grep -c '"kind":"plan_claim_released"' "$EVENTS_PATH" 2>/dev/null || true)"
+  assert_eq "TC11: failed teardown emits one release-failure event" "1" \
+    "$(grep -c '"kind":"plan_claim_release_failed"' "$EVENTS_PATH" 2>/dev/null || true)"
+
+  kill -CONT "$HOLDER_PID"
+  RC_RETRY=0
+  Z_HARNESS_BASE_DIR="$tmp" bash "$Z_TEARDOWN" \
+    --run "$RUN" --slug "$SLUG" --command "/z-test-fixture" \
+    >/dev/null 2>/dev/null || RC_RETRY=$?
+  assert_rc 0 "TC11: later idempotent retry completes" "$RC_RETRY"
+  LIST_AFTER="$(Z_HARNESS_BASE_DIR="$tmp" python3 "$REGISTRY_PY" list --json 2>/dev/null)"
+  assert_eq "TC11: successful retry deregisters run" "0" \
+    "$(printf '%s' "$LIST_AFTER" | grep -c "\"$RUN\"" || true)"
+  assert_eq "TC11: successful retry emits one terminal run_end" "1" \
+    "$(grep -c '"kind":"run_end"' "$EVENTS_PATH" 2>/dev/null || true)"
+  assert_eq "TC11: successful retry emits one confirmed release event" "1" \
+    "$(grep -c '"kind":"plan_claim_released"' "$EVENTS_PATH" 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------------------

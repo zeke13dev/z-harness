@@ -27,19 +27,9 @@
 #          and a live writer holding the SAME slug does NOT block a --no-claim
 #          run (proves plan-claim.sh acquire was never invoked for it).
 #
-# Known characteristic (not owned/modified by this file): TC08's collision
-# assertion and TC09's "still held" assertion both depend on the acquiring
-# call's `bash scripts/sink-lock.sh acquire` background holder daemon staying
-# alive between this script's own two preflight calls. That primitive is a
-# forked, detached process outside this test's or z-preflight.sh's control;
-# under heavy concurrent daemon load it has been observed (very rarely, <1%
-# of runs) to exit before the second call, which surfaces here as a
-# collision/held assertion failing instead of a hang. TC08 logs a NOTE (not a
-# failure) diagnosing the daemon's own liveness immediately beforehand so any
-# recurrence is attributable to sink-lock.sh's daemon lifetime rather than to
-# plan-claim.sh's or z-preflight.sh's collision-detection logic (verified
-# correct against the documented contract; see z-preflight.sh's own exit-code
-# table).
+# TC08's final free-state assertion is deterministic: z-teardown returns 0 only
+# after plan-claim confirms the primitive release. An unconfirmed release is an
+# operational nonzero and retains the registry record for a later retry.
 
 set -euo pipefail
 
@@ -275,7 +265,9 @@ printf '\nTC08: INTEGRATION — preflight eval + slug-collision branch + teardow
   SLUG="tc08-integration-slug"
 
   # --- Step 1: fresh-shell eval; assert documented env vars are set ---
-  EVAL_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/test_z_preflight_eval_XXXXXX.sh")"
+  # BSD mktemp (macOS) only substitutes a trailing XXXXXX sequence; a suffix
+  # leaves the template literal and makes repeated runs collide.
+  EVAL_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/test_z_preflight_eval_XXXXXX")"
   cat > "$EVAL_SCRIPT" <<EOF
 set -euo pipefail
 export Z_HARNESS_BASE_DIR="$tmp"

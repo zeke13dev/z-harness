@@ -6,13 +6,19 @@ z-harness is a plugin/workflow layer for existing AI coding harnesses. It adds p
 
 This project is pre-1.0 beta software. It can orchestrate tools that read and write production code. Keep the primary `main` checkout clean and read-only for agent content edits: create a linked worktree and branch from local `main` for every change, then merge verified work back into `main`. Review generated plans and keep the review/test gates enabled. Expect host-specific fidelity differences while the export drivers stabilize.
 
+## Release contract
+
+`runtime.release_surface` is the canonical positive, default-deny prod ownership contract. It classifies the intended skills, agents, scripts/backends, schemas, public documents, generated requirements, and host claims; an unclassified staged path is invalid rather than implicitly shipped. The prod surface excludes `/z-attend`, `/z-explore`, `/z-map`, `/z-overnight`, `/z-research`, user-facing `z-axiom-*`, research-only agents, Hermes/Discord orchestration, and generated development mirrors unless a later release-readiness decision promotes them with blocking evidence.
+
+A clean candidate is the exact reviewed source/artifact identity exercised from a tracked clean checkout or archive, isolated HOME/config, installed wheel and plugin payloads, and blocking evidence for every claimed host, with no ignored files, untracked files, user configuration, or dev-only dependency supplying required behavior.
+
 ## Supported release surfaces
 
 - **Claude Code plugin:** primary/native command and agent workflow.
-- **Oh My Pi / OMP:** first-class package/export target; native claims are bounded by the documented parity gate.
-- **Codex plugin:** first-class parity-gated plugin/export target; export fidelity is partial, while command orchestration remains explicitly limited.
-- **Advanced/dev exports:** Cursor, Antigravity, pi, Windsurf, Kiro, Cline, and Copilot exporters remain in source and explicit export paths, but they are not public release defaults.
-- **Python CLI (`z-harness`):** small setup/onboarding entrypoint for Claude/OMP/Codex install and export guidance. It is not the day-to-day z-harness workflow surface.
+- **Python CLI (`z-harness`):** supported bootstrap, install, and update surface for the release.
+- **Oh My Pi / OMP:** conditional native status only when clean installed-wheel proof is available.
+- **Codex plugin:** partial/preview support; native CLI orchestration is not a public claim.
+- **Every other host:** Antigravity and Cursor are dev/advanced; pi, Windsurf, Kiro, Cline, and Copilot are export-only. None is a public release default.
 
 See `CAPABILITIES.md` for the host matrix and known fidelity limits.
 
@@ -26,7 +32,7 @@ z-harness setup --target claude --dry-run
 z-harness setup --target claude --install
 ```
 
-The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`. Use `z-harness setup --target all --dry-run` to inspect the release defaults: Claude Code, OMP, and Codex readiness without writing host config.
+The CLI installer uses the release contract, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`. Use `z-harness setup --target all --dry-run` to inspect the supported release paths without writing host config.
 
 ### Source checkout / plugin development
 
@@ -49,7 +55,7 @@ z-harness export --host omp --out temp/exports/omp --force
 z-harness export --host codex --surface prod --out temp/exports/codex --force
 ```
 
-The manifest in `z_harness_cli.release_surface` defines which skills, agents, MCP tools, scripts/backends, generated mirrors, and docs are prod-visible. Canonical command source is `skills/<id>/SKILL.md`; generated exports go under `temp/exports/` by default and are not committed release source. Release tarballs and staged wheels are audited against the manifest before publication.
+`runtime.release_surface` defines which skills, agents, MCP tools, scripts/backends, generated requirements, and docs are prod-visible. Canonical command source is `skills/<id>/SKILL.md`; generated exports go under `temp/exports/` by default and are not committed release source. Release tarballs and staged wheels are audited against the contract before publication.
 
 ## Configuration and state
 

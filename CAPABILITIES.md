@@ -1,6 +1,6 @@
 # z-harness capabilities matrix
 
-This document summarizes the beta support level for each shipped host/export target. The canonical implementation source is `skills/<id>/SKILL.md`, `agents/`, `personas/`, `runtime/`, and `scripts/`.
+This document summarizes the pre-1.0 beta support level for each public host and export target. `runtime.release_surface` is the canonical positive, default-deny release contract: it classifies the intended prod skills, agents, scripts/backends, schemas, public documents, generated requirements, and host claims. An unclassified staged path is invalid; it is not implicitly shipped.
 
 ## Fidelity tiers
 
@@ -11,25 +11,26 @@ This document summarizes the beta support level for each shipped host/export tar
 
 ## Hosts
 
-### Public release defaults
+### Public release support
 
 | Host / target | Tier | Runtime CLI adapter | Export support | Notes |
 |---|---:|---:|---:|---|
-| Claude Code | native | yes | plugin/source install | Best-supported beta path and public plugin installer. |
-| OMP | native | yes | `.omp/z-harness/` package | First-class public package/export target; native claims are bounded by parity evidence. |
-| Codex | flattened adapter; partial export | yes | `skills/` + `.codex/agents/` + `.codex-plugin/plugin.json` + `AGENTS.md` + MCP config | First-class parity-gated public plugin/export target; native skill/custom-agent/MCP artifacts are emitted, but CLI subagent fan-out is unproven. |
+| Claude Code | primary/native | yes | plugin install | The primary public beta workflow. |
+| Python CLI (`z-harness`) | supported | n/a | bootstrap, install, update | Supported release bootstrap and lifecycle surface. |
+| OMP | conditional native | yes | `.omp/z-harness/` package | Native status is public only when clean installed-wheel proof is available. |
+| Codex | partial/preview | yes | plugin/export preview | Native skill/custom-agent/MCP artifacts may be emitted, but CLI orchestration is not a native public claim. |
 
 ### Explicit dev/advanced or export-only targets
 
 | Host / target | Tier | Runtime CLI adapter | Export support | Notes |
 |---|---:|---:|---:|---|
-| Antigravity | high | yes | `.agent/` workflows/rules/skills | Explicit dev/advanced path; not selected by installed prod defaults. |
-| Cursor | flattened | yes | `.cursor/skills` + rules | Explicit dev/advanced export/injection; subagent fan-out is not native. |
-| legacy pi | export-only | no | pi compatibility exports | Explicit compatibility export-only target. |
-| Windsurf | export-only | no | rules | Explicit export-only target. |
-| Kiro | export-only | no | steering docs | Explicit export-only target. |
-| Cline | export-only | no | `.clinerules/` | Explicit export-only target. |
-| Copilot | export-only | no | instructions/prompts | Explicit export-only target. |
+| Antigravity | dev/advanced | yes | `.agent/` workflows/rules/skills | Not a public release default. |
+| Cursor | dev/advanced | yes | `.cursor/skills` + rules | Not a public release default. |
+| legacy pi | export-only | no | pi compatibility exports | Compatibility export only. |
+| Windsurf | export-only | no | rules | Export only. |
+| Kiro | export-only | no | steering docs | Export only. |
+| Cline | export-only | no | `.clinerules/` | Export only. |
+| Copilot | export-only | no | instructions/prompts | Export only. |
 
 ## Unsupported or degraded constructs
 
@@ -46,12 +47,11 @@ Export drivers must not silently drop those constructs. They preserve `RUNTIME-G
 
 Codex exports custom-agent definitions, native `SKILL.md` files, plugin metadata, and MCP config, but current Codex CLI dispatch does not have a proven z-harness native subagent primitive. Codex command orchestration therefore remains flattened/degraded/blocked until runtime primitive and driver-hook evidence exists.
 
-## Release surfaces
+## Release contract
 
-- `z_harness_cli.release_surface` is the single release-surface manifest. MCP tool registration, CLI/runtime export filtering, prod tarball pruning, release staging, and tarball audits read that contract instead of maintaining separate hidden-command lists.
-- **dev/main surface:** includes experimental research, axiom, Hermes/Discord/tmux, and generated-mirror resources for local development.
-- **prod surface:** ships the manifest-approved public surface and physically excludes `/z-research`, `/z-explore`, `/z-map` (legacy), `/z-overnight`, `/z-attend`, `z-axiom-*`, their dev-only agents, Hermes/Discord/tmux orchestration paths, and generated mirrors.
-- Installed wheels/tarballs default to prod, and public CLI/setup/export auto-selection defaults to Claude, OMP, and Codex. Source checkouts can opt into the full development surface with `z-harness export --surface dev ...` or explicit dev/advanced hosts.
+- `runtime.release_surface` is the single release-surface contract consumed by CLI and runtime filtering, staging, and audits; no consumer keeps a separate implicit allowlist.
+- The prod surface explicitly excludes `/z-attend`, `/z-explore`, `/z-map`, `/z-overnight`, `/z-research`, user-facing `z-axiom-*`, research-only agents, Hermes/Discord orchestration, and generated development mirrors. Those remain development resources unless later promoted with blocking evidence.
+- A clean candidate is the exact reviewed source/artifact identity exercised from a tracked clean checkout or archive, isolated HOME/config, installed wheel and plugin payloads, and blocking evidence for every claimed host, with no ignored files, untracked files, user configuration, or dev-only dependency supplying required behavior.
 
 ## Safety posture
 

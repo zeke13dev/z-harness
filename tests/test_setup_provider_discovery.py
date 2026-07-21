@@ -15,8 +15,10 @@ Cases:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -63,3 +65,48 @@ def test_discover_providers_cli_exit_zero_with_contract_keys():
     assert "roles" in data
     assert isinstance(data["providers"], dict)
     assert isinstance(data["roles"], dict)
+
+
+def test_discovery_is_deterministic_and_proposes_three_distinct_roles():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        bin_dir = Path(temp_dir)
+        for command in ("codex", "gemini", "claude"):
+            executable = bin_dir / command
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+        env = {**os.environ, "PATH": str(bin_dir)}
+        first = subprocess.run(
+            [sys.executable, str(_DISCOVER_SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        second = subprocess.run(
+            [sys.executable, str(_DISCOVER_SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    assert first.stdout == second.stdout
+    roles = json.loads(first.stdout)["roles"]
+    assert set(roles) == {"consultant_primary", "consultant_secondary", "reviewer"}
+    assert len(set(roles.values())) == 3
+
+
+def test_discovery_with_too_few_providers_emits_no_partial_role_proposal():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        executable = Path(temp_dir) / "codex"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, str(_DISCOVER_SCRIPT)],
+            env={**os.environ, "PATH": temp_dir},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    assert json.loads(result.stdout)["roles"] == {}

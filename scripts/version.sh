@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print a JSON blob describing the current z-harness plugin version.
+# Print a JSON blob describing the current z-harness checkout telemetry.
 #
 # Output (single line):
 #   {"z_harness_version":"<git short-sha>","z_harness_dirty":<true|false>,"z_harness_branch":"<branch>"}
@@ -7,6 +7,8 @@
 # Used by /z-plan, /z-execute, /z-review-all at
 # their `run_start` events so post-run analysis can correlate behavior
 # with the exact plugin commit.
+# This script is observational only. Release artifact identity must come from
+# the explicit candidate accepted by z_harness_cli.release.
 #
 # Resolves the plugin dir via $Z_HARNESS_PLUGIN_ROOT,
 # $ANTIGRAVITY_PLUGIN_ROOT, or $CLAUDE_PLUGIN_ROOT, or by walking up from this

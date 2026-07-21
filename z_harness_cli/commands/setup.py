@@ -7,9 +7,13 @@ then hand off to the in-harness `/z-setup` wizard for deeper configuration.
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -25,6 +29,65 @@ _PROVIDER_BINS = (
     ("ollama", "Ollama local models"),
     ("agy", "Antigravity"),
 )
+_MANDATORY_PROVIDER_ROLES = (
+    "consultant_primary",
+    "consultant_secondary",
+    "reviewer",
+)
+_SECRET_FIELD_TOKENS = frozenset(
+    {
+        "accesstoken",
+        "apikey",
+        "authtoken",
+        "authorization",
+        "bearer",
+        "bearertoken",
+        "clientsecret",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
+        "idtoken",
+        "password",
+        "privatekey",
+        "refreshtoken",
+        "secret",
+        "sessiontoken",
+        "token",
+        "tokens",
+    }
+)
+_CREDENTIAL_HEADER_FAMILIES = frozenset(
+    {
+        "accesstoken",
+        "apikey",
+        "apitoken",
+        "authtoken",
+    }
+)
+_SECRET_HEADER_TOKENS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "proxyauthorization",
+        "setcookie",
+        *(
+            f"{prefix}{family}"
+            for prefix in ("", "x")
+            for family in _CREDENTIAL_HEADER_FAMILIES
+        ),
+    }
+)
+_AUTH_ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_BEARER_VALUE_RE = re.compile(r"(?i)(?:^|\s)bearer\s+\S+")
+_ARGUMENT_FIELD_RE = re.compile(
+    r"^\s*--?(?P<field>[^=\s]+)(?:=|\s+)"
+)
+_HEADER_ARGUMENT_RE = re.compile(
+    r"^\s*(?:--headers?|-[Hh])(?:\s*=\s*|\s+)(?P<payload>.+?)\s*$",
+    re.IGNORECASE,
+)
+_HEADER_OPTION_RE = re.compile(r"^\s*(?:--headers?|-[Hh])\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -98,6 +161,273 @@ def _provider_rows() -> list[tuple[str, str, bool, str | None]]:
     return rows
 
 
+def _run_provider_discovery() -> dict:
+    script = _harness_root() / "scripts" / "discover-providers.py"
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or "provider discovery failed")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"provider discovery returned invalid JSON: {exc}") from exc
+
+
+def _contains_literal_secret(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = _normalize_field_name(str(key))
+            if normalized == "authenv":
+                if child is not None and not (
+                    isinstance(child, str) and _AUTH_ENV_RE.fullmatch(child)
+                ):
+                    return True
+                continue
+            if _is_secret_field(str(key)) or _contains_literal_secret(child):
+                return True
+        return False
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            if _contains_literal_secret(child):
+                return True
+            if (
+                isinstance(child, str)
+                and _HEADER_OPTION_RE.fullmatch(child)
+                and index + 1 < len(value)
+                and isinstance(value[index + 1], str)
+                and _is_credential_header(value[index + 1])
+            ):
+                return True
+        return False
+    if isinstance(value, str):
+        header_argument = _HEADER_ARGUMENT_RE.match(value)
+        if header_argument and _is_credential_header(header_argument.group("payload")):
+            return True
+        if _is_credential_header(value):
+            return True
+        argument = _ARGUMENT_FIELD_RE.match(value)
+        if argument and _is_secret_field(argument.group("field")):
+            return True
+        normalized = _normalize_field_name(value.strip().lstrip("-"))
+        return _is_secret_field(normalized) or bool(_BEARER_VALUE_RE.search(value))
+    return False
+
+
+def _normalize_field_name(key: str) -> str:
+    """Fold case and separators so apiKey, api-key, and api_key compare equally."""
+    return "".join(character for character in key.casefold() if character.isalnum())
+
+
+def _is_secret_field(key: str) -> bool:
+    normalized = _normalize_field_name(key)
+    if normalized == "authenv":
+        return False
+    return normalized in _SECRET_FIELD_TOKENS or normalized in _SECRET_HEADER_TOKENS
+
+
+def _is_credential_header(value: str) -> bool:
+    """Return whether a header literal has a known credential-bearing name."""
+    name, separator, _ = value.partition(":")
+    return bool(separator) and _normalize_field_name(name) in _SECRET_HEADER_TOKENS
+
+
+def _canonical_role_bindings(data: dict) -> list[str]:
+    """Apply the resolver's supported one-hop alias semantics to mandatory roles."""
+    providers = data["providers"]
+    aliases = data.get("aliases", {})
+    if not isinstance(aliases, dict) or not all(
+        isinstance(source, str) and isinstance(target, str)
+        for source, target in aliases.items()
+    ):
+        raise ValueError("provider registry aliases must map strings to strings")
+    for source in sorted(aliases):
+        target = aliases[source]
+        if target in aliases:
+            reason = (
+                "cyclic alias"
+                if target == source or aliases.get(target) == source
+                else "chained aliases are unsupported"
+            )
+            raise ValueError(f"provider alias {source!r} -> {target!r} is invalid: {reason}")
+        if target not in providers:
+            raise ValueError(
+                f"provider alias {source!r} -> {target!r} is dangling"
+            )
+    return [aliases.get(data["roles"][role], data["roles"][role]) for role in _MANDATORY_PROVIDER_ROLES]
+
+
+def _validate_provider_proposal(data: dict) -> None:
+    providers = data.get("providers")
+    roles = data.get("roles")
+    if not isinstance(providers, dict) or not isinstance(roles, dict):
+        raise ValueError("provider discovery must emit providers and roles objects")
+    missing = [role for role in _MANDATORY_PROVIDER_ROLES if not roles.get(role)]
+    if missing:
+        raise ValueError(
+            f"provider proposal is missing mandatory roles: {', '.join(missing)}"
+        )
+    if not all(isinstance(roles[role], str) for role in _MANDATORY_PROVIDER_ROLES):
+        raise ValueError("mandatory provider role bindings must be strings")
+    selected = _canonical_role_bindings(data)
+    if len(set(selected)) != len(selected):
+        raise ValueError("mandatory primary, secondary, and reviewer roles must be distinct")
+    undefined = [name for name in selected if name not in providers]
+    if undefined:
+        raise ValueError(
+            f"provider proposal references undefined providers: {', '.join(undefined)}"
+        )
+    if _contains_literal_secret(data):
+        raise ValueError("provider proposal contains secret-bearing literal credential material")
+
+
+def _preflight_provider_registry(data: dict) -> None:
+    resolver = _harness_root() / "scripts" / "resolve-provider.py"
+    with tempfile.TemporaryDirectory(prefix="z-harness-provider-preflight-") as temp_dir:
+        root = Path(temp_dir)
+        registry = root / "providers.json"
+        registry.write_text(json.dumps(data), encoding="utf-8")
+        config = root / "config.toml"
+        config.write_text(
+            'schema_version = 2\n\n[runtime]\nconsult = "on"\n',
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env["XDG_CONFIG_HOME"] = str(root / "xdg")
+        env["Z_HARNESS_REPO_PROVIDERS"] = str(registry)
+        env["Z_HARNESS_REPO_CONFIG"] = str(config)
+        result = subprocess.run(
+            [sys.executable, str(resolver), "--preflight-all"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or "provider role preflight failed")
+
+
+def _provider_registry_path() -> Path:
+    config_root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return config_root / "z-harness" / "providers.json"
+
+
+def _load_provider_registry() -> dict:
+    """Load the user-global registry; malformed input is a hard failure."""
+    target = _provider_registry_path()
+    if not target.exists():
+        return {}
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load existing provider registry: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("existing provider registry must be a JSON object")
+    version = data.get("version")
+    if version not in (1, 2):
+        raise ValueError(f"existing provider registry has unsupported version: {version!r}")
+    for field in ("providers", "roles"):
+        if not isinstance(data.get(field), dict):
+            raise ValueError(f"existing provider registry {field} must be an object")
+    aliases = data.get("aliases", {})
+    if not isinstance(aliases, dict) or not all(
+        isinstance(source, str) and isinstance(target_name, str)
+        for source, target_name in aliases.items()
+    ):
+        raise ValueError("existing provider registry aliases must map strings to strings")
+    return data
+
+
+def _merge_provider_registry(existing: dict, proposal: dict) -> dict:
+    """Merge onboarding data without replacing existing user choices."""
+    if not existing:
+        return proposal
+
+    merged = dict(existing)
+    providers = dict(existing["providers"])
+    for name, descriptor in proposal["providers"].items():
+        if name in providers and providers[name] != descriptor:
+            raise ValueError(
+                f"provider {name!r} conflicts with the existing registry; "
+                "rename or remove that entry before approving onboarding"
+            )
+        providers.setdefault(name, descriptor)
+
+    roles = dict(existing["roles"])
+    for role in _MANDATORY_PROVIDER_ROLES:
+        roles.setdefault(role, proposal["roles"][role])
+
+    merged["version"] = max(existing["version"], proposal.get("version", 1))
+    merged["providers"] = providers
+    merged["roles"] = roles
+    return merged
+
+
+def _write_provider_registry(data: dict) -> Path:
+    target = _provider_registry_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            delete=False,
+        ) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_path = Path(handle.name)
+        os.replace(temp_path, target)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+    return target
+
+
+def _onboard_providers(*, approved: bool, dry_run: bool) -> None:
+    _echo_section("Provider onboarding")
+    try:
+        proposal = _run_provider_discovery()
+        _validate_provider_proposal(proposal)
+        registry = _merge_provider_registry(_load_provider_registry(), proposal)
+        _validate_provider_proposal(registry)
+        _preflight_provider_registry(registry)
+    except ValueError as exc:
+        typer.echo(f"provider registry not ready: {exc}", err=True)
+        if dry_run or not approved:
+            typer.echo(
+                "provider onboarding unavailable; continuing without registry changes",
+                err=True,
+            )
+            return
+        raise typer.Exit(code=1) from exc
+
+    roles = registry["roles"]
+    for role in _MANDATORY_PROVIDER_ROLES:
+        typer.echo(f"- {role}: {roles[role]}")
+    typer.echo(f"user-global registry: {_provider_registry_path()}")
+    if dry_run:
+        typer.echo("provider registry dry run: no changes made")
+        return
+    if not approved:
+        typer.echo(
+            "provider registry approval required; rerun with --yes to persist this proposal"
+        )
+        return
+    try:
+        target = _write_provider_registry(registry)
+    except OSError as exc:
+        typer.echo(f"provider registry write failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"provider registry written: {target}")
+
+
 def _echo_section(title: str) -> None:
     typer.echo(f"\n== {title} ==")
 
@@ -169,8 +499,13 @@ def run(
     targets = _normalize_targets(target, surface=surface)
     selected = set(targets)
 
-    typer.echo("z-harness setup — release defaults: Claude Code plugin + OMP package/export + Codex plugin")
+    typer.echo(
+        "z-harness setup — release defaults: "
+        "Claude Code plugin + OMP package/export + Codex plugin"
+    )
     _print_host_summary(_detect_hosts(selected, surface=surface), selected)
+    _print_provider_summary()
+    _onboard_providers(approved=yes, dry_run=dry_run)
 
     _echo_section("Plan")
     typer.echo(f"selected harnesses: {', '.join(targets)}")

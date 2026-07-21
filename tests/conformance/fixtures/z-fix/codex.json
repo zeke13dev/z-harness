@@ -1,0 +1,41 @@
+{
+  "artifact": {
+    "name": "z-harness-0.1.0b13-codex-plugin.tar",
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "blocking": true,
+  "candidate_sha": "1111111111111111111111111111111111111111",
+  "claim": {
+    "evidence": "blocking_clean_plugin",
+    "status": "preview",
+    "tier": "partial"
+  },
+  "claim_fingerprint": "ab559765be5f66827986002ec0a658c6893dbff45820300edfd822eaeec85383",
+  "command": "z-fix",
+  "diagnostics": [
+    "Deterministic schema sample preserving Codex partial preview status."
+  ],
+  "evidence_kind": "blocking_clean_plugin",
+  "exit_code": 0,
+  "fixture_mode": true,
+  "host": "codex",
+  "proof": {
+    "clean_home": true,
+    "isolated_config": true,
+    "kind": "clean_installed_plugin",
+    "payload": {
+      "path": "/isolated/codex/plugins/z-harness",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "runner": "codex exec with installed z-harness plugin"
+  },
+  "provenance": {
+    "environment": "clean-home-installed-plugin",
+    "evidence_root_kind": "checked-test-schema-sample",
+    "fixture_candidate_sha": "1111111111111111111111111111111111111111",
+    "fixture_set_id": "z-fix-c1-regression-v1",
+    "runner": "conformance-fixture-recorder-v1"
+  },
+  "schema_version": 1,
+  "status": "passed"
+}

@@ -1,6 +1,7 @@
 """Unit tests for z_harness_cli/release.py and commands/update.py.
 
 Coverage:
+- parse_release_candidate: stable/beta ecosystem renderings, round trips, ordering
 - parse_manifest: valid, missing fields, wrong-typed fields
 - schema_version newer than SUPPORTED → ManifestSchemaError (exit-1 path)
 - compare_versions: stale / equal / newer / dev-SHA-unknown
@@ -12,12 +13,18 @@ Coverage:
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tarfile
 import tempfile
+import threading
 import unittest
 import urllib.error
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,15 +37,285 @@ from z_harness_cli.release import (
     FetchError,
     ManifestParseError,
     ManifestSchemaError,
+    ReleaseArtifactError,
     ReleaseManifest,
+    ReleaseProvenanceError,
     VersionComparisonResult,
     compare_versions,
     fetch_manifest,
     is_dev_sha,
+    parse_release_candidate,
     parse_manifest,
     verify_sha256,
+    verify_release_artifacts,
+    verify_publication_provenance,
     require_plugin_tarball_metadata,
 )
+
+
+# ---------------------------------------------------------------------------
+# explicit release candidates
+# ---------------------------------------------------------------------------
+
+class TestReleaseCandidate(unittest.TestCase):
+
+    def test_stable_candidate_renders_every_public_identity(self):
+        candidate = parse_release_candidate("0.9.0")
+        self.assertEqual(candidate.git_tag, "v0.9.0")
+        self.assertEqual(candidate.plugin_version, "0.9.0")
+        self.assertEqual(candidate.wheel_version, "0.9.0")
+        self.assertEqual(candidate.tarball_version, "0.9.0")
+        self.assertEqual(candidate.latest_json_version, "0.9.0")
+        self.assertEqual(str(candidate.comparison_version), "0.9.0")
+
+    def test_beta_candidate_renders_semver_and_pep440_identities(self):
+        candidate = parse_release_candidate("0.9.0-beta.2")
+        self.assertEqual(candidate.git_tag, "v0.9.0-beta.2")
+        self.assertEqual(candidate.plugin_version, "0.9.0-beta.2")
+        self.assertEqual(candidate.wheel_version, "0.9.0b2")
+        self.assertEqual(candidate.tarball_version, "0.9.0-beta.2")
+        self.assertEqual(candidate.latest_json_version, "0.9.0-beta.2")
+
+    def test_tag_semver_and_pep440_beta_forms_are_equivalent(self):
+        expected = parse_release_candidate("0.9.0-beta.2")
+        self.assertEqual(parse_release_candidate("v0.9.0-beta.2"), expected)
+        self.assertEqual(parse_release_candidate("0.9.0b2"), expected)
+
+    def test_every_rendered_version_round_trips(self):
+        for source in ("2.4.1", "2.4.1-beta.10"):
+            candidate = parse_release_candidate(source)
+            for rendered in (
+                candidate.git_tag,
+                candidate.plugin_version,
+                candidate.wheel_version,
+                candidate.tarball_version,
+                candidate.latest_json_version,
+            ):
+                with self.subTest(source=source, rendered=rendered):
+                    self.assertEqual(parse_release_candidate(rendered), candidate)
+
+    def test_beta_numeric_order_precedes_stable(self):
+        beta_two = parse_release_candidate("1.0.0-beta.2")
+        beta_ten = parse_release_candidate("1.0.0-beta.10")
+        stable = parse_release_candidate("1.0.0")
+        self.assertLess(beta_two, beta_ten)
+        self.assertLess(beta_ten, stable)
+
+    def test_invalid_candidate_spellings_are_rejected(self):
+        invalid = (
+            "",
+            " 1.2.3",
+            "1.2",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "1.2.3-beta",
+            "1.2.3-beta.01",
+            "1.2.3-alpha.1",
+            "1.2.3-rc.1",
+            "1.2.3+build.1",
+            "1.2.3.dev1",
+        )
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_release_candidate(value)
+
+
+class TestPublicationProvenance(unittest.TestCase):
+
+    def test_exact_canonical_tag_checkout_and_prod_tip_are_accepted(self):
+        commit = "a" * 40
+
+        candidate = verify_publication_provenance(
+            "2.4.1-beta.10",
+            "v2.4.1-beta.10",
+            commit,
+            commit,
+            commit,
+        )
+
+        self.assertEqual(candidate.plugin_version, "2.4.1-beta.10")
+
+    def test_noncanonical_or_wrong_tag_is_rejected(self):
+        commit = "a" * 40
+
+        with self.assertRaisesRegex(ReleaseProvenanceError, "not canonical"):
+            verify_publication_provenance("2.4.1", "2.4.1", commit, commit, commit)
+
+    def test_wrong_workflow_sha_is_rejected(self):
+        commit = "a" * 40
+
+        with self.assertRaisesRegex(ReleaseProvenanceError, "GITHUB_SHA"):
+            verify_publication_provenance(
+                "2.4.1",
+                "v2.4.1",
+                commit,
+                "b" * 40,
+                commit,
+            )
+
+    def test_abbreviated_or_missing_commit_is_rejected(self):
+        commit = "a" * 40
+
+        with self.assertRaisesRegex(ReleaseProvenanceError, "full lowercase"):
+            verify_publication_provenance(
+                "2.4.1",
+                "v2.4.1",
+                "a" * 12,
+                commit,
+                commit,
+            )
+
+    def test_stale_prod_tip_is_rejected(self):
+        commit = "a" * 40
+
+        with self.assertRaisesRegex(ReleaseProvenanceError, "prod tip"):
+            verify_publication_provenance(
+                "2.4.1",
+                "v2.4.1",
+                commit,
+                commit,
+                "b" * 40,
+            )
+
+
+def _write_release_artifact_fixture(
+    root: Path,
+    version: str,
+    *,
+    install_script: bytes = b"public installer\n",
+) -> tuple[Path, Path]:
+    """Write the smallest complete assembled output accepted by the verifier."""
+
+    candidate = parse_release_candidate(version)
+    wheel = root / f"z_harness-{candidate.wheel_version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, mode="w") as archive:
+        archive.writestr(
+            f"z_harness-{candidate.wheel_version}.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: z-harness\nVersion: {candidate.wheel_version}\n",
+        )
+        archive.writestr(
+            ".codex-plugin/plugin.json",
+            json.dumps({"name": "z-harness", "version": candidate.plugin_version}),
+        )
+    tarball = root / f"z-harness-{candidate.tarball_version}.tar.gz"
+    plugin_body = json.dumps({"name": "z-harness", "version": candidate.plugin_version}).encode()
+    with tarfile.open(tarball, mode="w:gz") as archive:
+        info = tarfile.TarInfo(".codex-plugin/plugin.json")
+        info.size = len(plugin_body)
+        archive.addfile(info, io.BytesIO(plugin_body))
+    (root / "install.sh").write_bytes(install_script)
+    (root / "install-plugin.sh").write_text("plugin installer\n", encoding="utf-8")
+    wheel_digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    tarball_digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+    latest = {
+        "schema_version": 1,
+        "version": candidate.latest_json_version,
+        "wheel_url": f"https://example.invalid/{wheel.name}",
+        "sha256": wheel_digest,
+        "plugin_tarball_url": f"https://example.invalid/{tarball.name}",
+        "plugin_tarball_sha256": tarball_digest,
+        "cli_schema_version": 1,
+        "telemetry_schema_version": 1,
+        "min_supported_version": "0.1.0",
+    }
+    (root / "latest.json").write_text(json.dumps(latest), encoding="utf-8")
+    artifact_paths = (wheel, tarball, root / "install.sh", root / "install-plugin.sh")
+    assets = {
+        "schema_version": 1,
+        "candidate_version": candidate.plugin_version,
+        "candidate_commit": "a" * 40,
+        "artifacts": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifact_paths
+        },
+    }
+    (root / "release-assets.json").write_text(json.dumps(assets), encoding="utf-8")
+    checksum_paths = (*artifact_paths, root / "latest.json", root / "release-assets.json")
+    (root / "SHA256SUMS").write_text(
+        "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+            for path in checksum_paths
+        ),
+        encoding="utf-8",
+    )
+    return wheel, tarball
+
+
+class TestReleaseArtifactVerification(unittest.TestCase):
+    def test_stable_and_beta_artifacts_match_explicit_candidate(self):
+        for version in ("2.4.1", "2.4.1-beta.10"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _write_release_artifact_fixture(root, version)
+                verify_release_artifacts(root, version)
+
+    def test_wrong_wheel_metadata_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wheel, _ = _write_release_artifact_fixture(root, "2.4.1")
+            with zipfile.ZipFile(wheel, mode="w") as archive:
+                archive.writestr(
+                    "z_harness-9.9.9.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: z-harness\nVersion: 9.9.9\n",
+                )
+                archive.writestr(
+                    ".codex-plugin/plugin.json",
+                    json.dumps({"name": "z-harness", "version": "2.4.1"}),
+                )
+            with self.assertRaisesRegex(ReleaseArtifactError, "wheel metadata version"):
+                verify_release_artifacts(root, "2.4.1")
+
+    def test_wrong_shipped_plugin_manifest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wheel, _ = _write_release_artifact_fixture(root, "2.4.1-beta.2")
+            with zipfile.ZipFile(wheel, mode="w") as archive:
+                archive.writestr(
+                    "z_harness-2.4.1b2.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: z-harness\nVersion: 2.4.1b2\n",
+                )
+                archive.writestr(
+                    ".codex-plugin/plugin.json",
+                    json.dumps({"name": "z-harness", "version": "2.4.1-beta.3"}),
+                )
+            with self.assertRaisesRegex(ReleaseArtifactError, "plugin manifest version"):
+                verify_release_artifacts(root, "2.4.1-beta.2")
+
+    def test_wrong_tarball_basename_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, tarball = _write_release_artifact_fixture(root, "2.4.1")
+            tarball.rename(root / "z-harness-9.9.9.tar.gz")
+            with self.assertRaisesRegex(ReleaseArtifactError, "tarball basename"):
+                verify_release_artifacts(root, "2.4.1")
+
+    def test_wrong_latest_identity_url_or_digest_is_rejected(self):
+        mutations = {
+            "version": "9.9.9",
+            "wheel_url": "https://example.invalid/wrong.whl",
+            "sha256": "0" * 64,
+        }
+        for field, value in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _write_release_artifact_fixture(root, "2.4.1")
+                path = root / "latest.json"
+                latest = json.loads(path.read_text(encoding="utf-8"))
+                latest[field] = value
+                path.write_text(json.dumps(latest), encoding="utf-8")
+                with self.assertRaises(ReleaseArtifactError):
+                    verify_release_artifacts(root, "2.4.1")
+
+    def test_wrong_produced_artifact_digest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_release_artifact_fixture(root, "2.4.1")
+            assets_path = root / "release-assets.json"
+            assets = json.loads(assets_path.read_text(encoding="utf-8"))
+            assets["artifacts"]["install.sh"] = "0" * 64
+            assets_path.write_text(json.dumps(assets), encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseArtifactError, "asset digest mismatch"):
+                verify_release_artifacts(root, "2.4.1")
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +330,8 @@ def _manifest_json(
     cli_schema_version: int = 1,
     telemetry_schema_version: int = 1,
     min_supported_version: str = "1.0.0",
-    plugin_tarball_url: str | None = None,
-    plugin_tarball_sha256: str | None = None,
+    plugin_tarball_url: str | None = "https://example.com/z-harness-1.2.3.tar.gz",
+    plugin_tarball_sha256: str | None = "b" * 64,
 ) -> str:
     data = {
         "schema_version": schema_version,
@@ -88,6 +365,8 @@ class TestParseManifest(unittest.TestCase):
         self.assertEqual(m.schema_version, SUPPORTED_SCHEMA_VERSION)
         self.assertEqual(m.wheel_url, "https://example.com/z-harness-1.2.3-py3-none-any.whl")
         self.assertEqual(m.sha256, "a" * 64)
+        self.assertEqual(m.plugin_tarball_url, "https://example.com/z-harness-1.2.3.tar.gz")
+        self.assertEqual(m.plugin_tarball_sha256, "b" * 64)
 
     def test_supported_schema_version_accepted(self):
         m = _make_manifest(schema_version=SUPPORTED_SCHEMA_VERSION)
@@ -168,8 +447,24 @@ class TestParseManifest(unittest.TestCase):
         self.assertEqual(m.plugin_tarball_url, "https://example.com/z-harness-1.2.3.tar.gz")
         self.assertEqual(m.plugin_tarball_sha256, "b" * 64)
 
+    def test_missing_plugin_tarball_url_raises(self):
+        raw = _manifest_json(
+            plugin_tarball_url=None,
+            plugin_tarball_sha256="b" * 64,
+        )
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+
     def test_plugin_tarball_requires_sha(self):
-        raw = _manifest_json(plugin_tarball_url="https://example.com/z-harness.tar.gz")
+        raw = _manifest_json(
+            plugin_tarball_url="https://example.com/z-harness.tar.gz",
+            plugin_tarball_sha256=None,
+        )
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+
+    def test_plugin_tarball_rejects_malformed_sha(self):
+        raw = _manifest_json(plugin_tarball_sha256="not-a-digest")
         with self.assertRaises(ManifestParseError):
             parse_manifest(raw)
 
@@ -195,7 +490,17 @@ class TestParseManifest(unittest.TestCase):
         )
 
     def test_require_plugin_tarball_metadata_rejects_missing_fields(self):
-        m = _make_manifest()
+        m = ReleaseManifest(
+            schema_version=SUPPORTED_SCHEMA_VERSION,
+            version="1.2.3",
+            wheel_url="https://example.com/z-harness.whl",
+            sha256="a" * 64,
+            cli_schema_version=1,
+            telemetry_schema_version=1,
+            min_supported_version="1.0.0",
+            plugin_tarball_url="",
+            plugin_tarball_sha256="",
+        )
         with self.assertRaises(ManifestParseError):
             require_plugin_tarball_metadata(m)
 
@@ -270,6 +575,14 @@ class TestCompareVersions(unittest.TestCase):
         """1.2.3-alpha < 1.2.3 (pre-release < release)."""
         m = self._manifest("1.2.3")
         self.assertEqual(compare_versions("1.2.3-alpha", m), VersionComparisonResult.STALE)
+
+    def test_semver_beta_equals_pep440_beta(self):
+        m = self._manifest("1.2.3-beta.2")
+        self.assertEqual(compare_versions("1.2.3b2", m), VersionComparisonResult.EQUAL)
+
+    def test_beta_numeric_order_is_not_lexical(self):
+        m = self._manifest("1.2.3-beta.10")
+        self.assertEqual(compare_versions("1.2.3-beta.2", m), VersionComparisonResult.STALE)
 
     # --- dev SHA paths ---
 
@@ -459,6 +772,29 @@ class TestInstallRun(unittest.TestCase):
 class TestUpdateRun(unittest.TestCase):
     """Test the update command's run() with mocked manifest fetch."""
 
+    def setUp(self):
+        """Isolate component discovery from the developer's actual HOME."""
+
+        self._home = tempfile.TemporaryDirectory()
+        self._environment = patch.dict(
+            os.environ,
+            {
+                "HOME": self._home.name,
+                "XDG_STATE_HOME": str(Path(self._home.name) / ".local" / "state"),
+                "CLAUDE_PLUGIN_ROOT": "",
+                "ANTIGRAVITY_PLUGIN_ROOT": "",
+                "OMP_PLUGIN_ROOT": "",
+                "Z_HARNESS_PLUGIN_ROOT": "",
+            },
+        )
+        self._environment.start()
+
+    def tearDown(self):
+        """Restore the process environment after each lifecycle test."""
+
+        self._environment.stop()
+        self._home.cleanup()
+
     def _run_update(self, installed_version: str, manifest_version: str,
                     schema_version: int = SUPPORTED_SCHEMA_VERSION,
                     expect_exit_code: int = 0):
@@ -520,6 +856,145 @@ class TestUpdateRun(unittest.TestCase):
         lines = self._run_update("1.2.3", "1.2.3")
         combined = " ".join(lines).lower()
         self.assertIn("up to date", combined)
+
+    def test_equal_cli_does_not_mask_stale_packaged_payload(self):
+        """C4 criterion #6: a current CLI cannot terminate before host comparison."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        manifest = _make_manifest(version="2.0.0")
+        components = (
+            update_mod.ComponentInventory("cli", "uv-tool", Path("/tool/python"), "2.0.0"),
+            update_mod.ComponentInventory("claude", "packaged", Path("/claude"), "1.0.0"),
+            update_mod.ComponentInventory("codex", "missing", Path("/codex"), None),
+        )
+        with patch("z_harness_cli.commands.update._apply_packaged_transaction") as apply:
+            update_mod._apply_detected_transaction(manifest, components)
+
+        apply.assert_called_once_with(manifest, [components[1]], replace_cli=False)
+
+    def test_clean_duplicate_symlink_hosts_fast_forward_once(self):
+        """C4 criterion #8: aliases resolving to one checkout are deduplicated."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        manifest = _make_manifest(version="2.0.0")
+        checkout = Path("/repo/z-harness")
+        components = (
+            update_mod.ComponentInventory("cli", "executable", Path("/bin/z-harness"), "2.0.0"),
+            update_mod.ComponentInventory("claude", "symlink", checkout, "1.0.0"),
+            update_mod.ComponentInventory("codex", "symlink", checkout, "1.0.0"),
+        )
+        with patch("z_harness_cli.commands.update._apply_symlink_update") as apply:
+            update_mod._apply_detected_transaction(manifest, components)
+
+        apply.assert_called_once()
+        install = apply.call_args.args[0]
+        self.assertEqual(install.root, checkout)
+        self.assertEqual(install.target, "all")
+
+    def test_stale_executable_cli_and_symlink_host_fail_before_mutation(self):
+        """B1: an uncompletable mixed-mode plan cannot mutate its host first."""
+
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        manifest = _make_manifest(version="2.0.0")
+        checkout = Path("/repo/z-harness")
+        components = (
+            update_mod.ComponentInventory("cli", "executable", Path("/bin/z-harness"), "1.0.0"),
+            update_mod.ComponentInventory("claude", "symlink", checkout, "1.0.0"),
+            update_mod.ComponentInventory("codex", "missing", Path("/codex"), None),
+        )
+        with patch("z_harness_cli.commands.update._apply_symlink_update") as apply:
+            with self.assertRaises(typer.Exit) as raised:
+                update_mod._apply_detected_transaction(manifest, components)
+
+        self.assertEqual(raised.exception.exit_code, 1)
+        apply.assert_not_called()
+
+    def test_newer_cli_and_candidate_current_host_fail_closed(self):
+        """M1: a mixed newer/current component set is never reported coherent."""
+
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        manifest = _make_manifest(version="2.0.0")
+        components = (
+            update_mod.ComponentInventory("cli", "executable", Path("/bin/z-harness"), "3.0.0"),
+            update_mod.ComponentInventory("claude", "packaged", Path("/claude"), "2.0.0"),
+            update_mod.ComponentInventory("codex", "missing", Path("/codex"), None),
+        )
+        messages: list[str] = []
+        with patch("typer.echo", side_effect=lambda message="", **_: messages.append(str(message))):
+            with self.assertRaises(typer.Exit) as raised:
+                update_mod._apply_detected_transaction(manifest, components)
+
+        self.assertEqual(raised.exception.exit_code, 1)
+        self.assertFalse(any("up to date" in message.lower() for message in messages))
+        self.assertTrue(any("downgrade" in message.lower() for message in messages))
+
+    def test_lock_publication_window_has_exactly_one_owner(self):
+        """B5: a fresh mkdir without PID is initializing, never stale."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        published = threading.Event()
+        release_publication = threading.Event()
+        original_write = update_mod._atomic_write_text
+        acquired: list[Path] = []
+        failures: list[BaseException] = []
+
+        def paused_write(path: Path, value: str) -> None:
+            if path.name == "owner.json" and not published.is_set():
+                published.set()
+                release_publication.wait(timeout=10)
+            original_write(path, value)
+
+        def first_acquirer() -> None:
+            try:
+                acquired.append(update_mod._acquire_lifecycle_lock())
+            except BaseException as exc:  # pragma: no cover - asserted below
+                failures.append(exc)
+
+        with patch("z_harness_cli.commands.update._atomic_write_text", side_effect=paused_write):
+            first = threading.Thread(target=first_acquirer)
+            first.start()
+            self.assertTrue(published.wait(timeout=10))
+            second = threading.Thread(target=first_acquirer)
+            second.start()
+            release_publication.set()
+            first.join(timeout=10)
+            second.join(timeout=10)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(len(acquired), 1)
+        update_mod._release_lifecycle_lock(acquired[0])
+
+    def test_parent_to_shell_handoff_preserves_live_child_ownership(self):
+        """B2: only a published child identity may retain delegated mutation ownership."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        lock = update_mod._acquire_lifecycle_lock()
+        token = update_mod._HELD_LOCK_TOKENS[lock]
+        child = subprocess.Popen(["/bin/sleep", "30"])
+        try:
+            with patch("z_harness_cli.commands.update.time.sleep", return_value=None):
+                self.assertFalse(update_mod._accept_lifecycle_handoff(lock, token, child.pid))
+            update_mod._handoff_lifecycle_lock(lock, token, child.pid)
+            self.assertTrue(update_mod._accept_lifecycle_handoff(lock, token, child.pid))
+            update_mod._release_lifecycle_lock(lock)
+            self.assertTrue(lock.exists())
+            with self.assertRaisesRegex(RuntimeError, "active pid"):
+                update_mod._acquire_lifecycle_lock()
+        finally:
+            child.terminate()
+            child.wait()
+        replacement = update_mod._acquire_lifecycle_lock()
+        update_mod._release_lifecycle_lock(replacement)
 
     def test_stale_install_prints_notice(self):
         """Older installed version → prints a notice about newer version."""
@@ -648,6 +1123,13 @@ class TestUpdateRun(unittest.TestCase):
                            return_value=False), patch(
                     "z_harness_cli.commands.update._detect_plugin_install",
                     return_value=install,
+                ), patch(
+                    "z_harness_cli.commands.update.inventory_components",
+                    return_value=(
+                        update_mod.ComponentInventory("cli", "executable", Path("/bin/z-harness"), "1.0.0"),
+                        update_mod.ComponentInventory("claude", "missing", Path("/claude"), None),
+                        update_mod.ComponentInventory("codex", "missing", Path("/codex"), None),
+                    ),
                 ):
                     with patch("typer.echo", side_effect=fake_echo):
                         with self.assertRaises(typer.Exit) as cm:
@@ -685,6 +1167,139 @@ class TestUpdateRun(unittest.TestCase):
                 ["git", "-C", "/repo/z-harness", "pull", "--ff-only"],
             ],
         )
+
+    def test_clean_symlink_path_fast_forwards_real_checkout(self):
+        """C4 criterion #8: the accepted source path succeeds via real ff-only git."""
+
+        import subprocess
+        import z_harness_cli.commands.update as update_mod
+
+        root = Path(self._home.name) / "git-case"
+        root.mkdir()
+        try:
+            origin = root / "origin.git"
+            seed = root / "seed"
+            installed = root / "installed"
+            subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(origin), str(seed)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(seed), "config", "user.name", "Lifecycle Test"], check=True)
+            subprocess.run(["git", "-C", str(seed), "config", "user.email", "lifecycle@example.invalid"], check=True)
+            (seed / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(seed), "add", "VERSION"], check=True)
+            subprocess.run(["git", "-C", str(seed), "commit", "-m", "v1"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(seed), "push", "origin", "HEAD"], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(origin), str(installed)], check=True, capture_output=True)
+            (seed / "VERSION").write_text("2.0.0\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(seed), "commit", "-am", "v2"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(seed), "tag", "v2.0.0"], check=True)
+            subprocess.run(["git", "-C", str(seed), "push", "origin", "v2.0.0"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(seed), "push"], check=True, capture_output=True)
+
+            with patch("typer.echo"):
+                update_mod._apply_symlink_update(
+                    update_mod.PluginInstall("symlink", installed, "claude"),
+                    _make_manifest(version="2.0.0"),
+                )
+
+            self.assertEqual((installed / "VERSION").read_text(encoding="utf-8"), "2.0.0\n")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_source_update_rejects_upstream_identity_beyond_candidate(self):
+        """B3: remote branch head cannot choose an identity beyond the manifest."""
+
+        import subprocess
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        root = Path(self._home.name) / "mismatch-case"
+        root.mkdir()
+        origin = root / "origin.git"
+        seed = root / "seed"
+        installed = root / "installed"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(seed)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "config", "user.name", "Lifecycle Test"], check=True)
+        subprocess.run(["git", "-C", str(seed), "config", "user.email", "lifecycle@example.invalid"], check=True)
+        (seed / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "VERSION"], check=True)
+        subprocess.run(["git", "-C", str(seed), "commit", "-m", "v1"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "push", "origin", "HEAD"], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(installed)], check=True, capture_output=True)
+        (seed / "VERSION").write_text("3.0.0\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "commit", "-am", "v3"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "push"], check=True, capture_output=True)
+
+        with patch("typer.echo"):
+            with self.assertRaises(typer.Exit):
+                update_mod._apply_symlink_update(
+                    update_mod.PluginInstall("symlink", installed, "claude"),
+                    _make_manifest(version="2.0.0"),
+                )
+        self.assertEqual((installed / "VERSION").read_text(encoding="utf-8"), "1.0.0\n")
+
+    def test_source_update_stops_at_exact_tag_before_same_version_branch_commit(self):
+        """B2: branch commits after the candidate tag never define release identity."""
+
+        import subprocess
+        import z_harness_cli.commands.update as update_mod
+
+        root = Path(self._home.name) / "tag-pin-case"
+        root.mkdir()
+        origin = root / "origin.git"
+        seed = root / "seed"
+        installed = root / "installed"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(seed)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "config", "user.name", "Lifecycle Test"], check=True)
+        subprocess.run(["git", "-C", str(seed), "config", "user.email", "lifecycle@example.invalid"], check=True)
+        (seed / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "VERSION"], check=True)
+        subprocess.run(["git", "-C", str(seed), "commit", "-m", "v1"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "push", "origin", "HEAD"], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(installed)], check=True, capture_output=True)
+        (seed / "VERSION").write_text("2.0.0\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "commit", "-am", "release v2"], check=True, capture_output=True)
+        tagged_head = subprocess.run(
+            ["git", "-C", str(seed), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        subprocess.run(["git", "-C", str(seed), "tag", "v2.0.0"], check=True)
+        (seed / "POST_TAG").write_text("must not install\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "POST_TAG"], check=True)
+        subprocess.run(["git", "-C", str(seed), "commit", "-m", "post tag"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(seed), "push", "origin", "HEAD", "v2.0.0"], check=True, capture_output=True)
+
+        with patch("typer.echo"):
+            update_mod._apply_symlink_update(
+                update_mod.PluginInstall("symlink", installed, "claude"),
+                _make_manifest(version="2.0.0"),
+            )
+
+        installed_head = subprocess.run(
+            ["git", "-C", str(installed), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        self.assertEqual(installed_head, tagged_head)
+        self.assertFalse((installed / "POST_TAG").exists())
+
+    def test_codex_inventory_ignores_unrelated_export_roots(self):
+        """B4: Codex always binds to the supported HOME mutation destination."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        home = Path(self._home.name)
+        actual = home / "plugins" / "z-harness"
+        unrelated = home / "antigravity"
+        for root, version in ((actual, "1.0.0"), (unrelated, "2.0.0")):
+            (root / "skills").mkdir(parents=True)
+            (root / "agents").mkdir()
+            (root / "VERSION").write_text(version + "\n", encoding="utf-8")
+        with patch.dict(
+            os.environ,
+            {"ANTIGRAVITY_PLUGIN_ROOT": str(unrelated), "OMP_PLUGIN_ROOT": str(unrelated)},
+        ):
+            _, _, codex = update_mod.inventory_components()
+        self.assertEqual(codex.location, actual.resolve())
+        self.assertEqual(codex.version, "1.0.0")
 
     def test_symlink_install_dirty_checkout_aborts_before_pull(self):
         """Dirty source installs must be actionable and must not pull."""
@@ -751,6 +1366,7 @@ class TestUpdateRun(unittest.TestCase):
             subprocess_calls.append(cmd)
             result = MagicMock()
             result.returncode = 0
+            result.stdout = "z-harness 2.0.0\n" if cmd[-1] == "--version" else ""
             return result
 
         def fake_urlopen(url, timeout=None):
@@ -803,6 +1419,7 @@ class TestUpdateRun(unittest.TestCase):
             subprocess_calls.append(cmd)
             result = MagicMock()
             result.returncode = 0
+            result.stdout = "z-harness 2.0.0\n" if cmd[-1] == "--version" else ""
             return result
 
         def fake_urlopen(url, timeout=None):
@@ -812,18 +1429,27 @@ class TestUpdateRun(unittest.TestCase):
             resp.__exit__ = MagicMock(return_value=False)
             return resp
 
+        tool_root = Path(self._home.name) / ".local" / "share" / "uv" / "tools" / "z-harness"
+        tool_root.mkdir(parents=True)
+        (tool_root / "old.txt").write_text("old\n", encoding="utf-8")
+        launcher = Path(self._home.name) / ".local" / "bin" / "z-harness"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("old launcher\n", encoding="utf-8")
+
         with patch("z_harness_cli.commands.update.__version__", "1.0.0"):
             with patch("z_harness_cli.commands.update.fetch_manifest",
                        return_value=manifest):
                 with patch("z_harness_cli.commands.update._is_uv_tool_install",
                            return_value=True):
                     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-                        with patch("subprocess.run", side_effect=fake_subprocess_run):
+                        with patch("subprocess.run", side_effect=fake_subprocess_run), patch.object(
+                            update_mod.sys, "prefix", str(tool_root)
+                        ), patch("z_harness_cli.commands.update.shutil.which", return_value=str(launcher)):
                             with patch("typer.echo", side_effect=fake_echo):
                                 update_mod.run(mock_ctx)
 
-        self.assertEqual(len(subprocess_calls), 1,
-                         "uv must be invoked exactly once when sha256 matches")
+        self.assertEqual(len(subprocess_calls), 2,
+                         "uv install and post-install version verification must both run")
         cmd = subprocess_calls[0]
         # Must install a local temp file, not the raw URL.
         self.assertTrue(
@@ -914,9 +1540,16 @@ class TestUpdateRun(unittest.TestCase):
         def fake_subprocess_run(cmd, **kw):
             result = MagicMock()
             result.returncode = 0
+            result.stdout = "z-harness 2.0.0\n" if cmd[-1] == "--version" else ""
             return result
 
         mock_ctx = MagicMock()
+        tool_root = Path(self._home.name) / ".local" / "share" / "uv" / "tools" / "z-harness"
+        tool_root.mkdir(parents=True)
+        (tool_root / "old.txt").write_text("old\n", encoding="utf-8")
+        launcher = Path(self._home.name) / ".local" / "bin" / "z-harness"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("old launcher\n", encoding="utf-8")
 
         with patch("z_harness_cli.commands.update.__version__", "1.0.0"):
             with patch("z_harness_cli.commands.update.fetch_manifest",
@@ -924,7 +1557,9 @@ class TestUpdateRun(unittest.TestCase):
                 with patch("z_harness_cli.commands.update._is_uv_tool_install",
                            return_value=True):
                     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-                        with patch("subprocess.run", side_effect=fake_subprocess_run):
+                        with patch("subprocess.run", side_effect=fake_subprocess_run), patch.object(
+                            update_mod.sys, "prefix", str(tool_root)
+                        ), patch("z_harness_cli.commands.update.shutil.which", return_value=str(launcher)):
                             with patch("tempfile.NamedTemporaryFile", side_effect=fake_ntf):
                                 with patch("typer.echo"):
                                     update_mod.run(mock_ctx)
@@ -936,6 +1571,201 @@ class TestUpdateRun(unittest.TestCase):
                 os.path.exists(tmp_path),
                 f"Temp file {tmp_path!r} was not cleaned up after successful uv install",
             )
+
+    def test_uv_post_install_candidate_mismatch_restores_backup(self):
+        """B3: uv exit zero cannot commit a CLI reporting another candidate."""
+
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        home = Path(self._home.name)
+        tool_root = home / ".local" / "share" / "uv" / "tools" / "z-harness"
+        tool_root.mkdir(parents=True)
+        (tool_root / "old.txt").write_text("old tool\n", encoding="utf-8")
+        launcher = home / ".local" / "bin" / "z-harness"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("old launcher\n", encoding="utf-8")
+        wheel = home / "candidate.whl"
+        wheel.write_bytes(b"verified")
+
+        def fake_run(command, **kwargs):
+            completed = MagicMock(returncode=0, stdout="")
+            if command[0] == "uv":
+                shutil.rmtree(tool_root)
+                tool_root.mkdir()
+                (tool_root / "new.txt").write_text("new tool\n", encoding="utf-8")
+                launcher.write_text("new launcher\n", encoding="utf-8")
+            else:
+                completed.stdout = "z-harness 3.0.0\n"
+            return completed
+
+        with patch("z_harness_cli.commands.update._download_verified_wheel", return_value=wheel), patch.object(
+            update_mod.sys, "prefix", str(tool_root)
+        ), patch("z_harness_cli.commands.update.shutil.which", return_value=str(launcher)), patch(
+            "z_harness_cli.commands.update.subprocess.run", side_effect=fake_run
+        ), patch("typer.echo"):
+            with self.assertRaises(typer.Exit):
+                update_mod._apply_uv_upgrade(_make_manifest(version="2.0.0"))
+
+        self.assertEqual((tool_root / "old.txt").read_text(encoding="utf-8"), "old tool\n")
+        self.assertEqual(launcher.read_text(encoding="utf-8"), "old launcher\n")
+        self.assertFalse(update_mod._cli_transaction_path().exists())
+
+    def test_uv_restore_failure_retains_journal_for_later_recovery(self):
+        """B2: a failed rollback keeps durable pre-state until recovery succeeds."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        home = Path(self._home.name)
+        tool_root = home / ".local" / "share" / "uv" / "tools" / "z-harness"
+        tool_root.mkdir(parents=True)
+        (tool_root / "old.txt").write_text("old tool\n", encoding="utf-8")
+        launcher = home / ".local" / "bin" / "z-harness"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("old launcher\n", encoding="utf-8")
+        wheel = home / "candidate.whl"
+        wheel.write_bytes(b"verified")
+
+        def fake_run(command, **kwargs):
+            completed = MagicMock(returncode=0, stdout="")
+            if command[0] == "uv":
+                shutil.rmtree(tool_root)
+                tool_root.mkdir()
+                (tool_root / "new.txt").write_text("new tool\n", encoding="utf-8")
+                launcher.write_text("new launcher\n", encoding="utf-8")
+            else:
+                completed.stdout = "z-harness 3.0.0\n"
+            return completed
+
+        with patch("z_harness_cli.commands.update._download_verified_wheel", return_value=wheel), patch.object(
+            update_mod.sys, "prefix", str(tool_root)
+        ), patch("z_harness_cli.commands.update.shutil.which", return_value=str(launcher)), patch(
+            "z_harness_cli.commands.update.subprocess.run", side_effect=fake_run
+        ), patch("z_harness_cli.commands.update._restore_cli_transaction", side_effect=RuntimeError("disk failure")), patch(
+            "typer.echo"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "disk failure"):
+                update_mod._apply_uv_upgrade(_make_manifest(version="2.0.0"))
+
+        transaction = update_mod._cli_transaction_path()
+        self.assertTrue((transaction / "tool").is_dir())
+        self.assertTrue((transaction / "tool.path").is_file())
+        update_mod._recover_cli_transaction()
+        self.assertEqual((tool_root / "old.txt").read_text(encoding="utf-8"), "old tool\n")
+        self.assertEqual(launcher.read_text(encoding="utf-8"), "old launcher\n")
+        self.assertFalse(transaction.exists())
+
+    def test_uv_mutator_recovers_intervening_cli_journal_under_lock(self):
+        """B4: a journal created after public preflight wins over visible partial state."""
+
+        import typer
+        import z_harness_cli.commands.update as update_mod
+
+        home = Path(self._home.name)
+        tool_root = home / ".local" / "share" / "uv" / "tools" / "z-harness"
+        tool_root.mkdir(parents=True)
+        (tool_root / "PARTIAL").write_text("interrupted\n", encoding="utf-8")
+        transaction = update_mod._cli_transaction_path()
+        backup = transaction / "tool"
+        backup.mkdir(parents=True)
+        (backup / "OLD").write_text("last known good\n", encoding="utf-8")
+        (transaction / "tool.path").write_text(str(tool_root), encoding="utf-8")
+        wheel = home / "candidate.whl"
+        wheel.write_bytes(b"verified")
+
+        with patch("z_harness_cli.commands.update._download_verified_wheel", return_value=wheel), patch.object(
+            update_mod.sys, "prefix", str(tool_root)
+        ), patch("z_harness_cli.commands.update.shutil.which", return_value=None), patch(
+            "z_harness_cli.commands.update.subprocess.run",
+            return_value=MagicMock(returncode=1, stdout=""),
+        ), patch("typer.echo"):
+            with self.assertRaises(typer.Exit):
+                update_mod._apply_uv_upgrade(_make_manifest(version="2.0.0"))
+
+        self.assertEqual((tool_root / "OLD").read_text(encoding="utf-8"), "last known good\n")
+        self.assertFalse((tool_root / "PARTIAL").exists())
+        self.assertFalse(transaction.exists())
+
+    def test_cli_preparation_faults_are_cleanly_recoverable(self):
+        """M1: every durable pre-mutation boundary can be discarded safely."""
+
+        import z_harness_cli.commands.update as update_mod
+
+        for step in (
+            "cli.prepare.metadata",
+            "cli.prepare.tool",
+            "cli.prepare.launchers",
+            "cli.prepare.ready",
+        ):
+            with self.subTest(step=step):
+                home = Path(self._home.name)
+                tool_root = home / ".local" / "share" / "uv" / "tools" / "z-harness"
+                shutil.rmtree(tool_root, ignore_errors=True)
+                tool_root.mkdir(parents=True)
+                (tool_root / "OLD").write_text("visible\n", encoding="utf-8")
+                launcher = home / ".local" / "bin" / "z-harness"
+                launcher.parent.mkdir(parents=True, exist_ok=True)
+                launcher.write_text("old launcher\n", encoding="utf-8")
+                wheel = home / f"{step}.whl"
+                wheel.write_bytes(b"verified")
+                with patch.dict(os.environ, {"Z_HARNESS_TEST_FAIL_AFTER": step}), patch(
+                    "z_harness_cli.commands.update._download_verified_wheel", return_value=wheel
+                ), patch.object(update_mod.sys, "prefix", str(tool_root)), patch(
+                    "z_harness_cli.commands.update.shutil.which", return_value=str(launcher)
+                ), patch("typer.echo"):
+                    with self.assertRaisesRegex(RuntimeError, step):
+                        update_mod._apply_uv_upgrade(_make_manifest(version="2.0.0"))
+                self.assertEqual((tool_root / "OLD").read_text(encoding="utf-8"), "visible\n")
+                self.assertEqual(launcher.read_text(encoding="utf-8"), "old launcher\n")
+                self.assertTrue(update_mod._cli_transaction_path().exists())
+                update_mod._recover_cli_transaction()
+                self.assertFalse(update_mod._cli_transaction_path().exists())
+
+    def test_source_mutator_recovers_intervening_source_record_under_lock(self):
+        """B4: source recovery runs immediately before candidate journal creation."""
+
+        import subprocess
+        import z_harness_cli.commands.update as update_mod
+
+        root = Path(self._home.name) / "source-recovery"
+        root.mkdir()
+        subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Lifecycle Test"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "lifecycle@example.invalid"], check=True)
+        (root / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "VERSION"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-m", "old"], check=True, capture_output=True)
+        old_head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        (root / "PARTIAL").write_text("interrupted\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "PARTIAL"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-m", "partial"], check=True, capture_output=True)
+        record = update_mod._source_transaction_path()
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"root": str(root), "old_head": old_head}), encoding="utf-8")
+        observed: list[str] = []
+
+        def observe_recovered(*_args) -> None:
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            observed.append(head)
+
+        with patch("z_harness_cli.commands.update._apply_candidate_source_update", side_effect=observe_recovered), patch(
+            "typer.echo"
+        ):
+            update_mod._apply_symlink_update(
+                update_mod.PluginInstall("symlink", root, "claude"),
+                _make_manifest(version="2.0.0"),
+            )
+
+        self.assertEqual(observed, [old_head])
+        self.assertFalse((root / "PARTIAL").exists())
+        self.assertFalse(record.exists())
 
 
 if __name__ == "__main__":

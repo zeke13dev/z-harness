@@ -109,7 +109,12 @@ def install_cmd(
     tarball: Optional[str] = typer.Option(
         None,
         "--tarball",
-        help="Install plugin payload from a tarball URL instead of the local bundle.",
+        help="Install plugin payload from a local path or remote URL instead of the local bundle.",
+    ),
+    tarball_sha256: Optional[str] = typer.Option(
+        None,
+        "--tarball-sha256",
+        help="Required 64-hex SHA-256 digest for a remote --tarball URL.",
     ),
     force: bool = typer.Option(
         False,
@@ -129,6 +134,7 @@ def install_cmd(
         ctx,
         target=target,
         tarball=tarball,
+        tarball_sha256=tarball_sha256,
         force=force,
         generate_exports=generate_exports,
     )

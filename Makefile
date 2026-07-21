@@ -1,12 +1,14 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run release-verify version-sync version-check worktree-sweep worktree-sweep-apply
+.PHONY: test test-suite test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run release-verify version-sync version-check worktree-sweep worktree-sweep-apply
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
 # under runtime/ (runtime/tests/ + runtime/drivers/*/tests/). This is the primary
 # regression gate and is what CI (.github/workflows/tests.yml) runs.
 # Requires Python 3.11+ (tomllib).
-test: version-check
+test: version-check test-suite
+
+test-suite:
 	python3 -m pytest tests/ scripts/ runtime/
 
 # Standalone shell test scripts (bash assertion harnesses, not pytest).
@@ -118,12 +120,24 @@ test-ecc-lessons:
 export:
 	python3 scripts/generate-exports.py
 
-# Full release-publishing gate set for a single checked-out SHA. The release
-# workflow runs this before creating any tag assets; each prerequisite must pass
-# in this same worktree so a skipped/failing gate blocks publication.
-release-verify: test test-sh
-	python3 -m pytest tests/test_install_sh_integrity.py -v
-	bash scripts/release-dry-run.sh
+# One authority verifies the exact, already-assembled candidate.  The verifier
+# owns fast/slow ordering; do not duplicate its suites in this target.
+release-verify:
+	@test -n "$(Z_HARNESS_RELEASE_CANDIDATE)" || { echo "Z_HARNESS_RELEASE_CANDIDATE is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_SHA)" || { echo "Z_HARNESS_RELEASE_SHA is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_REPO_ROOT)" || { echo "Z_HARNESS_RELEASE_REPO_ROOT is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_CANDIDATE_ROOT)" || { echo "Z_HARNESS_RELEASE_CANDIDATE_ROOT is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_ARTIFACTS)" || { echo "Z_HARNESS_RELEASE_ARTIFACTS is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_HOST_EVIDENCE)" || { echo "Z_HARNESS_RELEASE_HOST_EVIDENCE is required" >&2; exit 2; }
+	@test -n "$(Z_HARNESS_RELEASE_EVIDENCE_OUT)" || { echo "Z_HARNESS_RELEASE_EVIDENCE_OUT is required" >&2; exit 2; }
+	python3 scripts/release-candidate-verify.py \
+		--candidate-version "$(Z_HARNESS_RELEASE_CANDIDATE)" \
+		--candidate-sha "$(Z_HARNESS_RELEASE_SHA)" \
+		--repo-root "$(Z_HARNESS_RELEASE_REPO_ROOT)" \
+		--candidate-root "$(Z_HARNESS_RELEASE_CANDIDATE_ROOT)" \
+		--artifacts "$(Z_HARNESS_RELEASE_ARTIFACTS)" \
+		--host-evidence-root "$(Z_HARNESS_RELEASE_HOST_EVIDENCE)" \
+		--evidence-out "$(Z_HARNESS_RELEASE_EVIDENCE_OUT)"
 
 release-dry-run:
 	bash scripts/release-dry-run.sh

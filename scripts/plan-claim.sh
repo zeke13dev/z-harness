@@ -41,7 +41,10 @@
 #   9 — confirmed lost claim (holder present-and-different, or free)
 #   (plan-claim.sh-specific; 9 is NOT a sink-lock code)
 # Exit codes — release:
-#   0 — always (best-effort; self-logs on internal failure)
+#   0 — confirmed released / already free / disabled
+#   4 — ownership mismatch (peer preserved; no retry)
+#   5 — release timed out after three total attempts
+#   other nonzero — unexpected sink-lock failure
 # Exit codes — status:
 #   0 — printed holder JSON or {"state":"free"}
 #   3 — corrupt lock content
@@ -370,7 +373,7 @@ cmd_heartbeat() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd_release — best-effort. Always exit 0.
+# cmd_release — bounded release with an exact expected-holder guard.
 # ---------------------------------------------------------------------------
 cmd_release() {
   validate_slug_path
@@ -384,15 +387,60 @@ cmd_release() {
   lp="$(lockpath)"
   holder="${SESSION_ID}::${RUN_ID}::${COMMAND}"
 
-  # --expected-holder guard: a non-matching holder is a true no-op in sink-lock
-  # (it returns 4 and does NOT kill the peer's daemon). This avoids releasing a
-  # peer's re-take if we already lost the claim.
-  bash "$SINK_LOCK_SH" release "$lp" "--expected-holder=$holder" >/dev/null 2>&1 || true
+  # --expected-holder is repeated verbatim on every attempt. Retry only rc=5:
+  # the holder has already received SIGTERM but its flock was not observably
+  # free within the primitive's bounded wait. rc=4 is a peer/identity mismatch
+  # and must never be retried or touched.
+  local attempt=1 max_attempts=3 release_rc=0 release_diag="" outcome=""
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    release_rc=0
+    release_diag=""
+    release_diag="$(bash "$SINK_LOCK_SH" release "$lp" "--expected-holder=$holder" 2>&1)" || release_rc=$?
 
-  emit_event plan_claim_released \
-    "$(printf '{"slug":%s,"run_id":%s}' \
-      "$(json_str "$SLUG")" "$(json_str "$RUN_ID")")"
-  exit 0
+    case "$release_rc" in
+      0)
+        outcome="released"
+        ;;
+      1)
+        outcome="already_free"
+        ;;
+      5)
+        if [[ "$attempt" -lt "$max_attempts" ]]; then
+          attempt=$((attempt + 1))
+          continue
+        fi
+        ;;
+    esac
+
+    if [[ "$release_rc" -eq 0 || "$release_rc" -eq 1 ]]; then
+      emit_event plan_claim_released \
+        "$(printf '{"slug":%s,"run_id":%s,"outcome":%s,"attempts":%s}' \
+          "$(json_str "$SLUG")" "$(json_str "$RUN_ID")" \
+          "$(json_str "$outcome")" "$attempt")"
+      exit 0
+    fi
+    break
+  done
+
+  if [[ "$release_rc" -eq 4 ]]; then
+    outcome="ownership_mismatch"
+  elif [[ "$release_rc" -eq 5 ]]; then
+    outcome="timeout_exhausted"
+  else
+    outcome="unexpected_failure"
+  fi
+  emit_event plan_claim_release_failed \
+    "$(printf '{"slug":%s,"run_id":%s,"outcome":%s,"sink_rc":%s,"attempts":%s,"diagnostic":%s}' \
+      "$(json_str "$SLUG")" "$(json_str "$RUN_ID")" \
+      "$(json_str "$outcome")" "$release_rc" "$attempt" \
+      "$(json_str "$release_diag")")"
+  printf 'plan-claim.sh: release failed for slug %s (outcome=%s, sink_rc=%s, attempts=%s)' \
+    "$SLUG" "$outcome" "$release_rc" "$attempt" >&2
+  if [[ -n "$release_diag" ]]; then
+    printf ': %s' "$release_diag" >&2
+  fi
+  printf '\n' >&2
+  exit "$release_rc"
 }
 
 # ---------------------------------------------------------------------------

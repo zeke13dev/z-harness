@@ -1,7 +1,7 @@
 {
   "concept": "capabilities-matrix",
-  "summary": "Per-host adapter/export/command-tier capability matrix (claude/omp/antigravity/cursor/codex adapters + windsurf/kiro/cline/copilot/pi export-only hosts), gated for OMP and Codex by dedicated parity gates that read T008/Codex parity test evidence at call time.",
-  "last_updated": "2026-07-09",
+  "summary": "Per-host adapter/export/command-tier capability matrix plus the C1 pre-1.0-beta public release reference, with exact evidence-bounded host claims and clean-candidate requirements consumed from the canonical release contract.",
+  "last_updated": "2026-07-17",
   "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native; INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T001 Codex capability contract, gate-driven command tiers, native subagent dispatch primitive gating; fix(codex) MCP hardening follow-ups (refresh stale registration, auto-approve, narrow surface) 2026-07-06",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
@@ -26,6 +26,175 @@
     "runtime/release_surface.py"
   ],
   "confidence": "high",
+  "release_contract_reference": {
+    "source": "z_harness_cli.release_surface.release_contract",
+    "train": {
+      "channel": "pre-1.0-beta",
+      "stable_1x_compatibility": false,
+      "version": null,
+      "tag": null
+    },
+    "excluded_experiments": {
+      "skills": [
+        "z-attend",
+        "z-explore",
+        "z-map",
+        "z-overnight",
+        "z-research"
+      ],
+      "skill_patterns": [
+        "z-axiom-*"
+      ],
+      "agents": [
+        "axiom-extractor",
+        "research-judge"
+      ],
+      "paths": [
+        "exports/",
+        "prompts/",
+        "temp/",
+        "z-harness/",
+        "archive/",
+        "hermes-*/",
+        "improvements/",
+        "research/",
+        ".agent/",
+        ".pi/",
+        ".omp/",
+        ".local/",
+        ".pytest_cache/",
+        ".claude/worktrees/",
+        ".antigravitycli/",
+        ".venv/",
+        "dist/",
+        "tests/",
+        "runtime/tests/",
+        "runtime/watchdog/",
+        "runtime/drivers/antigravity/tests/",
+        ".z-harness/",
+        "__pycache__/",
+        "*/__pycache__/",
+        "providers.json",
+        "*/providers.json",
+        "skills/z-attend/",
+        "skills/z-explore/",
+        "skills/z-map/",
+        "skills/z-overnight/",
+        "skills/z-research/",
+        "skills/z-axiom-*",
+        "agents/axiom-extractor.md",
+        "agents/research-judge.md",
+        "scripts/axiom-extract.py",
+        "scripts/axiom-store.py",
+        "scripts/overnight-preflight.sh",
+        "scripts/chain-runner.sh",
+        "scripts/morning-report.py",
+        "scripts/hermes/",
+        "scripts/hermes-execute.py",
+        "scripts/so-mcp-server.py",
+        "scripts/pi-mcp-server.py",
+        "scripts/notify-discord.sh",
+        "scripts/test_notify_discord.bats",
+        "scripts/notify-watchdog.sh",
+        "scripts/test_notify_watchdog.sh",
+        "scripts/hang-check.sh",
+        "scripts/schedule-hang-check.sh",
+        "docs/human/attend*.md",
+        "docs/human/axiom*.md",
+        "docs/human/overnight*.md",
+        "docs/human/hermes*.md",
+        "docs/human/review-hermes*.md",
+        "docs/human/mcp-server.md",
+        "docs/human/INDEX.md",
+        "docs/human/watchdog.md",
+        "docs/human/scripts.md",
+        "docs/llm/attend*.json",
+        "docs/llm/axiom*.json",
+        "docs/llm/overnight*.json",
+        "docs/llm/hermes*.json",
+        "docs/llm/review-hermes*.json",
+        "docs/schemas/axiom*.schema.json"
+      ]
+    },
+    "host_claims": {
+      "claude": {
+        "tier": "native",
+        "status": "primary",
+        "evidence": "blocking_clean_plugin"
+      },
+      "cli": {
+        "tier": "supported",
+        "status": "release",
+        "scope": [
+          "bootstrap",
+          "install",
+          "update"
+        ]
+      },
+      "codex": {
+        "tier": "partial",
+        "status": "preview",
+        "evidence": "blocking_clean_plugin"
+      },
+      "omp": {
+        "tier": "native",
+        "status": "conditional",
+        "condition": "clean_installed_wheel_proof"
+      },
+      "antigravity": {
+        "tier": "dev_advanced",
+        "status": "not_release_default"
+      },
+      "cursor": {
+        "tier": "dev_advanced",
+        "status": "not_release_default"
+      },
+      "cline": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      },
+      "copilot": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      },
+      "kiro": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      },
+      "pi": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      },
+      "windsurf": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      }
+    },
+    "clean_candidate_requirements": {
+      "source_identity": "exact_reviewed_identity",
+      "artifact_identity": "exact_reviewed_identity",
+      "source_origin": "tracked_clean_checkout_or_archive",
+      "home": "isolated",
+      "config": "isolated",
+      "wheel": "installed",
+      "plugin_payloads": "installed",
+      "host_claim_evidence": "blocking_for_every_claim",
+      "forbidden_inputs": [
+        "ignored_files",
+        "untracked_files",
+        "user_configuration",
+        "dev_only_dependencies"
+      ]
+    },
+    "consumers": {
+      "C2": "deterministic_assembly",
+      "C3": "dependency_closure",
+      "C4": "transactional_lifecycle",
+      "C5": "version_provenance",
+      "C6": "verification_and_promotion"
+    },
+    "ownership_boundary": "Consumers must not redefine the train, exclusions, host claims, or clean-candidate meaning. Assembly, closure, lifecycle, provenance, verification, and promotion mechanics remain with C2-C6. The prod inventory remains canonical-only and is not duplicated here."
+  },
   "entry_points": [
     {
       "file": "z_harness_cli/adapters/base.py",

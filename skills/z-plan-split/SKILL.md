@@ -282,42 +282,6 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
 
-<!-- SUPERVISION_INGRESS_CONTRACT_START -->
-### 1f. Bundled supervision/topology choice (default off)
-
-Present exactly one supervision choice alongside the confirmed cluster proposal.
-This is one bundled decision: enabling supervision must not open follow-up
-topology or reconciliation prompts.
-
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the same two-option supervision/topology choice via their native channel. Silent omission is forbidden. -->
-
-- **off — Off (Recommended default):** persist the disabled manifest and keep
-  the future fan-out workflow unsupervised.
-- **supervised — Supervise the future fan-out:** use a coordinator plus sealed
-  cluster group, admit dynamic descendants only within approved cluster scopes,
-  keep semantic reconciliation with the coordinator, and pause on ambiguity.
-  This planning session remains excluded; a later integration consumes the
-  durable manifest for the next session.
-
-In unattended/no-ask mode, set `SUPERVISION_CHOICE=off` and leave
-`SUPERVISION_WAIT_TOKEN` empty without asking. Otherwise run `begin-wait`
-immediately before the single native question above and capture its raw answer;
-an unavailable or empty answer is `off`. Finish through the shared production
-ingress using these runnable calls (the helper owns timing, normalization,
-fail-open telemetry, and atomic persistence):
-
-```bash
-SUPERVISION_WAIT_TOKEN="$(python3 -m runtime.watchdog.planning_ingress begin-wait --plan-dir "$Z_HARNESS_PLAN_DIR" --run "$RUN" --phase 1f 2>/dev/null || true)"
-# ... AskUserQuestion once; capture its raw answer in SUPERVISION_CHOICE ...
-python3 -m runtime.watchdog.planning_ingress complete --plan-dir "$Z_HARNESS_PLAN_DIR" --run "$RUN" --source /z-plan-split --phase 1f --choice "${SUPERVISION_CHOICE:-off}" --wait-token "${SUPERVISION_WAIT_TOKEN:-}"
-```
-
-Both choices serialize the same versioned shape and differ only in `enabled`.
-The planning run producing this artifact MUST NOT call any watchdog registry
-mutation or daemon-ensure surface. Its existing active-plan registry lifecycle
-is separate and remains unchanged.
-<!-- SUPERVISION_INGRESS_CONTRACT_END -->
-
 ---
 
 ## Phase 1.5 — Pre-fanout cost gate

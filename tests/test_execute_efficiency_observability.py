@@ -549,8 +549,17 @@ def test_execute_skill_wires_every_required_outcome_seam() -> None:
         assert marker in text
     assert "execute_efficiency" in text
     assert "2>/dev/null || true" in text
+    production_axiom_posture = (
+        "4a. **Production axiom posture.** Axiom extraction is a development-only "
+        "surface.\n"
+        "    `/z-execute` does not parse an axiom-ready marker or dispatch an "
+        "extractor in the\n"
+        "    production workflow; memory review continues solely through the "
+        "exported review agent."
+    )
+    assert production_axiom_posture in text
+    assert '"role":"axiom_extractor"' not in text
     for role in (
-        "axiom_extractor",
         "complexity_classifier",
         "context_curator",
         "implementer",

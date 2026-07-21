@@ -215,6 +215,138 @@ class TestResolveProvider(unittest.TestCase):
         finally:
             os.unlink(tf_path)
 
+    def test_preflight_all_requires_three_distinct_mandatory_roles(self):
+        providers = {
+            "gemini": _make_provider("gemini", "gemini-2.5-pro"),
+            "codex": _make_provider("codex", "codex-v1"),
+            "claude": _make_provider("claude", "claude-v1"),
+        }
+        roles = {
+            "consultant_primary": "gemini",
+            "consultant_secondary": "codex",
+            "reviewer": "claude",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config(tf_path, providers, roles)
+            result = _run("--preflight-all", tf_path)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            resolved = json.loads(result.stdout)["roles"]
+            self.assertEqual(set(resolved), set(roles))
+        finally:
+            os.unlink(tf_path)
+
+    def test_preflight_all_rejects_reviewer_collision(self):
+        providers = {
+            "gemini": _make_provider("gemini", "gemini-2.5-pro"),
+            "codex": _make_provider("codex", "codex-v1"),
+        }
+        roles = {
+            "consultant_primary": "gemini",
+            "consultant_secondary": "codex",
+            "reviewer": "gemini",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config(tf_path, providers, roles)
+            result = _run("--preflight-all", tf_path)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DISTINCT", result.stderr)
+        finally:
+            os.unlink(tf_path)
+
+    def test_preflight_all_accepts_distinct_alias_bound_roles(self):
+        providers = {
+            name: _make_provider(command, name)
+            for name, command in (
+                ("canonical-primary", "gemini"),
+                ("canonical-secondary", "codex"),
+                ("canonical-reviewer", "claude"),
+            )
+        }
+        roles = {
+            "consultant_primary": "Primary Legacy",
+            "consultant_secondary": "Secondary Legacy",
+            "reviewer": "Reviewer Legacy",
+        }
+        aliases = {
+            "Primary Legacy": "canonical-primary",
+            "Secondary Legacy": "canonical-secondary",
+            "Reviewer Legacy": "canonical-reviewer",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config_v2(tf_path, providers, roles, aliases)
+            result = _run("--preflight-all", tf_path)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            resolved = json.loads(result.stdout)["roles"]
+            self.assertEqual(
+                [resolved[role]["provider"] for role in roles],
+                [aliases[roles[role]] for role in roles],
+            )
+        finally:
+            os.unlink(tf_path)
+
+    def test_preflight_all_rejects_invalid_alias_graphs_and_canonical_collapse(self):
+        providers = {
+            "one": _make_provider("gemini", "one"),
+            "two": _make_provider("codex", "two"),
+            "three": _make_provider("claude", "three"),
+        }
+        base_roles = {
+            "consultant_primary": "one",
+            "consultant_secondary": "two",
+            "reviewer": "three",
+        }
+        cases = (
+            ("dangling", {"old": "missing"}, base_roles, "dangling alias"),
+            ("self-cycle", {"old": "old"}, base_roles, "cyclic alias"),
+            ("cycle", {"old": "older", "older": "old"}, base_roles, "cyclic alias"),
+            ("chain", {"old": "older", "older": "one"}, base_roles, "chained aliases"),
+            (
+                "collapse",
+                {"legacy-one": "one"},
+                {**base_roles, "consultant_secondary": "legacy-one"},
+                "DISTINCT",
+            ),
+        )
+        for label, aliases, roles, message in cases:
+            with self.subTest(label=label), tempfile.NamedTemporaryFile(
+                suffix=".json", mode="w", delete=False
+            ) as tf:
+                tf_path = tf.name
+            try:
+                _write_config_v2(tf_path, providers, roles, aliases)
+                result = _run("--preflight-all", tf_path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+            finally:
+                os.unlink(tf_path)
+
+    def test_invalid_auth_env_name_is_a_schema_error(self):
+        providers = {
+            "one": {**_make_provider("gemini", "one"), "auth_env": "not-valid!"},
+            "two": _make_provider("codex", "two"),
+            "three": _make_provider("claude", "three"),
+        }
+        roles = {
+            "consultant_primary": "one",
+            "consultant_secondary": "two",
+            "reviewer": "three",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as tf:
+            tf_path = tf.name
+        try:
+            _write_config_v2(tf_path, providers, roles)
+            result = _run("--preflight-all", tf_path)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("environment-variable name", result.stderr)
+        finally:
+            os.unlink(tf_path)
+
     def test_missing_command_fails_provider_preflight_actionably(self):
         providers = {
             "missing-cli": _make_provider("definitely-not-on-path-zh", "missing-model"),
@@ -724,15 +856,15 @@ class TestRealRepoExternalRoleReconfiguration(unittest.TestCase):
         result = self._run_real("reviewer")
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         out = json.loads(result.stdout)
-        self.assertEqual(out["provider"], "omp-cursor-terra")
-        self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-terra-medium")
+        self.assertEqual(out["provider"], "omp-openai-terra")
+        self.assertEqual(out["args_template"][0], "openai-codex/gpt-5.6-terra")
 
     def test_real_consultant_secondary_resolves_sol_provider(self):
         result = self._run_real("consultant_secondary")
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         out = json.loads(result.stdout)
-        self.assertEqual(out["provider"], "omp-cursor-sol")
-        self.assertEqual(out["args_template"][0], "cursor/gpt-5.6-sol-medium")
+        self.assertEqual(out["provider"], "omp-openai-sol")
+        self.assertEqual(out["args_template"][0], "openai-codex/gpt-5.6-sol")
 
     def test_real_consultant_primary_stays_gemini_3_1_pro(self):
         result = self._run_real("consultant_primary")

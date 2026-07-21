@@ -107,6 +107,15 @@ def test_agent_defines_a_fresh_bounded_path_contract() -> None:
         assert forbidden in text
 
 
+def test_prod_execute_dispatches_an_exported_surgical_fixer_only() -> None:
+    from runtime import release_surface
+
+    execute = (REPO_ROOT / "skills" / "z-execute" / "SKILL.md").read_text(encoding="utf-8")
+    assert 'subagent_type="surgical-fixer"' in execute
+    assert "surgical-fixer" in release_surface.release_contract()["prod_inventory"]["agents"]
+    assert 'subagent_type="axiom-extractor"' not in execute
+
+
 def test_contract_pins_one_attempt_and_retry_preserving_fallback() -> None:
     text = _agent_text()
 

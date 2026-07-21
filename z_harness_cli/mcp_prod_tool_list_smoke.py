@@ -16,6 +16,7 @@ from z_harness_cli import release_surface
 
 REQUIRED_TOOLS = {"z_plan", "z_execute", "z_export", "z_update"}
 MANIFEST_EXCLUDED_TOOLS = release_surface.dev_only_mcp_tool_names()
+REMOVED_TOOLS = {"z_do", "z_evaluate", "z_uplift"}
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -62,6 +63,9 @@ def assert_prod_tool_list(tools: set[str]) -> None:
     leaked = sorted(MANIFEST_EXCLUDED_TOOLS & tools)
     assert not missing, f"prod MCP tool list missing required tools: {missing}"
     assert not leaked, f"prod MCP tool list leaked hidden tools: {leaked}"
+    removed = sorted(REMOVED_TOOLS & tools)
+    assert not removed, f"prod MCP tool list leaked removed tools: {removed}"
+    release_surface.prod_mcp_tool_backings(tools)
 
 
 def main(argv: list[str] | None = None) -> int:

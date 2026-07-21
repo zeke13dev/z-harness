@@ -6,6 +6,9 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
+from runtime import release_surface
 from runtime.drivers.codex.export import export
 
 _SURFACE_MARKER = "<!-- include: _fragments/surface-mapping.md -->"
@@ -186,3 +189,79 @@ class TestCodexNativeAgentExport:
         data = json.loads(config_path.read_text(encoding="utf-8"))
         server = data["mcpServers"]["z-harness"]
         assert server["command"] == str(venv_python)
+
+
+def _write_prod_implementer(repo_root: Path) -> None:
+    agent_path = repo_root / "agents" / "implementer.md"
+    agent_path.parent.mkdir(parents=True, exist_ok=True)
+    agent_path.write_text(
+        "---\n"
+        "name: implementer\n"
+        'description: "Implement one task"\n'
+        "model: sonnet\n"
+        "---\n\n"
+        "Implement the task exactly.\n",
+        encoding="utf-8",
+    )
+
+
+def _prod_export_contract() -> dict[str, object]:
+    return {
+        "prod_inventory": {
+            "skills": ["z-explain"],
+            "agents": ["implementer"],
+            "mcp_tools": [],
+            "export_targets": ["codex"],
+            "scripts_backends": [],
+            "schemas": [],
+            "public_documents": [],
+            "generated_requirements": [],
+        }
+    }
+
+
+def test_codex_prod_export_consumes_the_canonical_skill_agent_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = _make_repo_with_included_skill(tmp_path, "z-explain")
+    _write_prod_implementer(repo_root)
+    dev_skill = repo_root / "skills" / "z-research" / "SKILL.md"
+    dev_skill.parent.mkdir(parents=True)
+    dev_skill.write_text("---\nname: z-research\n---\n\ndev only\n", encoding="utf-8")
+    (repo_root / "agents" / "axiom-extractor.md").write_text(
+        "---\nname: axiom-extractor\n---\n\ndev only\n",
+        encoding="utf-8",
+    )
+    (repo_root / ".git").mkdir()
+    monkeypatch.setattr(release_surface, "release_contract", _prod_export_contract)
+    monkeypatch.setattr(release_surface, "reviewed_dynamic_dependencies", lambda: ())
+    monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+
+    result = export(repo_root, tmp_path / "export")
+
+    assert (result.dest / "skills" / "z-explain" / "SKILL.md").is_file()
+    assert (result.dest / ".codex" / "agents" / "implementer.toml").is_file()
+    assert not (result.dest / "skills" / "z-research").exists()
+    assert not (result.dest / ".codex" / "agents" / "axiom-extractor.toml").exists()
+
+
+def test_codex_prod_export_rejects_unresolved_graph_before_emission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = _make_repo_with_included_skill(tmp_path, "z-explain")
+    _write_prod_implementer(repo_root)
+    (repo_root / ".git").mkdir()
+    skill_path = repo_root / "skills" / "z-explain" / "SKILL.md"
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8") + "\npython3 scripts/missing.py\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release_surface, "release_contract", _prod_export_contract)
+    monkeypatch.setattr(release_surface, "reviewed_dynamic_dependencies", lambda: ())
+    monkeypatch.setenv("Z_HARNESS_RELEASE_SURFACE", "prod")
+    export_root = tmp_path / "export"
+
+    with pytest.raises(ValueError, match="scripts/missing.py"):
+        export(repo_root, export_root)
+
+    assert not (export_root / ".codex-plugin" / "plugin.json").exists()

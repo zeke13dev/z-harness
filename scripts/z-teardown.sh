@@ -16,16 +16,14 @@
 #   the caller's shell once the run is torn down). On completion it prints a
 #   single JSON summary line to stdout:
 #     {"run":"<RUN>","status":"<complete|aborted>","warnings":["<step>", ...]}
-#   `warnings` lists any step that failed non-fatally (best-effort cleanup —
-#   see exit-code contract below). All step-level diagnostics also go to
+#   `warnings` lists any step that failed. All step-level diagnostics also go to
 #   stderr as they happen.
 #
-# Idempotent: safe to call twice for the same --run. Every step it wraps
-# (run-brief.sh finalize, plan-claim.sh release, active-plan-registry.py
-# deregister) is itself idempotent/best-effort and returns success on a
-# second call against an already-torn-down run (finalize re-validates and
-# rewrites; release on an already-free/foreign-held lock is a documented
-# true no-op; deregister on an already-absent record is a benign no-op).
+# Idempotent: safe to call twice for the same --run. A retry after an
+# unconfirmed claim release retains enough registry state to finish later.
+# A second call after a completed teardown also succeeds (finalize re-validates
+# and rewrites; release treats an already-free lock as confirmed success;
+# deregister on an already-absent record is a benign no-op).
 # The only non-idempotent side effect is a second run_end event line being
 # appended to telemetry — harmless, not a correctness issue.
 #
@@ -45,9 +43,9 @@
 #   opposite order.
 #
 #   NOTE on release without a CLAIM_HELD precondition: plan-claim.sh release
-#   is itself best-effort and keys on `--expected-holder`; releasing a lock
-#   this run never held (or already released) is a documented true no-op
-#   (TC09 in test_plan_claim.sh) — it never touches a peer's record. So this
+#   keys on `--expected-holder`; releasing an already-free lock is confirmed
+#   success, while a foreign holder is preserved and reported as an
+#   operational failure. So this
 #   script always attempts release rather than requiring the caller to pass
 #   a CLAIM_HELD flag; the caller only needs to supply the SAME --session
 #   and --command it used at z-preflight.sh acquire time (or omit --session
@@ -55,10 +53,9 @@
 #   <plan_dir>/archive/<run>/session-id).
 #
 # Exit codes:
-#   0 — always, EXCEPT usage errors below (best-effort cleanup: an
-#       individual step warning never changes the exit code — see
-#       `warnings` in the stdout summary for what, if anything, was skipped
-#       or failed)
+#   0 — teardown completed, including a confirmed claim release
+#   1 — operational failure: claim release was not confirmed; the registry
+#       entry is retained and terminal run_end is not emitted
 #   2 — usage error (missing --run, --slug, or --command; invalid --status)
 
 set -euo pipefail
@@ -129,10 +126,9 @@ if ! bash "$RUN_BRIEF_SH" finalize --run "$RUN" >&2; then
 fi
 
 # ---------------------------------------------------------------------------
-# Resolve the session id used at acquire time (best-effort — needed to build
-# the exact holder string for release; a mismatch is a safe no-op per
-# plan-claim.sh's documented --expected-holder contract, so a resolution
-# failure here degrades gracefully rather than blocking teardown).
+# Resolve the session id used at acquire time (needed to build the exact holder
+# string for release). Resolution failure is diagnosed here and the guarded
+# release will fail closed if a foreign holder is present.
 # ---------------------------------------------------------------------------
 SESSION_ID="$SESSION_ARG"
 if [[ -z "$SESSION_ID" ]]; then
@@ -147,13 +143,25 @@ if [[ -z "$SESSION_ID" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Claim release (always attempted; best-effort no-op if not held by us —
-#    see header note. Release BEFORE deregister — invariant preserved.)
+# 2. Claim release (always attempted. Release BEFORE deregister — invariant
+#    preserved. An unconfirmed release is an operational stop: retain the
+#    registry record and omit terminal run_end so a later retry can finish.)
 # ---------------------------------------------------------------------------
-if ! bash "$PLAN_CLAIM_SH" release \
-  --slug "$SLUG" --run-id "$RUN" --session "$SESSION_ID" --command "$COMMAND" >&2; then
-  printf 'z-teardown.sh: WARNING: claim release returned non-zero for slug %s\n' "$SLUG" >&2
+CLAIM_RELEASE_RC=0
+bash "$PLAN_CLAIM_SH" release \
+  --slug "$SLUG" --run-id "$RUN" --session "$SESSION_ID" --command "$COMMAND" >&2 \
+  || CLAIM_RELEASE_RC=$?
+if [[ "$CLAIM_RELEASE_RC" -ne 0 ]]; then
+  printf 'z-teardown.sh: WARNING: claim release was not confirmed for slug %s (exit %s); retaining registry entry and omitting run_end\n' \
+    "$SLUG" "$CLAIM_RELEASE_RC" >&2
   _warn "claim_release"
+
+  python3 -c '
+import json, sys
+run, status, warnings = sys.argv[1], sys.argv[2], sys.argv[3]
+print(json.dumps({"run": run, "status": status, "warnings": warnings.split() if warnings else []}))
+' "$RUN" "$STATUS" "$WARNINGS"
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------

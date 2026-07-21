@@ -857,19 +857,18 @@ def test_completion_reaping_barrier_always_resolves_to_explicit_outcome(
     generation = registry.child_generation(child)
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
-    emitted = []
+    reaped_outcomes: list[dict[str, object]] = []
 
     def complete() -> None:
         try:
             barrier.wait(timeout=5)
-            outcome, _ = registry.report_child_outcome(
+            registry.report_child_outcome(
                 path, child_id=child["session_id"], generation=generation,
                 reporter_id=child["session_id"],
                 report_capability=child["_report_capability"],
                 state="done",
                 evidence={"artifact": "RESULT.json"}, now="2026-07-14T10:02:00Z",
             )
-            emitted.append(notify.child_outcome_notification(outcome))
         except BaseException as exc:  # noqa: BLE001 — asserted below
             errors.append(exc)
 
@@ -881,11 +880,7 @@ def test_completion_reaping_barrier_always_resolves_to_explicit_outcome(
             )
             barrier.wait(timeout=5)
             if reaped is not None:
-                claimed = registry.claim_child_outcome_notification(
-                    path, reaped["outcome_id"], now="2026-07-14T10:02:00Z"
-                )
-                if claimed is not None:
-                    emitted.append(notify.child_outcome_notification(claimed))
+                reaped_outcomes.append(reaped)
         except BaseException as exc:  # noqa: BLE001 — asserted below
             errors.append(exc)
 
@@ -895,15 +890,36 @@ def test_completion_reaping_barrier_always_resolves_to_explicit_outcome(
     for thread in threads:
         thread.join(timeout=10)
 
+    assert all(not thread.is_alive() for thread in threads)
     assert not errors
+    assert len(reaped_outcomes) == 1
+    assert reaped_outcomes[0]["source"] == "lease_reaper"
     document = registry.read_registry_document(path)
-    outcome = next(iter(document["outcomes"].values()))
+    outcome_id = registry.child_outcome_id(child["session_id"], generation)
+    assert list(document["outcomes"]) == [outcome_id]
+    outcome = document["outcomes"][outcome_id]
     assert outcome["state"] == "done" and outcome["source"] == "explicit"
+    assert outcome["evidence"] == {"artifact": "RESULT.json"}
     assert document["sessions"][child["session_id"]]["state"] == "done"
-    assert [event.body for event in emitted] == [
+
+    claimed = registry.claim_child_outcome_notification(
+        path, outcome_id, now="2026-07-14T10:02:00Z"
+    )
+    assert claimed is not None
+    assert claimed["state"] == "done" and claimed["source"] == "explicit"
+    assert claimed["notification_attempts"] == 1
+    event = notify.child_outcome_notification(claimed)
+    assert event.body == (
         f"child_id={child['session_id']} state=done source=explicit "
         f"outcome_id={outcome['outcome_id']}"
-    ]
+    )
+    registry.finish_child_outcome_notification(
+        path, outcome_id, status="delivered", attempt=1
+    )
+    delivered = registry.read_registry_document(path)["outcomes"][outcome_id]
+    assert delivered["notification_status"] == "delivered"
+    assert delivered["notification_attempts"] == 1
+    assert registry.claim_child_outcome_notification(path, outcome_id) is None
 
 
 def test_sealed_group_concurrent_final_outcomes_create_one_join_and_wake(

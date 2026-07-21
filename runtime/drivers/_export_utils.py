@@ -12,6 +12,12 @@ contract shared by CLI and runtime consumers.
 Public surface
 --------------
 enumerate_sources(repo_root) -> dict
+build_prod_dependency_graph(repo_root) -> ProdDependencyGraph
+    Enumerate expanded prod skills and resolve their literal dependencies
+    against the canonical positive release inventory.
+require_prod_dependency_graph(repo_root, skill_entries=None) -> ProdDependencyGraph
+    Hard-fail with stable path-specific errors unless the canonical graph is
+    complete. Production exporters use this before emitting host artifacts.
 inline_includes(text, base_dir, repo_root) -> str
     Fragment-include marker expansion.  ``base_dir`` is accepted for API
     symmetry with SPEC callers but unused — path resolution is always relative
@@ -360,7 +366,91 @@ def enumerate_sources(repo_root: Path) -> dict[str, list[dict[str, Any]]]:
         "agents": _collect_entries(repo_root / "agents", repo_root),
         "skills": _collect_skills(repo_root / "skills", repo_root),
     }
-    return _apply_release_surface(sources)
+    surface = release_surface.default_surface()
+    selected = _apply_release_surface(sources, surface)
+    if surface == "prod":
+        selected_source_paths = None
+        if (repo_root / ".git").exists():
+            selected_source_paths = {
+                entry["source_path"].relative_to(repo_root).as_posix()
+                for kind in ("skills", "agents")
+                for entry in selected[kind]
+            }
+        require_prod_dependency_graph(
+            repo_root,
+            selected["skills"],
+            selected_source_paths=selected_source_paths,
+        )
+    return selected
+
+
+def require_prod_dependency_graph(
+    repo_root: Path,
+    skill_entries: list[dict[str, Any]] | None = None,
+    *,
+    selected_source_paths: set[str] | None = None,
+) -> release_surface.ProdDependencyGraph:
+    """Return the canonical prod graph or raise with its stable error list.
+
+    Args:
+        repo_root: Candidate repository, staged tree, or installed payload root.
+        skill_entries: Already expanded skill entries from source enumeration.
+            Supplying these lets exporters validate exactly the text they will
+            emit without collecting or expanding the skills a second time.
+        selected_source_paths: Explicit exporter selection for a development
+            checkout. Omit for strict staged or installed-root discovery.
+
+    Returns:
+        The complete canonical production dependency graph.
+
+    Raises:
+        ValueError: If any inventory node or dependency is missing, extra,
+            ambiguous, or surface-incompatible.
+    """
+
+    graph = build_prod_dependency_graph(
+        repo_root,
+        skill_entries,
+        selected_source_paths=selected_source_paths,
+    )
+    if graph.errors:
+        raise ValueError(
+            "production dependency closure failed:\n" + "\n".join(graph.errors)
+        )
+    return graph
+
+
+def build_prod_dependency_graph(
+    repo_root: Path,
+    skill_entries: list[dict[str, Any]] | None = None,
+    *,
+    selected_source_paths: set[str] | None = None,
+) -> release_surface.ProdDependencyGraph:
+    """Build the canonical production dependency graph for an artifact root.
+
+    Args:
+        repo_root: Candidate repository, staged tree, or installed payload root.
+
+    Returns:
+        The resolved positive inventory, literal dependency edges, reviewed
+        dynamic edges, and stable validation errors.
+    """
+
+    repo_root = Path(repo_root).resolve()
+    shipped_skills = (
+        _collect_skills(repo_root / "skills", repo_root)
+        if skill_entries is None
+        else skill_entries
+    )
+    skill_sources = {
+        entry["source_path"].relative_to(repo_root).as_posix(): entry["body"]
+        for entry in shipped_skills
+    }
+    return release_surface.build_prod_dependency_graph(
+        repo_root,
+        skill_sources,
+        selected_source_paths=selected_source_paths,
+    )
 
 
 # ---------------------------------------------------------------------------
