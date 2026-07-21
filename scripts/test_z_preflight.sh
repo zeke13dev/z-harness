@@ -105,7 +105,7 @@ assert_eq() {
 
 assert_contains() {
   local label="$1" needle="$2" haystack="$3"
-  if printf '%s' "$haystack" | grep -qF "$needle"; then
+  if [[ "$haystack" == *"$needle"* ]]; then
     printf '  PASS: %s\n' "$label"
     PASS=$((PASS + 1))
   else

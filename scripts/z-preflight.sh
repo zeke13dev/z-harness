@@ -35,7 +35,7 @@
 #   `eval "$(...)"` never has diagnostic text injected into its shell.
 #
 #   Exported variables (minimum contract):
-#     RUN                    — the freshly minted run id (<UTC-stamp>-<slug>)
+#     RUN                    — freshly minted run id (<UTC-stamp>-<slug>-<pid>)
 #     Z_HARNESS_RUN           — alias of RUN (matches existing skill convention)
 #     Z_HARNESS_SLUG          — the slug passed via --slug
 #     Z_HARNESS_PLAN_DIR      — resolved plan directory (plan-path.sh resolve_plan_path)
@@ -188,7 +188,10 @@ fi
 # ---------------------------------------------------------------------------
 # 3. RUN id stamp
 # ---------------------------------------------------------------------------
-RUN="$(date -u +%Y%m%dT%H%M%SZ)-${SLUG}"
+# Include this preflight process's PID so concurrent starts in the same second
+# cannot share an archive directory or overwrite each other's persisted
+# session identity before the slug claim rejects a contender.
+RUN="$(date -u +%Y%m%dT%H%M%SZ)-${SLUG}-$$"
 CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
 mkdir -p "$CURRENT_ARCHIVE_DIR/transcripts"
 printf '%s\n' "$Z_HARNESS_SESSION_ID" > "$CURRENT_ARCHIVE_DIR/session-id"
