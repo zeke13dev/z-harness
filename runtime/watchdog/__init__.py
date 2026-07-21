@@ -1,4 +1,8 @@
-"""Session-watchdog daemon package (``runtime/watchdog/``).
+"""Experimental session-watchdog daemon package (``runtime/watchdog/``).
+
+This package is incubating, source-only functionality. It is excluded from
+production release artifacts and makes no compatibility promise until it is
+explicitly promoted to the production surface.
 
 Purpose: a z-harness-native, long-lived watchdog daemon that babysits
 tmux-hosted managed agent sessions across the claude / codex / omp hosts. This
@@ -13,10 +17,10 @@ Design decisions:
   ``signals.jsonl`` append helper. The SIGTERM handler, startup reconcile pass,
   and poll loop belong to level 1 and are intentionally NOT in this package yet.
 - The ``sessions.json`` record schema and the ``ws-`` / ``zw-`` id contracts are
-  irreversible public surface — every later level builds on them (see
-  ``registry.SCHEMA_VERSION``).
+  internal foundations for later watchdog levels (see
+  ``registry.SCHEMA_VERSION``); they are not yet a promoted public contract.
 
-This module re-exports the stable registry surface so callers can
+This module re-exports the watchdog registry surface so callers can
 ``from runtime.watchdog import new_session_record`` etc.
 """
 

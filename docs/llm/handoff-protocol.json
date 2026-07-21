@@ -23,7 +23,7 @@
       "line": 1,
       "symbol": "/z-handoff",
       "kind": "module",
-      "summary": "Agent-facing slash command, disable-model-invocation:true. Phase 0: resolve RUN_ID/archive dir from Z_HARNESS_PLAN_DIR. Phase 1: 1a resolve slug/plan_dir; 1b write SESSION_CONTEXT.md live brief (current work/workspace state/decisions/open questions/landmines/immediate next action) before context_files assembly; 1c context_files priority (SESSION_CONTEXT.md > HANDOFF/INTENT/SPEC/PLAN/TASKS/FIX/LEDGER > workstreams.json > events.jsonl > active diff > explicit > fallback); 1d next_step (ARGUMENTS override > TASKS.md first-pending > FIX.md approach > ad-hoc, must point at SESSION_CONTEXT.md when present); 1e status (context_pressure|clean_break|complete|blocked, default clean_break); 1f agent id. Phase 2: assemble/validate (context_files non-empty, next_step non-empty unless complete). Phase 3: atomic write to $Z_HARNESS_PLAN_DIR/handoff.json (workspace fallback only when slug null). Phase 3b: when HERMES_MARKER_FILE set, emit handoff_continue marker via emit-hermes-marker.sh --strict \u2014 write failure surfaces and exits non-zero rather than stranding the session. Phase 4: handoff_written telemetry. Phase 5: print summary + fenced copy-paste resume block with the FULL untruncated next_step (always, even under Hermes)."
+      "summary": "Agent-facing slash command, disable-model-invocation:true. Phase 0: resolve RUN_ID/archive dir from Z_HARNESS_PLAN_DIR. Phase 1: 1a resolve slug/plan_dir; 1b write SESSION_CONTEXT.md live brief (current work/workspace state/decisions/open questions/landmines/immediate next action) before context_files assembly; 1c context_files priority (SESSION_CONTEXT.md > HANDOFF/INTENT/SPEC/PLAN/TASKS/FIX/LEDGER > workstreams.json > events.jsonl > active diff > explicit > fallback); 1d next_step (ARGUMENTS override > TASKS.md first-pending > FIX.md approach > ad-hoc, must point at SESSION_CONTEXT.md when present); 1e status (context_pressure|clean_break|complete|blocked, default clean_break); 1f agent id. Phase 2: assemble/validate (context_files non-empty, next_step non-empty unless complete). Phase 3: atomic write to $Z_HARNESS_PLAN_DIR/handoff.json (workspace fallback only when slug null). Phase 4: handoff_written telemetry. Phase 5: print summary + fenced copy-paste resume block with the FULL untruncated next_step."
     },
     {
       "file": "scripts/write-handoff.sh",
@@ -37,7 +37,7 @@
       "line": 1,
       "symbol": "handoff-v1 narrative",
       "kind": "doc",
-      "summary": "Protocol narrative: protocol 1.0/1.1 fields, status enum, expanded 14-value context_files role enum, attend_resume predicate table, SESSION_CONTEXT.md vs SESSION.md distinction, consumer contract (detect->validate->load-in-order->pass-next_step->delete), handoff_continue vs handoff_fanout Hermes markers, pre-existing handoff.json overwrite rule, examples for 1.0/1.1/ad-hoc/complete."
+      "summary": "Protocol narrative: protocol 1.0/1.1 fields, status enum, expanded 14-value context_files role enum, attend_resume predicate table, SESSION_CONTEXT.md vs SESSION.md distinction, consumer contract (detect->validate->load-in-order->pass-next_step->delete), pre-existing handoff.json overwrite rule, examples for 1.0/1.1/ad-hoc/complete."
     }
   ],
   "depends_on": [
@@ -68,8 +68,6 @@
     "hermes_enabled=false (default) suppresses write-handoff.sh at the /z-execute compaction breakpoint. No handoff.json is written for Hermes consumption unless the knob is on.",
     "An unconsumed handoff.json is silently overwritten by the next producer invocation; the prior session's resume data is lost without any warning.",
     "write-handoff.sh's context_files array includes HANDOFF.md up to 5 times (once per category-pointer role: handoff, invariants, rejected_approaches, decisions_archive, verification_commands) \u2014 all pointing at the SAME path. A naive consumer that reads every entry re-reads the file 5x; dedupe by path if that matters.",
-    "/z-handoff Phase 3b's emit-hermes-marker.sh --strict is the ONLY --strict callsite in the codebase; the automatic write-clear-checkpoint.sh checkpoint path emits the same handoff_continue marker best-effort (non-strict), so a marker write failure there is silent while a Phase-3b failure surfaces and exits non-zero.",
-    "handoff_continue (this concept's Hermes marker) and handoff_fanout (emitted by /z-plan-split) are distinct marker kinds sharing the same envelope shape \u2014 do not conflate them when grepping Hermes marker consumers.",
     "commands/z-handoff.md no longer exists \u2014 the command source moved to skills/z-handoff/SKILL.md as part of the skills-atom migration; any doc or script still referencing commands/z-handoff.md is stale."
   ],
   "memories": []

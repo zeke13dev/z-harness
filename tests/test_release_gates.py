@@ -193,6 +193,29 @@ def test_ci_consumes_one_explicit_immutable_artifact_and_live_evidence_run() -> 
         assert "assemble-release.py" not in workflow
 
 
+def test_each_release_phase_independently_binds_fresh_origin_main() -> None:
+    evidence = _workflow("release-evidence.yml")
+    conformance = _workflow("conformance.yml")
+    publication = _workflow("release.yml")
+    binding = "+refs/heads/main:refs/remotes/origin/main"
+    assert evidence.count(binding) >= 2
+    assert conformance.count(binding) >= 1
+    assert publication.count(binding) >= 3
+    for workflow in (evidence, conformance, publication):
+        assert "refs/remotes/origin/prod" not in workflow
+        assert "refs/heads/prod" not in workflow
+
+
+def test_release_docs_treat_branch_protection_as_administrative_setup() -> None:
+    setup = (REPO_ROOT / "docs" / "human" / "GITHUB_RELEASE_SETUP.md").read_text(
+        encoding="utf-8"
+    )
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "administrative prerequisite" in setup
+    assert "do not query or prove GitHub ruleset configuration" in setup
+    assert "a Git fetch proves the branch tip, not its ruleset configuration" in readme
+
+
 def test_release_publication_depends_on_both_os_and_rechecks_freshness_immediately() -> None:
     workflow = _workflow("release.yml")
     publish = workflow.index("publish:")
@@ -206,11 +229,12 @@ def test_release_publication_depends_on_both_os_and_rechecks_freshness_immediate
     assert "--authorization" in between
     assert "git fetch --force --no-tags origin" in between
     assert "+refs/heads/main:refs/remotes/origin/main" in between
-    assert "+refs/heads/prod:refs/remotes/origin/prod" in between
+    assert 'git ls-remote --refs origin "refs/tags/v$CANDIDATE_VERSION"' in between
+    assert "refs/remotes/origin/prod" not in workflow
     assert "uses:" not in between
     assert "push:" not in workflow
     assert "tags:" not in workflow
-    assert "target_commitish: ${{ inputs.prod_sha }}" in workflow
+    assert "target_commitish: ${{ inputs.candidate_sha }}" in workflow
     assets = workflow[publication:]
     files = assets.split("files: |", 1)[1]
     file_lines = [line.strip() for line in files.splitlines() if line.strip()]
@@ -246,119 +270,30 @@ def test_release_run_blocks_do_not_interpolate_dispatch_inputs_as_shell_code() -
     run_blocks = re.findall(r"\n\s+run: \|\n((?:\s{10,}.*\n)+)", workflow)
     assert run_blocks
     assert all("${{ inputs." not in block for block in run_blocks)
-    assert 'git branch --force prod "$PROD_SHA"' in workflow
+    assert "git branch --force" not in workflow
 
 
-def test_release_binds_authoritative_remote_refs_before_privileged_verification() -> None:
+def test_release_binds_one_authoritative_main_candidate_before_privileged_verification() -> None:
     workflow = _workflow("release.yml")
     publish = workflow.index("publish:")
-    bind = workflow.index("Fetch and bind authoritative promotion refs", publish)
+    bind = workflow.index("Fetch and bind authoritative main candidate", publish)
     verification = workflow.index("Recreate passing evidence", publish)
-    preflight = workflow.index("Curated main-to-prod promotion preflight", publish)
+    preflight = workflow.index("Authorize exact protected-main candidate", publish)
     assert bind < verification < preflight
     binding_end = workflow.index("- name: Set up locked Python", bind)
     binding = workflow[bind:binding_end]
     assert "git fetch --force --no-tags origin" in binding
     assert "refs/remotes/origin/main" in binding
-    assert "refs/remotes/origin/prod" in binding
-    assert '[[ "$SOURCE_SHA" == "$SOURCE_TIP" ]]' in binding
-    assert '[[ "$PROD_SHA" == "$PROD_TIP" ]]' in binding
+    assert "refs/remotes/origin/prod" not in binding
+    assert '"$HEAD_SHA" == "$CANDIDATE_SHA"' in binding
+    assert '"$MAIN_SHA" == "$CANDIDATE_SHA"' in binding
     assert "${{ inputs." not in binding.split("run: |", 1)[1]
-    assert '--source-sha "$SOURCE_SHA"' in workflow
-    assert '--prod-sha "$PROD_SHA"' in workflow
+    assert '--candidate-sha "$CANDIDATE_SHA"' in workflow
     assert '--candidate-version "$CANDIDATE_VERSION"' in workflow
-    assert "checkout --quiet -B main refs/remotes/origin/main" in workflow
-
-
-def _git(command: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(
-        ["git", *command],
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def _release_remote(tmp_path: Path) -> tuple[Path, Path, str]:
-    """Create a real remote with one reviewed prod commit and release tag."""
-
-    remote = tmp_path / "remote.git"
-    seed = tmp_path / "seed"
-    checkout = tmp_path / "checkout"
-    _git(["init", "--bare", str(remote)], tmp_path)
-    _git(["init", str(seed)], tmp_path)
-    _git(["config", "user.name", "Release Test"], seed)
-    _git(["config", "user.email", "release@example.invalid"], seed)
-    (seed / "release.txt").write_text("reviewed\n", encoding="utf-8")
-    _git(["add", "release.txt"], seed)
-    _git(["commit", "-m", "reviewed prod"], seed)
-    _git(["branch", "-M", "prod"], seed)
-    commit = _git(["rev-parse", "HEAD"], seed)
-    _git(["tag", "v2.4.1"], seed)
-    _git(["tag", "vv2.4.1"], seed)
-    _git(["remote", "add", "origin", str(remote)], seed)
-    _git(["push", "origin", "prod", "v2.4.1", "vv2.4.1"], seed)
-    _git(["clone", "--no-checkout", str(remote), str(checkout)], tmp_path)
-    _git(["checkout", "--detach", commit], checkout)
-    return seed, checkout, commit
-
-
-@pytest.mark.parametrize(
-    ("case", "tag", "sha", "expected_success"),
-    (
-        ("positive", "v2.4.1", "reviewed", True),
-        ("missing-tag", "v2.4.2", "reviewed", False),
-        ("wrong-tag", "vv2.4.1", "reviewed", False),
-        ("wrong-sha", "v2.4.1", "b" * 40, False),
-        ("stale-prod", "v2.4.1", "reviewed", False),
-    ),
-)
-def test_real_git_provenance_gate_precedes_side_effect_sentinel(
-    tmp_path: Path,
-    case: str,
-    tag: str,
-    sha: str,
-    expected_success: bool,
-) -> None:
-    seed, checkout, reviewed_commit = _release_remote(tmp_path)
-    if case == "stale-prod":
-        (seed / "release.txt").write_text("unreviewed prod advance\n", encoding="utf-8")
-        _git(["add", "release.txt"], seed)
-        _git(["commit", "-m", "advance prod"], seed)
-        _git(["push", "origin", "prod"], seed)
-    workflow_sha = reviewed_commit if sha == "reviewed" else sha
-    sentinel = tmp_path / "publication-started"
-    script = REPO_ROOT / "scripts" / "verify-release-provenance.sh"
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GITHUB_REF_NAME": tag,
-            "GITHUB_SHA": workflow_sha,
-            "PYTHONPATH": str(REPO_ROOT),
-        }
-    )
-    result = subprocess.run(
-        [
-            "/bin/bash",
-            "-c",
-            'bash "$1" "$2" && : >"$3"',
-            "provenance-test",
-            str(script),
-            os.sys.executable,
-            str(sentinel),
-        ],
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert (result.returncode == 0) is expected_success, result.stderr
-    assert sentinel.exists() is expected_success
+    assert "symbolic-ref --quiet HEAD" in binding
+    assert "--mode authorization-preflight" in workflow
+    for forbidden in ("source_sha", "prod_sha", "--source-sha", "--prod-sha", "--prod-root"):
+        assert forbidden not in workflow
 
 
 def test_make_release_verify_is_a_thin_explicit_candidate_delegate() -> None:
@@ -569,7 +504,7 @@ def test_release_evidence_workflow_is_protected_owned_and_exact() -> None:
     assert "--model openai/gpt-5.2" in producer
     assert "release-evidence clean-plugin proof" not in producer
     assert "installed-wheel command-specific probe" not in producer
-    assert producer.index("bind authoritative prod before checkout") < producer.index("Checkout bound candidate")
+    assert producer.index("bind authoritative main before checkout") < producer.index("Checkout bound candidate")
 
     skill = (REPO_ROOT / "skills/z-fix/SKILL.md").read_text(encoding="utf-8")
     probe_index = skill.index("## Reserved release-evidence dispatch probe")

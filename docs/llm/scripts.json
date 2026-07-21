@@ -41,7 +41,7 @@
       "line": 1,
       "symbol": "log-event.sh",
       "kind": "module",
-      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set); resolve-run-dir subcommand for read-only path lookup; when HERMES_MARKER_FILE is set, also fires emit-hermes-marker.sh (status, or heartbeat for context_pressure kind) as a best-effort trailing step."
+      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set); resolve-run-dir subcommand for read-only path lookup."
     },
     {
       "file": "scripts/log-phase.sh",
@@ -327,7 +327,6 @@
     "log-event.sh resolves artifact base via z_harness_base() from plan-path.sh (5-tier fallback); Z_HARNESS_BASE_DIR overrides all tiers.",
     "log-event.sh and log-phase.sh honor Z_HARNESS_SLUG for slug-namespaced vs. legacy flat plan layout.",
     "log-event.sh mid-flight legacy detection is skipped entirely when Z_HARNESS_BASE_DIR is set to preserve the model.patch invariant.",
-    "log-event.sh emits a best-effort Hermes marker via emit-hermes-marker.sh whenever HERMES_MARKER_FILE is set; emit-hermes-marker.sh itself is a strict no-op when that env var is unset, so the check in log-event.sh is a fast-path, not the sole gate.",
     "log-phase.sh check_wall_ms emits telemetry_anomaly and suppresses *_end event when wall_ms > 604_800_000ms (overflow) or wall_ms < 0 (clock skew); exits 0 in both anomaly cases.",
     "log-phase.sh begin mode writes T0 to $TMPDIR/z-harness-phase/<key>.start so wall_ms survives across separate Bash tool-call boundaries; finish is fail-open (no stamp = emit nothing, not wall_ms:0).",
     "regenerate-memories-flat.py writes MEMORIES-FLAT.md atomically via os.replace on a PID+random-suffixed temp file.",
@@ -381,7 +380,6 @@
     "block-dangerous-git.sh accepts empty or non-JSON stdin gracefully (fails safe by allowing). Non-Bash tool calls pass through immediately.",
     "Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1 is a one-shot escape hatch (one invocation); it is not a permanent disable. Each override appends one audit entry.",
     "log-event.sh routes base-path resolution through z_harness_base() (plan-path.sh); when Z_HARNESS_BASE_DIR is set, mid-flight legacy detection is skipped entirely to preserve the model.patch invariant.",
-    "log-event.sh Hermes marker emission maps event kind context_pressure to marker kind heartbeat and everything else to status; the marker task field is SLUG (falling back to RUN, then the literal 'orchestration'). Failures are swallowed (>/dev/null 2>&1 || true) so a broken marker path never breaks the primary event write.",
     "log-phase.sh check_wall_ms threshold 604_800_000ms catches seconds-vs-ms overflow (1500x headroom); wall_ms_negative covers NTP jumps / clock skew.",
     "macOS BSD date lacks %3N support; log-phase.sh falls back to python3 time.time()*1000.",
     "log-event.sh silently wraps non-JSON payloads as {\"raw\": ...} instead of failing.",

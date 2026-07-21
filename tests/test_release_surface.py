@@ -222,6 +222,7 @@ def test_release_contract_is_positive_and_freezes_experiment_exclusions() -> Non
     assert "scripts/generate-workstreams.py" in inventory["scripts_backends"]
     assert "scripts/capture-release-host-evidence.py" in inventory["scripts_backends"]
     assert "scripts/check-pi-auth.sh" in inventory["scripts_backends"]
+    assert "scripts/emit-hermes-marker.sh" not in inventory["scripts_backends"]
     assert "z_harness_cli/release_host_evidence.py" in inventory["scripts_backends"]
     assert "docs/schemas/handoff.schema.json" in inventory["schemas"]
     assert "README.md" in inventory["public_documents"]
@@ -251,7 +252,7 @@ def test_prod_inventory_exactly_closes_retained_literal_support_scripts() -> Non
 
     inventory = set(release_surface.release_contract()["prod_inventory"]["scripts_backends"])
     newly_admitted = literal_scripts - _PREEXISTING_LITERAL_SCRIPT_PATHS
-    assert len(newly_admitted) == 58
+    assert len(newly_admitted) == 57
     assert newly_admitted <= inventory
     assert "scripts/notify-discord.sh" not in literal_scripts
     assert "scripts/notify-discord.sh" not in inventory
@@ -865,6 +866,7 @@ def test_stage_release_surface_is_positive_tracked_and_archive_reproducible(tmp_
     assert not (checkout_stage / "untracked-secret.txt").exists()
     assert not (checkout_stage / "personas").exists()
     assert not (checkout_stage / "_fragments").exists()
+    assert not (checkout_stage / "scripts" / "emit-hermes-marker.sh").exists()
     staged_skills = sorted(checkout_stage.glob("skills/*/SKILL.md"))
     assert staged_skills
     assert all(

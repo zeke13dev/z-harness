@@ -342,7 +342,7 @@
         "hermes-orchestration"
       ],
       "consumed_by": [],
-      "summary": "Slash-command contract catalogue covering explicit routing, z-plan's single-gate prose plan-brief + known-work DAG (work-graph.json), z-execute's INTENT-mode acceptance-evaluator/divergence-halt scheduler and native model routing, z-brainstorm/z-sharpen pre-planning, Hermes-marker integration (handoff/fanout/needs_input), and docs maintenance through doc-updater rather than ad hoc index edits.",
+      "summary": "Slash-command contract catalogue covering explicit routing, z-plan's single-gate prose plan-brief + known-work DAG (work-graph.json), z-execute's INTENT-mode acceptance-evaluator/divergence-halt scheduler and native model routing, z-brainstorm/z-sharpen pre-planning, and docs maintenance through doc-updater rather than ad hoc index edits.",
       "source_files": [
         "skills/z-amend/SKILL.md",
         "skills/z-attend/SKILL.md",
@@ -576,7 +576,7 @@
         "scripts/hermes/session.py",
         "docs/human/hermes-integration-v1.md"
       ],
-      "last_updated": "2026-07-09",
+      "last_updated": "2026-07-21",
       "confidence": "high",
       "depends_on": [
         "active-plan-registry",
@@ -971,7 +971,6 @@
         "scripts/lint-run-brief.sh",
         "_fragments/run-brief-finalize.md",
         "_fragments/run-brief-halt-finalize-execute.md",
-        "_fragments/run-brief-halt-finalize-plan.md",
         "scripts/z-preflight.sh",
         "scripts/z-teardown.sh",
         "skills/z-plan/SKILL.md"
@@ -1149,13 +1148,12 @@
         "scripts/check-timeout.sh",
         "scripts/config.py",
         "scripts/active-plan-registry.py",
-        "scripts/hermes/watchdog_webhook.py",
         "agents/reviewer.md",
         "agents/remote-runner.md",
         "skills/z-execute/SKILL.md",
         "skills/z-overnight/SKILL.md"
       ],
-      "last_updated": "2026-07-09",
+      "last_updated": "2026-07-21",
       "confidence": "medium",
       "depends_on": [
         "config",

@@ -46,6 +46,8 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, Path]:
     _git(repo, "add", "tracked.txt")
     _git(repo, "commit", "-qm", "candidate")
     sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", sha)
+    _git(repo, "checkout", "-q", "--detach", sha)
 
     candidate = tmp_path / "candidate"
     (candidate / ".codex-plugin").mkdir(parents=True)
@@ -310,13 +312,12 @@ def test_other_candidate_state_drift_rejected_without_evidence(tmp_path: Path, d
     assert not evidence.exists()
 
 
-def test_ref_drift_between_lanes_rejected_without_evidence(tmp_path: Path) -> None:
+def test_unrelated_ref_created_between_lanes_does_not_invalidate_evidence(tmp_path: Path) -> None:
     namespace, evidence = _fixture(tmp_path)
     repo = Path(namespace.repo_root)
     runner = FakeRunner(mutate=lambda index: _git(repo, "tag", "drift") if index == 0 else None)
-    with pytest.raises(verifier.VerificationError, match="changed"):
-        verifier.verify(namespace, runner=runner)
-    assert not evidence.exists()
+    verifier.verify(namespace, runner=runner)
+    assert evidence.exists()
 
 
 def test_c3_structured_failure_rejects_even_with_zero_exit(tmp_path: Path) -> None:
@@ -685,247 +686,115 @@ def test_cli_requires_every_explicit_input() -> None:
         verifier._parser().parse_args([])
 
 
-def _promotion_fixture(tmp_path: Path, *, promoted_path: str = "README.md"):
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    _git(origin, "init", "-q", "-b", "main")
-    _git(origin, "config", "user.email", "test@example.invalid")
-    _git(origin, "config", "user.name", "Promotion Test")
-    target = origin / promoted_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("source\n", encoding="utf-8")
-    _git(origin, "add", promoted_path)
-    _git(origin, "commit", "-qm", "source")
-    source_sha = _git(origin, "rev-parse", "HEAD")
-    _git(origin, "checkout", "-qb", "prod")
-    target.write_text("prod\n", encoding="utf-8")
-    _git(origin, "commit", "-qam", "prod")
-    prod_sha = _git(origin, "rev-parse", "HEAD")
-    _git(origin, "checkout", "-q", "main")
-
-    main_root = tmp_path / "main"
-    prod_root = tmp_path / "prod"
-    subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(origin), str(main_root)], check=True
-    )
-    subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(origin), str(prod_root)], check=True
-    )
-    _git(main_root, "checkout", "-q", "main")
-    _git(prod_root, "checkout", "-q", "prod")
-    _git(prod_root, "branch", "watch", source_sha)
-
-    base_namespace, _ = _fixture(tmp_path / "candidate-inputs")
-    candidate_root = Path(base_namespace.candidate_root)
-    artifacts = Path(base_namespace.artifacts)
-    host_evidence_root = Path(base_namespace.host_evidence_root)
-    evidence_path = tmp_path / "candidate-evidence.json"
-    refs_fingerprint = verifier._promotion_refs_fingerprint(prod_root.resolve())
-    fingerprints = {
-        "candidate_fingerprint": verifier._inventory(candidate_root)[0],
-        "artifacts_fingerprint": verifier._inventory(artifacts)[0],
-        "host_evidence_fingerprint": verifier._inventory(host_evidence_root)[0],
-    }
-    combined = verifier._sha256_bytes(
-        verifier._canonical_json(
-            {
-                "head": prod_sha,
-                "refs": refs_fingerprint,
-                "candidate": fingerprints["candidate_fingerprint"],
-                "artifacts": fingerprints["artifacts_fingerprint"],
-                "host_evidence": fingerprints["host_evidence_fingerprint"],
-            }
-        )
-    )
-    fingerprints["combined_fingerprint"] = combined
-    evidence = {
-        "schema_version": 1,
-        "status": "passed",
-        "candidate_version": "0.9.0-beta.2",
-        "candidate_sha": prod_sha,
-        "inputs": {
-            "repo_root": str(prod_root.resolve()),
-            "candidate_root": str(candidate_root.resolve()),
-            "artifacts": str(artifacts.resolve()),
-            "host_evidence_root": str(host_evidence_root.resolve()),
-            **fingerprints,
-        },
-        "git": {
-            "initial_head": prod_sha,
-            "final_head": prod_sha,
-            "initial_status": "",
-            "final_status": "",
-            "initial_refs_fingerprint": refs_fingerprint,
-            "final_refs_fingerprint": refs_fingerprint,
-        },
-        "lanes": [
-            {
-                "id": lane_id,
-                "phase": "fast" if lane_id in verifier.FAST_LANE_IDS else "slow",
-                "status": "passed",
-                "exit_status": 0,
-                "input_fingerprint": combined,
-            }
-            for lane_id in (*verifier.FAST_LANE_IDS, *verifier.SLOW_LANE_IDS)
-        ],
-    }
-    evidence["evidence_fingerprint"] = verifier._sha256_bytes(
-        verifier._canonical_json(evidence)
-    )
-    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-    authorization = tmp_path / "promotion-authorization.json"
+def _authorization_fixture(tmp_path: Path):
+    verification, evidence = _fixture(tmp_path / "candidate-inputs")
+    verifier.verify(verification, runner=FakeRunner())
+    authorization = tmp_path / "release-authorization.json"
     namespace = argparse.Namespace(
-        mode="promotion-preflight",
-        source_sha=source_sha,
-        prod_sha=prod_sha,
-        repo_root=str(main_root),
-        prod_root=str(prod_root),
-        candidate_root=str(candidate_root),
-        artifacts=str(artifacts),
-        host_evidence_root=str(host_evidence_root),
-        evidence=str(evidence_path),
+        mode="authorization-preflight",
+        candidate_version=verification.candidate_version,
+        candidate_sha=verification.candidate_sha,
+        repo_root=verification.repo_root,
+        candidate_root=verification.candidate_root,
+        artifacts=verification.artifacts,
+        host_evidence_root=verification.host_evidence_root,
+        evidence=str(evidence),
         authorization_out=str(authorization),
         authorization=None,
     )
-    return namespace, authorization, evidence_path
+    return namespace, authorization, evidence
 
 
-def test_promotion_preflight_and_freshness_bind_exact_refs_diff_and_all_evidence(
-    tmp_path: Path,
-) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    before = {
-        "main": _git(Path(namespace.repo_root), "status", "--porcelain=v1"),
-        "prod": _git(Path(namespace.prod_root), "status", "--porcelain=v1"),
-        "main_head": _git(Path(namespace.repo_root), "rev-parse", "HEAD"),
-        "prod_head": _git(Path(namespace.prod_root), "rev-parse", "HEAD"),
-    }
-    payload = verifier.promotion_preflight(namespace)
-    assert payload["source_sha"] == namespace.source_sha
-    assert payload["prod_sha"] == namespace.prod_sha
-    assert payload["authoritative_refs"] == {
-        "main": "refs/remotes/origin/main",
-        "prod": "refs/remotes/origin/prod",
-    }
-    assert payload["candidate_version"] == "0.9.0-beta.2"
-    assert payload["expected_tag"] == "v0.9.0-beta.2"
-    assert payload["expected_tag_absent"] is True
-    assert payload["verified_lane_ids"] == [
-        *verifier.FAST_LANE_IDS,
-        *verifier.SLOW_LANE_IDS,
-    ]
-    assert payload["diff"] == [
-        {"status": "M", "path": "README.md", "owner": "public_documents"}
-    ]
-    saved = json.loads(authorization.read_text(encoding="utf-8"))
-    assert saved == payload
+def _make_fresh(namespace: argparse.Namespace, authorization: Path) -> None:
     namespace.mode = "publication-freshness"
     namespace.authorization = str(authorization)
     namespace.authorization_out = None
-    assert verifier.publication_freshness(namespace) == payload
-    assert before == {
-        "main": _git(Path(namespace.repo_root), "status", "--porcelain=v1"),
-        "prod": _git(Path(namespace.prod_root), "status", "--porcelain=v1"),
-        "main_head": _git(Path(namespace.repo_root), "rev-parse", "HEAD"),
-        "prod_head": _git(Path(namespace.prod_root), "rev-parse", "HEAD"),
+
+
+def test_authorization_has_exact_single_candidate_schema_and_round_trips(tmp_path: Path) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
+    payload = verifier.authorization_preflight(namespace)
+    assert set(payload) == {
+        "candidate_sha",
+        "authoritative_ref",
+        "candidate_version",
+        "canonical_tag",
+        "candidate_inventory_fingerprint",
+        "artifact_inventory_fingerprint",
+        "host_evidence_inventory_fingerprint",
+        "release_contract_fingerprint",
+        "evidence_fingerprint",
+        "authoritative_ref_fingerprint",
+        "required_lane_ids",
     }
+    assert payload["candidate_sha"] == namespace.candidate_sha
+    assert payload["authoritative_ref"] == "refs/remotes/origin/main"
+    assert payload["canonical_tag"] == "v0.9.0-beta.2"
+    assert payload["required_lane_ids"] == [*verifier.FAST_LANE_IDS, *verifier.SLOW_LANE_IDS]
+    assert json.loads(authorization.read_text(encoding="utf-8")) == payload
+    _make_fresh(namespace, authorization)
+    assert verifier.publication_freshness(namespace) == payload
 
 
-def test_promotion_requires_source_symbolically_checked_out_on_main(tmp_path: Path) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    main_root = Path(namespace.repo_root)
-    _git(main_root, "checkout", "--detach", namespace.source_sha)
-    with pytest.raises(verifier.VerificationError, match="symbolic-ref|checked out on"):
-        verifier.promotion_preflight(namespace)
+def test_detached_candidate_is_required_without_a_symbolic_local_main(tmp_path: Path) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
+    detached = subprocess.run(
+        ["git", "-C", namespace.repo_root, "symbolic-ref", "-q", "HEAD"], check=False
+    )
+    assert detached.returncode == 1
+    verifier.authorization_preflight(namespace)
+    assert authorization.exists()
+
+
+@pytest.mark.parametrize("drift", ["dirty", "attached", "wrong-head", "wrong-origin-main"])
+def test_authorization_rejects_dirty_or_wrong_checkout(tmp_path: Path, drift: str) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
+    repo = Path(namespace.repo_root)
+    if drift == "dirty":
+        (repo / "dirty.txt").write_text("dirty", encoding="utf-8")
+    elif drift == "attached":
+        _git(repo, "checkout", "-q", "-b", "local-main")
+    else:
+        other = _git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "other")
+        if drift == "wrong-head":
+            _git(repo, "checkout", "-q", "--detach", other)
+        else:
+            _git(repo, "update-ref", "refs/remotes/origin/main", other)
+    with pytest.raises(verifier.VerificationError, match="clean|detached|HEAD|origin/main"):
+        verifier.authorization_preflight(namespace)
     assert not authorization.exists()
 
 
-def test_promotion_rejects_noncanonical_candidate_evidence_version(tmp_path: Path) -> None:
-    namespace, authorization, evidence_path = _promotion_fixture(tmp_path)
+def test_authorization_rejects_version_or_tag_identity_mismatch(tmp_path: Path) -> None:
+    namespace, authorization, evidence_path = _authorization_fixture(tmp_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    evidence["candidate_version"] = "v0.9.0-beta.2"
-    evidence.pop("evidence_fingerprint")
+    evidence["candidate_version"] = "0.9.0"
     evidence["evidence_fingerprint"] = verifier._sha256_bytes(
-        verifier._canonical_json(evidence)
+        verifier._canonical_json({k: v for k, v in evidence.items() if k != "evidence_fingerprint"})
     )
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-    with pytest.raises(verifier.VerificationError, match="not canonical"):
-        verifier.promotion_preflight(namespace)
+    with pytest.raises(verifier.VerificationError, match="version"):
+        verifier.authorization_preflight(namespace)
     assert not authorization.exists()
 
 
-def test_promotion_rejects_preexisting_exact_derived_release_tag(tmp_path: Path) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    _git(Path(namespace.prod_root), "tag", "v0.9.0-beta.2", namespace.prod_sha)
-    with pytest.raises(verifier.VerificationError, match="release tag already exists"):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
+def test_canonical_tag_is_rejected_but_unrelated_refs_and_tags_are_allowed(tmp_path: Path) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
+    repo = Path(namespace.repo_root)
+    _git(repo, "tag", "unrelated-v1")
+    _git(repo, "branch", "unrelated-local", namespace.candidate_sha)
+    verifier.authorization_preflight(namespace)
+    _make_fresh(namespace, authorization)
+    assert verifier.publication_freshness(namespace)["candidate_sha"] == namespace.candidate_sha
+
+    namespace, authorization, _ = _authorization_fixture(tmp_path / "canonical")
+    _git(Path(namespace.repo_root), "tag", "v0.9.0-beta.2")
+    with pytest.raises(verifier.VerificationError, match="canonical release tag"):
+        verifier.authorization_preflight(namespace)
 
 
-@pytest.mark.parametrize(
-    "promoted_path, message",
-    [
-        ("skills/z-research/SKILL.md", "excluded experiment"),
-        ("unreviewed.txt", "outside C1's positive inventory"),
-    ],
-)
-def test_promotion_default_denies_experiments_and_unowned_paths(
-    tmp_path: Path, promoted_path: str, message: str
-) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path, promoted_path=promoted_path)
-    with pytest.raises(verifier.VerificationError, match=message):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
-
-
-@pytest.mark.parametrize("drift", ["dirty-main", "wrong-main-ref", "wrong-prod-ref"])
-def test_promotion_rejects_dirty_or_unexpected_refs(tmp_path: Path, drift: str) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    if drift == "dirty-main":
-        (Path(namespace.repo_root) / "dirty.txt").write_text("dirty", encoding="utf-8")
-    elif drift == "wrong-main-ref":
-        namespace.source_sha = namespace.prod_sha
-    else:
-        namespace.prod_sha = namespace.source_sha
-    with pytest.raises(verifier.VerificationError, match="clean|HEAD|refs/heads"):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
-
-
-@pytest.mark.parametrize("fabricated", ["main", "prod"])
-def test_promotion_rejects_fabricated_local_refs_against_authoritative_remote(
-    tmp_path: Path, fabricated: str
-) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    if fabricated == "main":
-        namespace.source_sha = namespace.prod_sha
-        _git(Path(namespace.repo_root), "reset", "--hard", namespace.prod_sha)
-        expected = "refs/remotes/origin/main"
-    else:
-        namespace.prod_sha = namespace.source_sha
-        _git(Path(namespace.prod_root), "reset", "--hard", namespace.source_sha)
-        expected = "refs/remotes/origin/prod"
-
-    with pytest.raises(verifier.VerificationError, match=expected):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
-
-
-def test_promotion_rejects_source_equal_prod_empty_diff_bypass(tmp_path: Path) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    namespace.source_sha = namespace.prod_sha
-    _git(Path(namespace.repo_root), "reset", "--hard", namespace.prod_sha)
-
-    assert _git(
-        Path(namespace.repo_root), "diff", "--name-only", namespace.source_sha, namespace.prod_sha
-    ) == ""
-    with pytest.raises(verifier.VerificationError, match="refs/remotes/origin/main"):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
-
-
-def test_promotion_partial_evidence_never_creates_authorization(tmp_path: Path) -> None:
-    namespace, authorization, evidence_path = _promotion_fixture(tmp_path)
+def test_partial_or_stale_evidence_never_authorizes(tmp_path: Path) -> None:
+    namespace, authorization, evidence_path = _authorization_fixture(tmp_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     evidence["lanes"].pop()
     evidence["evidence_fingerprint"] = verifier._sha256_bytes(
@@ -933,103 +802,82 @@ def test_promotion_partial_evidence_never_creates_authorization(tmp_path: Path) 
     )
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     with pytest.raises(verifier.VerificationError, match=r"complete 5 fast \+ 7 slow"):
-        verifier.promotion_preflight(namespace)
+        verifier.authorization_preflight(namespace)
     assert not authorization.exists()
 
 
-def test_promotion_rejects_evidence_ref_fingerprint_mismatching_current_prod_refs(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "drift", ["artifact", "evidence", "authorization-sha", "authorization-tag"]
+)
+def test_publication_freshness_rejects_changed_artifacts_evidence_or_authorization(
+    tmp_path: Path, drift: str
 ) -> None:
-    namespace, authorization, evidence_path = _promotion_fixture(tmp_path)
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    stale_refs = "f" * 64
-    evidence["git"]["initial_refs_fingerprint"] = stale_refs
-    evidence["git"]["final_refs_fingerprint"] = stale_refs
-    combined = verifier._sha256_bytes(
-        verifier._canonical_json(
-            {
-                "head": namespace.prod_sha,
-                "refs": stale_refs,
-                "candidate": evidence["inputs"]["candidate_fingerprint"],
-                "artifacts": evidence["inputs"]["artifacts_fingerprint"],
-                "host_evidence": evidence["inputs"]["host_evidence_fingerprint"],
-            }
-        )
-    )
-    evidence["inputs"]["combined_fingerprint"] = combined
-    for lane in evidence["lanes"]:
-        lane["input_fingerprint"] = combined
-    evidence["evidence_fingerprint"] = verifier._sha256_bytes(
-        verifier._canonical_json({k: v for k, v in evidence.items() if k != "evidence_fingerprint"})
-    )
-    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-    with pytest.raises(verifier.VerificationError, match="prod ref fingerprint is stale"):
-        verifier.promotion_preflight(namespace)
-    assert not authorization.exists()
-
-
-@pytest.mark.parametrize("drift", ["artifact", "evidence", "authorization"])
-def test_publication_freshness_rejects_every_stale_binding(tmp_path: Path, drift: str) -> None:
-    namespace, authorization, evidence_path = _promotion_fixture(tmp_path)
-    verifier.promotion_preflight(namespace)
-    namespace.mode = "publication-freshness"
-    namespace.authorization = str(authorization)
-    namespace.authorization_out = None
+    namespace, authorization, evidence_path = _authorization_fixture(tmp_path)
+    verifier.authorization_preflight(namespace)
+    _make_fresh(namespace, authorization)
     if drift == "artifact":
         (Path(namespace.artifacts) / "install.sh").write_text("drift", encoding="utf-8")
     elif drift == "evidence":
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        evidence["lanes"].pop()
-        evidence["evidence_fingerprint"] = verifier._sha256_bytes(
-            verifier._canonical_json({k: v for k, v in evidence.items() if k != "evidence_fingerprint"})
-        )
-        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        evidence_path.write_text("{}", encoding="utf-8")
+    elif drift == "authorization-sha":
+        record = json.loads(authorization.read_text(encoding="utf-8"))
+        record["candidate_sha"] = "f" * 40
+        authorization.write_text(json.dumps(record), encoding="utf-8")
     else:
         record = json.loads(authorization.read_text(encoding="utf-8"))
-        record["prod_sha"] = "f" * 40
+        record["canonical_tag"] = "v9.9.9"
         authorization.write_text(json.dumps(record), encoding="utf-8")
-    with pytest.raises(verifier.VerificationError, match="stale|fingerprint|complete"):
+    with pytest.raises(verifier.VerificationError, match="stale|fingerprint|evidence"):
         verifier.publication_freshness(namespace)
 
 
-def test_publication_freshness_rejects_tag_created_after_preflight(tmp_path: Path) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    verifier.promotion_preflight(namespace)
-    namespace.authorization = str(authorization)
-    namespace.authorization_out = None
-    _git(Path(namespace.prod_root), "tag", "v0.9.0-beta.2", namespace.prod_sha)
-    with pytest.raises(verifier.VerificationError, match="release tag already exists"):
+def test_publication_rejects_moved_main_and_preflight_toctou(tmp_path: Path) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
+    verifier.authorization_preflight(namespace)
+    _make_fresh(namespace, authorization)
+    repo = Path(namespace.repo_root)
+    moved = _git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "moved main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", moved)
+    with pytest.raises(verifier.VerificationError, match="origin/main"):
         verifier.publication_freshness(namespace)
 
+    namespace, authorization, _ = _authorization_fixture(tmp_path / "toctou")
+    repo = Path(namespace.repo_root)
+    moved = _git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "toctou")
+    original = verifier._canonical_tag_exists
+    calls = 0
 
-@pytest.mark.parametrize("branch", ["main", "prod"])
-def test_publication_freshness_rejects_authoritative_remote_ref_movement(
-    tmp_path: Path, branch: str
-) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    verifier.promotion_preflight(namespace)
-    namespace.authorization = str(authorization)
-    namespace.authorization_out = None
+    def move_during_preflight(root: Path, tag: str) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            _git(repo, "update-ref", "refs/remotes/origin/main", moved)
+        return original(root, tag)
 
-    checkout = Path(namespace.repo_root if branch == "main" else namespace.prod_root)
-    origin = Path(_git(checkout, "remote", "get-url", "origin"))
-    _git(origin, "checkout", "-q", branch)
-    moved = origin / "README.md"
-    moved.write_text(f"{branch} moved after authorization\n", encoding="utf-8")
-    _git(origin, "commit", "-qam", f"move {branch}")
-    if branch != "main":
-        _git(origin, "checkout", "-q", "main")
-    _git(
-        checkout,
-        "fetch",
-        "--force",
-        "--no-tags",
-        "origin",
-        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
-    )
+    with patch.object(verifier, "_canonical_tag_exists", side_effect=move_during_preflight), pytest.raises(
+        verifier.VerificationError, match="origin/main|not exact"
+    ):
+        verifier.authorization_preflight(namespace)
 
-    with pytest.raises(
-        verifier.VerificationError, match=f"refs/remotes/origin/{branch}"
+
+def test_publication_rejects_changed_release_contract_or_required_lanes(tmp_path: Path) -> None:
+    namespace, authorization, _ = _authorization_fixture(tmp_path / "contract")
+    verifier.authorization_preflight(namespace)
+    _make_fresh(namespace, authorization)
+    changed_contract = json.loads(json.dumps(verifier.release_contract()))
+    changed_contract["generation_inputs"].append("new-release-input.md")
+    with (
+        patch.object(verifier, "release_contract", return_value=changed_contract),
+        patch.object(verifier, "validate_release_contract"),
+        pytest.raises(verifier.VerificationError, match="stale"),
+    ):
+        verifier.publication_freshness(namespace)
+
+    namespace, authorization, _ = _authorization_fixture(tmp_path / "lanes")
+    verifier.authorization_preflight(namespace)
+    _make_fresh(namespace, authorization)
+    with patch.object(verifier, "SLOW_LANE_IDS", (*verifier.SLOW_LANE_IDS, "new-required-lane")), pytest.raises(
+        verifier.VerificationError, match="complete"
     ):
         verifier.publication_freshness(namespace)
 
@@ -1052,46 +900,26 @@ def test_publication_assets_emits_only_exact_metadata_validated_names(tmp_path: 
     assert "*" not in output and "?" not in output and "[" not in output
 
 
-@pytest.mark.parametrize("ref_drift", ["add", "move", "delete"])
-def test_publication_freshness_rejects_branch_ref_drift(
-    tmp_path: Path, ref_drift: str
-) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
-    verifier.promotion_preflight(namespace)
-    namespace.authorization = str(authorization)
-    namespace.authorization_out = None
-    prod_root = Path(namespace.prod_root)
-    if ref_drift == "add":
-        _git(prod_root, "branch", "added-after-preflight", namespace.source_sha)
-    elif ref_drift == "move":
-        _git(prod_root, "branch", "-f", "watch", namespace.prod_sha)
-    else:
-        _git(prod_root, "branch", "-D", "watch")
-    with pytest.raises(verifier.VerificationError, match="prod ref fingerprint is stale"):
-        verifier.publication_freshness(namespace)
-
-
-def test_promotion_git_allowlist_rejects_mutation_commands(tmp_path: Path) -> None:
-    namespace, _, _ = _promotion_fixture(tmp_path)
-    for command in (("checkout", "prod"), ("tag", "v1"), ("push", "origin", "prod")):
+def test_release_git_allowlist_rejects_mutation_commands(tmp_path: Path) -> None:
+    namespace, _, _ = _authorization_fixture(tmp_path)
+    for command in (("checkout", "main"), ("tag", "v1"), ("push", "origin", "main")):
         with pytest.raises(verifier.VerificationError, match="read-only allowlist"):
-            verifier._promotion_git(Path(namespace.repo_root), *command)
+            verifier._release_git(Path(namespace.repo_root), *command)
 
 
 def test_cli_modes_require_only_their_explicit_inputs(tmp_path: Path) -> None:
-    namespace, authorization, _ = _promotion_fixture(tmp_path)
+    namespace, authorization, _ = _authorization_fixture(tmp_path)
     args = [
-        "--mode", "promotion-preflight",
-        "--source-sha", namespace.source_sha,
-        "--prod-sha", namespace.prod_sha,
+        "--mode", "authorization-preflight",
+        "--candidate-version", namespace.candidate_version,
+        "--candidate-sha", namespace.candidate_sha,
         "--repo-root", namespace.repo_root,
-        "--prod-root", namespace.prod_root,
         "--candidate-root", namespace.candidate_root,
         "--artifacts", namespace.artifacts,
         "--host-evidence-root", namespace.host_evidence_root,
         "--evidence", namespace.evidence,
         "--authorization-out", str(authorization),
     ]
-    assert verifier._parser().parse_args(args).mode == "promotion-preflight"
+    assert verifier._parser().parse_args(args).mode == "authorization-preflight"
     with pytest.raises(SystemExit):
         verifier._parser().parse_args(args[:-2])

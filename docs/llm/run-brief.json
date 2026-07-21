@@ -16,7 +16,6 @@
     "scripts/z-teardown.sh",
     "_fragments/run-brief-finalize.md",
     "_fragments/run-brief-halt-finalize-execute.md",
-    "_fragments/run-brief-halt-finalize-plan.md",
     "skills/z-plan/SKILL.md"
   ],
   "confidence": "high",
@@ -113,13 +112,6 @@
       "summary": "Halt-path preamble for /z-execute; sets outcome + next then includes the shared finalize fragment. Actually wired via a real (unfenced) include marker."
     },
     {
-      "file": "_fragments/run-brief-halt-finalize-plan.md",
-      "line": 1,
-      "symbol": "run-brief-halt-finalize-plan",
-      "kind": "module",
-      "summary": "New /z-plan-flavored halt-finalize preamble fragment (decisions.md/PLAN.md/SPEC.md artifact profile), mirrors the -execute fragment's shape. EXISTS ON DISK BUT NOT ACTUALLY INCLUDED ANYWHERE: all 14 references in skills/z-plan/SKILL.md are prose or fenced # include: comments (inert, skipped by expand_includes); /z-plan's halt sites manually inline the equivalent steps instead."
-    },
-    {
       "file": "scripts/lint-run-brief.sh",
       "line": 1,
       "symbol": "lint-run-brief.sh",
@@ -161,7 +153,6 @@
     "For migrated commands, run-brief.sh finalize is called twice on the normal path (finalize fragment + z-teardown.sh) — both idempotent, intentional, not a bug."
   ],
   "gotchas": [
-    "_fragments/run-brief-halt-finalize-plan.md exists on disk (added this refactor) but has NO real (unfenced) include marker anywhere in the repo — all 14 references in skills/z-plan/SKILL.md are prose or fenced `# include:` comments that expand_includes skips. /z-plan's halt sites manually duplicate the fragment's body inline instead of including it. Correct runtime behavior, dead fragment; no lint catches this.",
     "_fragments/run-brief-finalize.md line 16 says '/z-do uses lite; all other v1 registry commands use full' — /z-do was removed from the registry this refactor. Stale source text; does not change documented runtime behavior (lite remains downgrade-only, no command declares it at init).",
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
     "Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses ensure_approach_for_full, not lite downgrade.",
@@ -177,8 +168,7 @@
     "zplan_cost_gate_halt_finalize moved from an inlined function at skills/z-plan/SKILL.md:982 (old) to a thin wrapper at line 659 delegating to scripts/zplan-cost-gate-runtime.sh halt-finalize; entry-point line number corrected this refresh.",
     "For migrated commands (/z-plan, /z-audit, /z-fix, /z-amend), run-brief.sh finalize runs twice on the success path (once via the included finalize fragment, once via z-teardown.sh) — intentional, both idempotent.",
     "/z-stats and /z-explore route through z-preflight.sh/z-teardown.sh for lifecycle bookkeeping without joining the run-brief registry; /z-stats writes run-brief.json but never includes _fragments/run-brief-finalize.md, so it gets no chat render, no push, no --require gate — presence of run-brief.json does not imply a wired Run Brief.",
-    "The only live entry into lite profile is run-brief.sh's automatic apply_lite_downgrade on a full-profile halt with no artifact; no command declares the lite profile at init time.",
-    "docs/llm/INDEX.json's run-brief entry's source_file list, prior to this refresh, is missing scripts/z-preflight.sh, scripts/z-teardown.sh, and _fragments/run-brief-halt-finalize-plan.md; /z-maintain-docs owns applying the updated list from this refreshed concept JSON."
+    "The only live entry into lite profile is run-brief.sh's automatic apply_lite_downgrade on a full-profile halt with no artifact; no command declares the lite profile at init time."
   ],
   "memories": []
 }

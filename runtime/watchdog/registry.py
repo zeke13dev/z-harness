@@ -1,4 +1,8 @@
-"""sessions.json registry primitives for the session-watchdog daemon.
+"""Experimental sessions.json registry primitives for the watchdog daemon.
+
+This module is incubating, source-only functionality. It is excluded from
+production release artifacts and makes no compatibility promise until the
+watchdog is explicitly promoted to the production surface.
 
 Purpose (T003, criterion #9): define the ``sessions.json`` record schema and the
 low-level, dependency-free primitives every later watchdog level composes:
@@ -8,7 +12,7 @@ low-level, dependency-free primitives every later watchdog level composes:
 - the session lifecycle + handoff-choreography state enum (``VALID_STATES``) and
   a hard-fail transition validator (``transition`` / ``is_valid_transition``);
 - the ``ws-<uuid4>`` session-id generator and ``zw-<slug>-<shortid>`` tmux-name
-  generator — both irreversible public-surface contracts;
+  generator — both internal watchdog contracts during incubation;
 - a flock-guarded temp+``os.replace`` atomic JSON write (``atomic_write_json``),
   the flush primitive a SIGTERM handler will call in a later level;
 - a daemon single-instance pidfile lock (``acquire_single_instance_lock``) with a
@@ -29,7 +33,8 @@ Design decisions:
   each record's ``parent_id`` / ``children`` fields — the watchdog never takes
   registry ownership of the sessions it watches.
 - The record schema, ``SCHEMA_VERSION``, and the ``ws-`` / ``zw-`` prefixes are
-  frozen public surface (see package docstring).
+  internally frozen for watchdog consistency, but are not yet a promoted
+  public compatibility surface (see package docstring).
 
 Concurrency (STYLE.md:P-006): ``atomic_write_json`` serializes writers on a
 sidecar ``<path>.lock`` (``flock`` LOCK_EX) and publishes via ``os.replace`` so a

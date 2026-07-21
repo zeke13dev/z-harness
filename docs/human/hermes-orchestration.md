@@ -1,6 +1,6 @@
 # Hermes Orchestration
 
-> Last updated: 2026-07-03
+> Last updated: 2026-07-21
 > Covers source: scripts/hermes-execute.py, scripts/hermes/config.py, scripts/hermes/cross_plan.py, scripts/generate-workstreams.py, scripts/hermes/merge.py, scripts/hermes/schema.py, scripts/hermes/worktree.py, scripts/hermes/session.py, scripts/hermes/discord_relay.py, scripts/hermes/so_mcp.py, scripts/so-mcp-server.py, docs/human/hermes-integration-v1.md
 
 ## Overview
@@ -28,10 +28,9 @@ session lifecycle internally and exposes structured tools:
 `so_read`, and `so_list_sessions`. The Discord layer remains a thin
 parse/authorize/relay path.
 
-`so_start_fanout` is the MCP bridge for `/z-plan-split` handoff fanout. It
-validates a `handoff_fanout` payload, loads `workstreams.json`, skips failed
-workstreams by default, starts one child session per ready workstream, and
-records fanout metadata on each `SoSessionRecord` and signal payload.
+`so_start_fanout` loads `workstreams.json`, skips failed workstreams by default,
+starts one child session per ready workstream, and records fanout metadata on
+each `SoSessionRecord` and signal payload.
 
 The orchestrator persists lightweight MCP session metadata in
 `so-mcp-sessions.json` under the configured Hermes state root. The metadata
@@ -50,11 +49,10 @@ directory from `workstreams.json`. This path does not need to contain
 `TASKS.md`; legacy Hermes `pi z-execute --tasks=<path>` behavior remains
 separate from split-plan MCP fanout.
 
-The retired tmux/job-registry/watchdog backend files remain only as reference:
-`scripts/hermes/so_jobs.py`, `scripts/hermes/supervisor.py`,
-`scripts/hermes/watchdog_webhook.py`, `scripts/notify-watchdog.sh`, and
-`scripts/hang-check.sh` are deprecated for Discord `so`. `scripts/hermes/session.py`
-remains for legacy Hermes `pi z-execute` lifecycle helpers, not Discord `so`.
+The retired tmux job-registry, supervisor, and webhook backend has been removed.
+The generic watchdog scripts are separate from Discord `so` orchestration.
+`scripts/hermes/session.py` remains for legacy Hermes `pi z-execute` lifecycle
+helpers, not Discord `so`.
 
 ## Scheduling model
 

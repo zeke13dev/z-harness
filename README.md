@@ -94,12 +94,12 @@ Research-heavy commands remain on the development surface until they are explici
 
 The public artifact set is defined by a positive, default-deny release contract. Unclassified files are rejected rather than silently shipped. Release candidates are assembled deterministically and bound to:
 
-- the exact reviewed `main` and promoted `prod` commits;
+- one exact reviewed commit at the freshly fetched protected `main` tip;
 - isolated installed wheel and plugin payloads;
 - host-execution evidence for every public native claim; and
-- the exact protected workflow run, artifacts, and SHA-256 digests used for publication.
+- the exact workflow run, release contract, required verification lanes, artifacts, and SHA-256 digests used for publication.
 
-The publication workflow fails closed when any identity, provenance, freshness, or host-evidence check does not match. See [CAPABILITIES.md](CAPABILITIES.md) and the [installation guide](docs/human/INSTALL.md) for the detailed contract.
+Evidence, conformance, and publication each independently refetch `origin/main` and fail closed when any candidate identity, freshness, release-contract, artifact, or host-evidence binding does not match. Branch protection is configured administratively as described in the [GitHub release setup guide](docs/human/GITHUB_RELEASE_SETUP.md); a Git fetch proves the branch tip, not its ruleset configuration. See [CAPABILITIES.md](CAPABILITIES.md) and the [installation guide](docs/human/INSTALL.md) for the detailed contract.
 
 ## Development
 

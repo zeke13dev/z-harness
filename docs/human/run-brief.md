@@ -1,7 +1,7 @@
 # run-brief — Unified command completion receipt
 
 > Last updated: 2026-07-11
-> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/render-cost-summary.py, scripts/notify-discord.sh, scripts/lint-run-brief.sh, scripts/z-preflight.sh, scripts/z-teardown.sh, _fragments/run-brief-finalize.md, _fragments/run-brief-halt-finalize-execute.md, _fragments/run-brief-halt-finalize-plan.md, skills/z-plan/SKILL.md
+> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/render-cost-summary.py, scripts/notify-discord.sh, scripts/lint-run-brief.sh, scripts/z-preflight.sh, scripts/z-teardown.sh, _fragments/run-brief-finalize.md, _fragments/run-brief-halt-finalize-execute.md, skills/z-plan/SKILL.md
 
 ## Overview
 
@@ -130,13 +130,12 @@ Secondary commands may be added post-v1 by extending the registry JSON.
 | `scripts/z-teardown.sh` | One-call Finalize ceremony (**`run-brief.sh finalize`** → claim release → deregister → run_end event), idempotent, counterpart to `z-preflight.sh`. |
 | `_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `<!-- include: _fragments/run-brief-finalize.md -->` markers, expanded at export time by `runtime/drivers/_export_utils.py`. |
 | `_fragments/run-brief-halt-finalize-execute.md` | Halt-path preamble for `/z-execute`; sets outcome + next then includes finalize fragment. Actually wired via a real (unfenced) include marker. |
-| `_fragments/run-brief-halt-finalize-plan.md` | New `/z-plan`-flavored halt-finalize preamble fragment (sets outcome/next with `/z-plan`'s `decisions.md`/`PLAN.md`/`SPEC.md` artifact profile, then includes the shared finalize fragment) — mirrors the `-execute` fragment's shape. **Exists on disk but has no real (unfenced) `<!-- include: -->` marker anywhere in the repo as of this refresh** — every reference to it in `skills/z-plan/SKILL.md` (14 occurrences) is either prose or a `# include: ...` comment inside a fenced bash block, which `expand_includes` explicitly skips. `/z-plan`'s actual halt sites manually duplicate this fragment's body inline instead of including it. See gotchas. |
 
 `_fragments/zplan-cost-gate-reference.md` is a related-but-separate fragment (z-plan's cost-gate telemetry/decision-table reference, extracted from `skills/z-plan/SKILL.md` at T113) — it is genuinely wired via a real include marker at `skills/z-plan/SKILL.md:667`, and its "Cleanup matrix" documents when the cost gate calls the run-brief halt-finalize wrapper (`zplan_cost_gate_halt_finalize`, see Finalize sequence below), but the file itself belongs to the z-plan cost-gate concept, not this one.
 
 Golden fixtures: `tests/run-brief-fixtures/full-shipped/run-brief.json`, `tests/run-brief-fixtures/lite-halted/run-brief.json`.
 
-**Fragment paths corrected in an earlier refresh:** the doc/index previously listed a fragment path rooted under the old `commands/` tier — `_fragments/run-brief-finalize.md` — and two files that never existed anywhere in git history, also rooted under that same retired `commands/` tier: `_fragments/run-brief-halt-finalize-implement-all.md` and `_fragments/run-brief-halt-finalize-implement-next.md` (leftovers from before the `z-implement-all`/`z-implement-next` → `z-execute` rename in commit `2731f1d`, and from the `commands/` → `skills/` migration). Real path is `_fragments/run-brief-finalize.md`; the real halt fragment for the unified implement command is `_fragments/run-brief-halt-finalize-execute.md`. That correction remains valid — it is unrelated to the newer `run-brief-halt-finalize-plan.md` wiring gap documented above.
+**Fragment paths corrected in an earlier refresh:** the doc/index previously listed a fragment path rooted under the old `commands/` tier — `_fragments/run-brief-finalize.md` — and two files that never existed anywhere in git history, also rooted under that same retired `commands/` tier: `_fragments/run-brief-halt-finalize-implement-all.md` and `_fragments/run-brief-halt-finalize-implement-next.md` (leftovers from before the `z-implement-all`/`z-implement-next` → `z-execute` rename in commit `2731f1d`, and from the `commands/` → `skills/` migration). Real path is `_fragments/run-brief-finalize.md`; the real halt fragment for the unified implement command is `_fragments/run-brief-halt-finalize-execute.md`.
 
 ---
 
@@ -169,7 +168,7 @@ Steps follow the canonical ordering in `_fragments/run-brief-finalize.md`.
 
 Skip authoring on halt/abort paths — the lite downgrade handles those cases.
 
-`/z-plan`'s halt paths (Phase 7 TASKS guards, the cost-gate wrapper function `zplan_cost_gate_halt_finalize` at `skills/z-plan/SKILL.md:659` — a thin shim that now shells out to `scripts/zplan-cost-gate-runtime.sh halt-finalize` rather than inlining the halt-finalize steps itself — and the general "Run Brief — halt finalize" reference block) all reuse the same generic `_fragments/run-brief-finalize.md` include, manually inlining the same outcome/next-setting steps that `_fragments/run-brief-halt-finalize-plan.md` now packages (that packaged fragment exists but is not yet actually included anywhere — see the artifacts table above and gotchas below), then call `scripts/z-teardown.sh --status aborted`.
+`/z-plan`'s halt paths (Phase 7 TASKS guards, the cost-gate wrapper function `zplan_cost_gate_halt_finalize` at `skills/z-plan/SKILL.md:659` — a thin shim that shells out to `scripts/zplan-cost-gate-runtime.sh halt-finalize` — and the general "Run Brief — halt finalize" reference block) use the inline outcome/next-setting shape, finalize through the generic `_fragments/run-brief-finalize.md` include, then call `scripts/z-teardown.sh --status aborted`.
 
 ---
 
@@ -189,7 +188,7 @@ bash scripts/lint-run-brief.sh --registry-only  # 9 registry commands + z-execut
 python3 scripts/render-run-brief.py --self-test
 ```
 
-**Current status:** `scripts/lint-run-brief.sh --registry-only` passes (verified against this refresh's working tree); the registry no longer declares any deprecated pass-through alias. Note `lint-run-brief.sh` has no orphan-fragment check, so `_fragments/run-brief-halt-finalize-plan.md`'s dead-include state (see gotchas) does not fail CI.
+**Current status:** `scripts/lint-run-brief.sh --registry-only` passes (verified against this refresh's working tree); the registry no longer declares any deprecated pass-through alias.
 
 After changing command bodies, re-export via `/z-export` (or driver modules directly) and re-lint:
 
@@ -231,7 +230,6 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 
 ## Gotchas
 
-- **`_fragments/run-brief-halt-finalize-plan.md` exists but is not actually included anywhere.** This `/z-plan`-flavored halt-finalize preamble fragment was added this refactor and correctly mirrors `_fragments/run-brief-halt-finalize-execute.md`'s shape (sets outcome + next, then `<!-- include: _fragments/run-brief-finalize.md -->`). But every one of its 14 references inside `skills/z-plan/SKILL.md` is either prose or a `# include: _fragments/run-brief-halt-finalize-plan.md` bash comment sitting *inside* a fenced code block — and `expand_includes` in `runtime/drivers/_export_utils.py` explicitly skips markers inside fenced code, so these comments are inert. There is no real (unfenced) `<!-- include: -->` marker for this file anywhere in the repo. `/z-plan`'s actual halt sites instead manually duplicate the fragment's own body inline (export `RUN_BRIEF_PROFILE`/`RUN_BRIEF_ARTIFACT`/fallbacks, `set-section outcome`, `set-section next`, then the real `run-brief-finalize.md` include, then `z-teardown.sh --status aborted`) at each of the ~14 sites instead of centralizing it through the new fragment. Net effect: correct runtime behavior (each site does the right thing), but the new fragment is currently dead weight — nothing exercises it, and no lint catches that. Treat the `# include:` comments as aspirational labels for "this mirrors the halt-finalize pattern," same as documented previously for the (now-resolved) `-execute` fragment's equivalent comments.
 - `_fragments/run-brief-finalize.md` line 16 still says "`/z-do` uses `lite`; all other v1 registry commands use `full`" — `/z-do` no longer exists (removed from `run-brief-registry.json` and the command set this refactor). This is a stale line inside a source file, not this doc; it doesn't change any documented runtime behavior since no command declares `lite` at init time regardless.
 - Lite profile forbids `approach` and `decisions` properties — do not emit empty arrays.
 - Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses `ensure_approach_for_full`, not lite downgrade.
@@ -245,7 +243,6 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 - `/z-plan` cost-gate cleanup happens after run-brief init/register; if register failed and no active-plan record exists, cleanup must not call deregister.
 - For migrated commands (`/z-plan`, `/z-audit`, `/z-fix`, `/z-amend`), `run-brief.sh finalize` runs twice on the normal path — once via the included finalize fragment, once via `z-teardown.sh`. This is intentional and idempotent-safe, not a double-finalize bug — see "Setup/finalize wrapper migration" above.
 - `/z-stats` and `/z-explore` also route through `z-preflight.sh`/`z-teardown.sh` for lifecycle bookkeeping (registry visibility) even though they stay off the run-brief registry; `/z-stats` in particular writes a `run-brief.json` that is never chat-rendered, pushed, or `--require`-gated because it never includes `_fragments/run-brief-finalize.md`. Don't mistake the presence of `archive/$RUN/run-brief.json` for "this command has a wired Run Brief."
-- `docs/llm/INDEX.json`'s `run-brief` entry's `source_file` list, as applied by `/z-maintain-docs` before this refresh, may still be missing `scripts/z-preflight.sh`, `scripts/z-teardown.sh`, and `_fragments/run-brief-halt-finalize-plan.md` — `/z-maintain-docs` owns applying the updated `source_file` list from this refreshed concept JSON.
 
 ## Examples
 

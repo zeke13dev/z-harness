@@ -1,7 +1,7 @@
 # Silent-failure protection
 
-> Last updated: 2026-07-09
-> Covers source: scripts/supervised-run.sh, scripts/hang-threshold.py, scripts/schedule-hang-check.sh, scripts/hang-check.sh, scripts/liveness.sh, scripts/notify-watchdog.sh, scripts/check-timeout.sh, scripts/config.py, scripts/active-plan-registry.py, scripts/hermes/watchdog_webhook.py, agents/reviewer.md, agents/remote-runner.md, skills/z-execute/SKILL.md, skills/z-overnight/SKILL.md
+> Last updated: 2026-07-21
+> Covers source: scripts/supervised-run.sh, scripts/hang-threshold.py, scripts/schedule-hang-check.sh, scripts/hang-check.sh, scripts/liveness.sh, scripts/notify-watchdog.sh, scripts/check-timeout.sh, scripts/config.py, scripts/active-plan-registry.py, agents/reviewer.md, agents/remote-runner.md, skills/z-execute/SKILL.md, skills/z-overnight/SKILL.md
 
 ## Overview
 
@@ -21,7 +21,6 @@ For the documented future `/z-execute` pipelined track model, watchdog/liveness 
 - `scripts/hang-check.sh:1` — one-shot detector — liveness scan plus notify-once marker; only emits `watchdog_stall` when a stall is actually found.
 - `scripts/liveness.sh:1` — post-hoc inspector — unmatched `*_start` vs matching end events.
 - `scripts/notify-watchdog.sh:1` — notification channel — Discord/macOS best-effort alert, config-gated.
-- `scripts/hermes/watchdog_webhook.py:1` — orphaned file — only self-referenced; not imported anywhere. Superseded by `scripts/hermes/mcp-hermes-orchestrator.py` for Discord `so`.
 - `scripts/check-timeout.sh:40` — `timeout_backend()` — shared `timeout|gtimeout|bash_fallback` resolution; header comments still reference the retired `watchdog-sweep.sh` as a caller (stale comment, not a live path).
 - `scripts/config.py:243` — `watchdog` defaults block — `enabled` (default `true`), `stale_secs`, `timeout_secs.*`, `intervention_level`, `kill_grace_secs`.
 - `scripts/active-plan-registry.py:281` — `_sigterm_watchdog()` — legacy pid-file cleanup during deregister; best-effort and non-fatal.
@@ -44,7 +43,6 @@ For the documented future `/z-execute` pipelined track model, watchdog/liveness 
 - `liveness.sh` ignores broad lifecycle brackets and focuses on subagent/action starts with matching ends, so it won't flag a merely-long-running phase as a stall.
 - `hang-threshold.py` class keys depend on event fields that actually exist (`persona_attempt_outcome` role/tier, `subagent_model`, or kind); sparse classes fall back to `watchdog.stale_secs`.
 - Remote command timeouts may leave a remote `systemd-run` unit alive; `remote-runner` emits `remote_orphan_possible` guidance rather than attempting remote cleanup itself.
-- `scripts/hermes/watchdog_webhook.py` is dead code from the retired Discord `so` webhook path — do not treat it as a live integration point.
 
 ## Memories
 

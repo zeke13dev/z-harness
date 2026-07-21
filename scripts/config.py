@@ -2242,47 +2242,6 @@ def cmd_resolve_halt_category(args: list[str]) -> None:
     print(cat)
 
 
-# ---------------------------------------------------------------------------
-# resolve-question subcommand
-# ---------------------------------------------------------------------------
-
-def _emit_hermes_needs_input(
-    question_id: str,
-    choices: list,
-    skill_default: str,
-) -> None:
-    """
-    Emit a needs_input hermes marker via emit-hermes-marker.sh.
-
-    Called when HERMES_MARKER_FILE is set and the orchestrator would normally
-    call AskUserQuestion for this question.  Non-fatal — silently skips if the
-    script is unavailable or the env var is unset.
-    """
-    marker_file = os.environ.get("HERMES_MARKER_FILE", "")
-    if not marker_file:
-        return
-
-    script_dir = Path(__file__).parent
-    emit_script = script_dir / "emit-hermes-marker.sh"
-    if not emit_script.exists() or not shutil.which("bash"):
-        return
-
-    task = os.environ.get("Z_HARNESS_SLUG", "") or os.environ.get("Z_HARNESS_RUN", "") or "orchestration"
-    payload = json.dumps({
-        "question": question_id,
-        "options": sorted(choices),
-        "context": "hermes-managed",
-    })
-    try:
-        subprocess.run(
-            ["bash", str(emit_script), "needs_input", task, payload],
-            check=False,
-            capture_output=True,
-        )
-    except OSError:
-        pass  # non-fatal — best-effort
-
-
 def _emit_askuser_resolved(
     question_id: str,
     result: str,
@@ -3330,38 +3289,6 @@ def cmd_resolve_question(args: list[str]) -> None:
         }
         print(json.dumps(envelope))
         sys.exit(3)
-
-    # Hermes-managed mode gate: when HERMES_MARKER_FILE is set the session is
-    # driven by the hermes watcher.  Interactive prompts (AskUserQuestion) must
-    # not block the session.  Instead we emit a needs_input marker (the watcher
-    # relays the question to the user over Discord) and return a halt envelope so
-    # the orchestrator halts cleanly.  This takes priority over all other
-    # resolution paths (ASK_ALL, overnight, memory, etc.).
-    if os.environ.get("HERMES_MARKER_FILE", ""):
-        qmeta = QUESTION_IDS[question_id]
-        _hm_skill_default: str = qmeta["skill_default"]
-        _hm_choices: list = sorted(qmeta.get("choices", []))
-        _emit_hermes_needs_input(question_id, _hm_choices, _hm_skill_default)
-        halt_envelope = {
-            "result": "halt",
-            "default": _hm_skill_default,
-            "source": "hermes_managed",
-            "rule_id": "hermes_managed",
-            "strength": "policy",
-            "reason": (
-                "HERMES_MARKER_FILE is set — managed mode: halt instead of "
-                "interactive prompt; needs_input marker emitted for watcher relay"
-            ),
-            "sources": [{"kind": "env", "value": "set", "location": "HERMES_MARKER_FILE"}],
-            "halt_reason": "hermes_managed",
-            "question_id": question_id,
-            "would_have_asked": {
-                "default": _hm_skill_default,
-                "choices": _hm_choices,
-            },
-        }
-        print(json.dumps(halt_envelope))
-        sys.exit(0)
 
     # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit (but check for conflict first).
     # _apply_overnight_overrides handles the ASK_ALL + NO_ASK=halt conflict case

@@ -23,8 +23,6 @@ from typing import Callable, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from runtime.release_surface import (
-    path_excluded_from_prod,
-    prod_owner_for_path,
     release_contract,
     validate_release_contract,
 )
@@ -47,6 +45,7 @@ EXPECTED_CLOSURE_DIMENSIONS = frozenset(
     }
 )
 DIAGNOSTIC_LIMIT = 4096
+AUTHORITATIVE_REF = "refs/remotes/origin/main"
 FAST_LANE_IDS = (
     "c1-release-contract",
     "c2-release-artifacts",
@@ -88,18 +87,17 @@ class Inputs:
 class Snapshot:
     head: str
     status: str
-    refs_fingerprint: str
+    authoritative_ref_fingerprint: str
     candidate_fingerprint: str
     artifacts_fingerprint: str
     host_evidence_fingerprint: str
 
 
 @dataclass(frozen=True)
-class PromotionInputs:
-    source_sha: str
-    prod_sha: str
+class AuthorizationInputs:
+    candidate_version: str
+    candidate_sha: str
     repo_root: Path
-    prod_root: Path
     candidate_root: Path
     artifacts: Path
     host_evidence_root: Path
@@ -359,20 +357,17 @@ def _git(repo_root: Path, *args: str) -> str:
     return result.stdout
 
 
-def _promotion_git(repo_root: Path, *args: str) -> str:
-    """Run one allowlisted read-only Git-plumbing query for promotion gates."""
+def _release_git(repo_root: Path, *args: str) -> str:
+    """Run one allowlisted read-only Git-plumbing query for release gates."""
 
     allowed = {
         ("rev-parse", "--show-toplevel"),
         ("rev-parse", "--verify"),
         ("symbolic-ref", "--quiet", "HEAD"),
         ("status", "--porcelain=v1", "--untracked-files=all"),
-        ("for-each-ref", "--format=%(refname)%00%(objectname)"),
-        ("diff", "--no-renames", "--name-status", "-z"),
-        ("ls-tree", "-r", "--name-only", "-z"),
     }
     if not any(args[: len(prefix)] == prefix for prefix in allowed):
-        raise VerificationError("promotion Git query is not in the read-only allowlist")
+        raise VerificationError("release Git query is not in the read-only allowlist")
     return _git(repo_root, *args)
 
 
@@ -479,22 +474,41 @@ def _git_snapshot(inputs: Inputs) -> tuple[str, str, str]:
     head = _git(inputs.repo_root, "rev-parse", "--verify", "HEAD^{commit}").strip()
     if head != inputs.candidate_sha:
         raise VerificationError("repository HEAD does not match candidate SHA")
+    symbolic = subprocess.run(
+        ["git", "-C", str(inputs.repo_root), "symbolic-ref", "--quiet", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if symbolic.returncode == 0:
+        raise VerificationError("repository HEAD must be detached at the candidate SHA")
+    if symbolic.returncode != 1:
+        raise VerificationError("unable to establish detached repository HEAD")
+    authoritative_sha = _git(
+        inputs.repo_root, "rev-parse", "--verify", f"{AUTHORITATIVE_REF}^{{commit}}"
+    ).strip()
+    if authoritative_sha != inputs.candidate_sha:
+        raise VerificationError(f"{AUTHORITATIVE_REF} does not match candidate SHA")
     status = _git(inputs.repo_root, "status", "--porcelain=v1", "--untracked-files=all")
     if status:
         raise VerificationError("repository must be clean, including staged and untracked files")
-    refs = _git(inputs.repo_root, "for-each-ref", "--format=%(refname)%00%(objectname)")
-    return head, status, _sha256_bytes(refs.encode("utf-8"))
+    binding = {
+        "candidate_head": head,
+        "authoritative_ref": AUTHORITATIVE_REF,
+        "authoritative_sha": authoritative_sha,
+    }
+    return head, status, _sha256_bytes(_canonical_json(binding))
 
 
 def _snapshot(inputs: Inputs) -> Snapshot:
-    head, status, refs_fingerprint = _git_snapshot(inputs)
+    head, status, authoritative_ref_fingerprint = _git_snapshot(inputs)
     candidate_fingerprint, _ = _inventory(inputs.candidate_root)
     artifacts_fingerprint, _ = _inventory(inputs.artifacts)
     host_evidence_fingerprint, _ = _inventory(inputs.host_evidence_root)
     return Snapshot(
         head,
         status,
-        refs_fingerprint,
+        authoritative_ref_fingerprint,
         candidate_fingerprint,
         artifacts_fingerprint,
         host_evidence_fingerprint,
@@ -506,7 +520,7 @@ def _input_fingerprint(snapshot: Snapshot) -> str:
         _canonical_json(
             {
                 "head": snapshot.head,
-                "refs": snapshot.refs_fingerprint,
+                "authoritative_ref": snapshot.authoritative_ref_fingerprint,
                 "candidate": snapshot.candidate_fingerprint,
                 "artifacts": snapshot.artifacts_fingerprint,
                 "host_evidence": snapshot.host_evidence_fingerprint,
@@ -879,8 +893,9 @@ def verify(
             "final_head": initial.head,
             "initial_status": initial.status,
             "final_status": initial.status,
-            "initial_refs_fingerprint": initial.refs_fingerprint,
-            "final_refs_fingerprint": initial.refs_fingerprint,
+            "authoritative_ref": AUTHORITATIVE_REF,
+            "initial_authoritative_ref_fingerprint": initial.authoritative_ref_fingerprint,
+            "final_authoritative_ref_fingerprint": initial.authoritative_ref_fingerprint,
         },
         "lanes": lane_results,
     }
@@ -919,46 +934,47 @@ def _plain_directory(path_value: str | None, label: str) -> Path:
     return path
 
 
-def _resolve_promotion_inputs(
+def _resolve_authorization_inputs(
     namespace: argparse.Namespace, *, require_authorization_out: bool
-) -> PromotionInputs:
-    source_sha = _exact_sha(namespace.source_sha, "reviewed source SHA")
-    prod_sha = _exact_sha(namespace.prod_sha, "resulting prod SHA")
-    repo_root = _plain_directory(namespace.repo_root, "main repository root")
-    prod_root = _plain_directory(namespace.prod_root, "prod checkout root")
+) -> AuthorizationInputs:
+    candidate_sha = _exact_sha(namespace.candidate_sha, "candidate SHA")
+    try:
+        candidate = parse_release_candidate(namespace.candidate_version)
+    except ValueError as exc:
+        raise VerificationError(str(exc)) from exc
+    if namespace.candidate_version != candidate.plugin_version:
+        raise VerificationError("candidate version must use canonical plugin spelling")
+    repo_root = _plain_directory(namespace.repo_root, "candidate repository root")
     candidate_root = _plain_directory(namespace.candidate_root, "candidate root")
     artifacts = _plain_directory(namespace.artifacts, "artifact directory")
     host_evidence_root = _plain_directory(namespace.host_evidence_root, "host evidence root")
     evidence = _plain_file(namespace.evidence, "candidate evidence")
-    if repo_root == prod_root:
-        raise VerificationError("main and prod must use separate exact checkouts")
-    inputs = (repo_root, prod_root, candidate_root, artifacts, host_evidence_root)
+    inputs = (repo_root, candidate_root, artifacts, host_evidence_root)
     for index, left in enumerate(inputs):
         for right in inputs[index + 1 :]:
             if _is_relative_to(left, right) or _is_relative_to(right, left):
-                raise VerificationError("promotion input roots must be separate")
+                raise VerificationError("release authorization input roots must be separate")
 
     authorization_out: Path | None = None
     if require_authorization_out:
         authorization_out = _plain_file(
-            namespace.authorization_out, "promotion authorization destination", must_exist=False
+            namespace.authorization_out, "release authorization destination", must_exist=False
         )
         if authorization_out.exists() or authorization_out.is_symlink():
             raise VerificationError(
-                f"promotion authorization destination already exists: {authorization_out}"
+                f"release authorization destination already exists: {authorization_out}"
             )
         if not authorization_out.parent.is_dir():
             raise VerificationError(
-                f"promotion authorization parent is not a directory: {authorization_out.parent}"
+                f"release authorization parent is not a directory: {authorization_out.parent}"
             )
         for root in inputs:
             if _is_relative_to(authorization_out, root) or _is_relative_to(root, authorization_out):
-                raise VerificationError("promotion authorization destination overlaps an input")
-    return PromotionInputs(
-        source_sha,
-        prod_sha,
+                raise VerificationError("release authorization destination overlaps an input")
+    return AuthorizationInputs(
+        candidate.plugin_version,
+        candidate_sha,
         repo_root,
-        prod_root,
         candidate_root,
         artifacts,
         host_evidence_root,
@@ -971,92 +987,65 @@ def _require_clean_exact_checkout(
     root: Path,
     *,
     expected_sha: str,
-    branch_ref: str,
     label: str,
-    require_symbolic_head: bool = False,
 ) -> None:
-    top = Path(_promotion_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
+    top = Path(_release_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
     if top != root:
         raise VerificationError(f"{label} root must be the exact Git top level")
-    head = _promotion_git(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    head = _release_git(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
     if head != expected_sha:
         raise VerificationError(f"{label} HEAD does not match the explicit SHA")
-    ref_sha = _promotion_git(root, "rev-parse", "--verify", f"{branch_ref}^{{commit}}").strip()
+    ref_sha = _release_git(
+        root, "rev-parse", "--verify", f"{AUTHORITATIVE_REF}^{{commit}}"
+    ).strip()
     if ref_sha != expected_sha:
-        raise VerificationError(f"{branch_ref} does not match the explicit SHA")
-    if require_symbolic_head:
-        try:
-            symbolic = _promotion_git(root, "symbolic-ref", "--quiet", "HEAD").strip()
-        except VerificationError as exc:
-            raise VerificationError(f"{label} must be checked out on {branch_ref}") from exc
-        if symbolic != branch_ref:
-            raise VerificationError(f"{label} must be checked out on {branch_ref}")
-    if _promotion_git(root, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise VerificationError(f"{AUTHORITATIVE_REF} does not match the explicit SHA")
+    symbolic = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "--quiet", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if symbolic.returncode == 0:
+        raise VerificationError(f"{label} HEAD must be detached")
+    if symbolic.returncode != 1:
+        raise VerificationError(f"unable to establish detached {label} HEAD")
+    if _release_git(root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise VerificationError(f"{label} checkout must be clean")
 
 
-def _require_authoritative_remote_ref(
-    root: Path, *, expected_sha: str, branch_ref: str, label: str
-) -> None:
-    """Require an independently fetched remote-tracking ref at the explicit SHA."""
-
-    ref_sha = _promotion_git(
-        root, "rev-parse", "--verify", f"{branch_ref}^{{commit}}"
+def _authoritative_ref_fingerprint(root: Path, candidate_sha: str) -> str:
+    head = _release_git(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    authoritative_sha = _release_git(
+        root, "rev-parse", "--verify", f"{AUTHORITATIVE_REF}^{{commit}}"
     ).strip()
-    if ref_sha != expected_sha:
-        raise VerificationError(
-            f"authoritative {label} {branch_ref} does not match the explicit SHA"
+    if head != candidate_sha or authoritative_sha != candidate_sha:
+        raise VerificationError("candidate HEAD and freshly fetched origin/main are not exact")
+    return _sha256_bytes(
+        _canonical_json(
+            {
+                "candidate_head": head,
+                "authoritative_ref": AUTHORITATIVE_REF,
+                "authoritative_sha": authoritative_sha,
+            }
         )
-
-
-def _promotion_refs_fingerprint(prod_root: Path) -> str:
-    refs = _promotion_git(
-        prod_root, "for-each-ref", "--format=%(refname)%00%(objectname)"
     )
-    return _sha256_bytes(refs.encode("utf-8"))
 
 
-def _promotion_diff(inputs: PromotionInputs) -> tuple[list[dict[str, str]], str]:
-    raw = _promotion_git(
-        inputs.repo_root,
-        "diff",
-        "--no-renames",
-        "--name-status",
-        "-z",
-        inputs.source_sha,
-        inputs.prod_sha,
+def _canonical_tag_exists(root: Path, tag: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "show-ref", "--verify", "--quiet", f"refs/tags/{tag}"],
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    tokens = raw.split("\0")
-    if tokens and tokens[-1] == "":
-        tokens.pop()
-    if len(tokens) % 2:
-        raise VerificationError("promotion diff emitted malformed name-status data")
-    changes: list[dict[str, str]] = []
-    for index in range(0, len(tokens), 2):
-        status, path = tokens[index], tokens[index + 1]
-        if status not in {"A", "M", "D"} or not path:
-            raise VerificationError("promotion diff contains an unsupported change type")
-        if status != "D":
-            if path_excluded_from_prod(path):
-                raise VerificationError(f"promotion includes excluded experiment path: {path}")
-            owner = prod_owner_for_path(path)
-            if owner is None:
-                raise VerificationError(f"promotion path is outside C1's positive inventory: {path}")
-        else:
-            owner = prod_owner_for_path(path) or "deleted"
-        changes.append({"status": status, "path": path, "owner": owner})
-
-    prod_paths = _promotion_git(
-        inputs.prod_root, "ls-tree", "-r", "--name-only", "-z", inputs.prod_sha
-    ).split("\0")
-    excluded = sorted(path for path in prod_paths if path and path_excluded_from_prod(path))
-    if excluded:
-        raise VerificationError(f"resulting prod tree retains excluded experiment path: {excluded[0]}")
-    return changes, _sha256_bytes(_canonical_json(changes))
+    if result.returncode not in {0, 1}:
+        raise VerificationError("unable to inspect the canonical release tag")
+    return result.returncode == 0
 
 
 def _validated_candidate_evidence(
-    inputs: PromotionInputs, *, current_refs_fingerprint: str
+    inputs: AuthorizationInputs, *, current_ref_fingerprint: str
 ) -> dict[str, object]:
     payload = _load_object(inputs.evidence, "candidate evidence")
     supplied_fingerprint = payload.get("evidence_fingerprint")
@@ -1066,14 +1055,16 @@ def _validated_candidate_evidence(
         raise VerificationError("candidate evidence fingerprint is invalid")
     if payload.get("schema_version") != 1 or payload.get("status") != "passed":
         raise VerificationError("candidate evidence is not an accepted passing record")
-    if payload.get("candidate_sha") != inputs.prod_sha:
-        raise VerificationError("candidate evidence is for a different prod SHA")
+    if payload.get("candidate_sha") != inputs.candidate_sha:
+        raise VerificationError("candidate evidence is for a different candidate SHA")
     try:
         candidate = parse_release_candidate(str(payload.get("candidate_version", "")))
     except ValueError as exc:
         raise VerificationError("candidate evidence has an invalid candidate version") from exc
     if payload.get("candidate_version") != candidate.plugin_version:
         raise VerificationError("candidate evidence version is not canonical")
+    if payload.get("candidate_version") != inputs.candidate_version:
+        raise VerificationError("candidate evidence version does not match the requested candidate")
     lanes = payload.get("lanes")
     expected_lanes = (*FAST_LANE_IDS, *SLOW_LANE_IDS)
     if not isinstance(lanes, list) or tuple(
@@ -1090,7 +1081,7 @@ def _validated_candidate_evidence(
     if not isinstance(evidence_inputs, dict):
         raise VerificationError("candidate evidence inputs are malformed")
     current = {
-        "repo_root": str(inputs.prod_root),
+        "repo_root": str(inputs.repo_root),
         "candidate_root": str(inputs.candidate_root),
         "artifacts": str(inputs.artifacts),
         "host_evidence_root": str(inputs.host_evidence_root),
@@ -1105,15 +1096,20 @@ def _validated_candidate_evidence(
     if not isinstance(git_record, dict):
         raise VerificationError("candidate evidence Git record is malformed")
     if any(
-        git_record.get(key) != current_refs_fingerprint
-        for key in ("initial_refs_fingerprint", "final_refs_fingerprint")
+        git_record.get(key) != current_ref_fingerprint
+        for key in (
+            "initial_authoritative_ref_fingerprint",
+            "final_authoritative_ref_fingerprint",
+        )
     ):
-        raise VerificationError("candidate evidence prod ref fingerprint is stale")
+        raise VerificationError("candidate evidence authoritative-ref fingerprint is stale")
+    if git_record.get("authoritative_ref") != AUTHORITATIVE_REF:
+        raise VerificationError("candidate evidence authoritative ref is invalid")
     combined = _sha256_bytes(
         _canonical_json(
             {
-                "head": inputs.prod_sha,
-                "refs": current_refs_fingerprint,
+                "head": inputs.candidate_sha,
+                "authoritative_ref": current_ref_fingerprint,
                 "candidate": current["candidate_fingerprint"],
                 "artifacts": current["artifacts_fingerprint"],
                 "host_evidence": current["host_evidence_fingerprint"],
@@ -1125,178 +1121,85 @@ def _validated_candidate_evidence(
     if any(lane.get("input_fingerprint") != combined for lane in lanes):
         raise VerificationError("candidate evidence lane fingerprint is stale")
     if any(
-        git_record.get(key) != inputs.prod_sha for key in ("initial_head", "final_head")
+        git_record.get(key) != inputs.candidate_sha for key in ("initial_head", "final_head")
     ):
         raise VerificationError("candidate evidence Git identity is stale")
     if any(git_record.get(key) != "" for key in ("initial_status", "final_status")):
-        raise VerificationError("candidate evidence was not captured from a clean prod checkout")
+        raise VerificationError("candidate evidence was not captured from a clean checkout")
     return payload
 
 
-def _canonical_evidence_version(inputs: PromotionInputs) -> str:
-    """Read the signed identity needed to derive the one permissible new tag."""
-
-    payload = _load_object(inputs.evidence, "candidate evidence")
-    supplied_fingerprint = payload.get("evidence_fingerprint")
-    unsigned = dict(payload)
-    unsigned.pop("evidence_fingerprint", None)
-    if supplied_fingerprint != _sha256_bytes(_canonical_json(unsigned)):
-        raise VerificationError("candidate evidence fingerprint is invalid")
-    if payload.get("candidate_sha") != inputs.prod_sha:
-        raise VerificationError("candidate evidence is for a different prod SHA")
-    try:
-        candidate = parse_release_candidate(str(payload.get("candidate_version", "")))
-    except ValueError as exc:
-        raise VerificationError("candidate evidence has an invalid candidate version") from exc
-    if payload.get("candidate_version") != candidate.plugin_version:
-        raise VerificationError("candidate evidence version is not canonical")
-    return candidate.plugin_version
-
-
-def _promotion_payload(inputs: PromotionInputs) -> dict[str, object]:
+def _authorization_payload(inputs: AuthorizationInputs) -> dict[str, object]:
     _require_clean_exact_checkout(
         inputs.repo_root,
-        expected_sha=inputs.source_sha,
-        branch_ref="refs/heads/main",
-        label="main source",
-        require_symbolic_head=True,
+        expected_sha=inputs.candidate_sha,
+        label="candidate",
     )
-    _require_clean_exact_checkout(
-        inputs.prod_root,
-        expected_sha=inputs.prod_sha,
-        branch_ref="refs/heads/prod",
-        label="prod result",
-    )
-    _require_authoritative_remote_ref(
-        inputs.repo_root,
-        expected_sha=inputs.source_sha,
-        branch_ref="refs/remotes/origin/main",
-        label="main source",
-    )
-    _require_authoritative_remote_ref(
-        inputs.prod_root,
-        expected_sha=inputs.prod_sha,
-        branch_ref="refs/remotes/origin/prod",
-        label="prod result",
-    )
-    validate_release_contract(release_contract())
-    changes, diff_fingerprint = _promotion_diff(inputs)
-    candidate_version = _canonical_evidence_version(inputs)
-    expected_tag = f"v{candidate_version}"
-    tag_ref = f"refs/tags/{expected_tag}"
-    if _promotion_git(
-        inputs.prod_root,
-        "for-each-ref",
-        "--format=%(refname)%00%(objectname)",
-        tag_ref,
-    ):
-        raise VerificationError(f"expected release tag already exists: {tag_ref}")
-    prod_refs_fingerprint = _promotion_refs_fingerprint(inputs.prod_root)
+    contract = release_contract()
+    validate_release_contract(contract)
+    contract_fingerprint = _sha256_bytes(_canonical_json(contract))
+    canonical_tag = f"v{inputs.candidate_version}"
+    if _canonical_tag_exists(inputs.repo_root, canonical_tag):
+        raise VerificationError(f"canonical release tag already exists: refs/tags/{canonical_tag}")
+    ref_fingerprint = _authoritative_ref_fingerprint(inputs.repo_root, inputs.candidate_sha)
     evidence = _validated_candidate_evidence(
-        inputs, current_refs_fingerprint=prod_refs_fingerprint
+        inputs, current_ref_fingerprint=ref_fingerprint
     )
     evidence_inputs = evidence["inputs"]
     if not isinstance(evidence_inputs, dict):
         raise VerificationError("candidate evidence inputs are malformed")
     payload: dict[str, object] = {
-        "schema_version": 1,
-        "status": "authorized",
-        "source_sha": inputs.source_sha,
-        "prod_sha": inputs.prod_sha,
-        "authoritative_refs": {
-            "main": "refs/remotes/origin/main",
-            "prod": "refs/remotes/origin/prod",
-        },
-        "candidate_version": candidate_version,
-        "expected_tag": expected_tag,
-        "expected_tag_absent": True,
-        "inputs": {
-            "repo_root": str(inputs.repo_root),
-            "prod_root": str(inputs.prod_root),
-            "candidate_root": str(inputs.candidate_root),
-            "artifacts": str(inputs.artifacts),
-            "host_evidence_root": str(inputs.host_evidence_root),
-            "candidate_fingerprint": evidence_inputs["candidate_fingerprint"],
-            "artifacts_fingerprint": evidence_inputs["artifacts_fingerprint"],
-            "host_evidence_fingerprint": evidence_inputs["host_evidence_fingerprint"],
-            "combined_fingerprint": evidence_inputs["combined_fingerprint"],
-        },
-        "release_contract_fingerprint": _sha256_bytes(_canonical_json(release_contract())),
-        "prod_refs_fingerprint": prod_refs_fingerprint,
-        "diff": changes,
-        "diff_fingerprint": diff_fingerprint,
-        "candidate_evidence_fingerprint": evidence["evidence_fingerprint"],
-        "verified_lane_ids": [*FAST_LANE_IDS, *SLOW_LANE_IDS],
+        "candidate_sha": inputs.candidate_sha,
+        "authoritative_ref": AUTHORITATIVE_REF,
+        "candidate_version": inputs.candidate_version,
+        "canonical_tag": canonical_tag,
+        "candidate_inventory_fingerprint": evidence_inputs["candidate_fingerprint"],
+        "artifact_inventory_fingerprint": evidence_inputs["artifacts_fingerprint"],
+        "host_evidence_inventory_fingerprint": evidence_inputs["host_evidence_fingerprint"],
+        "release_contract_fingerprint": contract_fingerprint,
+        "evidence_fingerprint": evidence["evidence_fingerprint"],
+        "authoritative_ref_fingerprint": ref_fingerprint,
+        "required_lane_ids": [*FAST_LANE_IDS, *SLOW_LANE_IDS],
     }
-    # Close the preflight time-of-check/time-of-use window before authorizing.
+    # Close the time-of-check/time-of-use window before authorizing.
     _require_clean_exact_checkout(
         inputs.repo_root,
-        expected_sha=inputs.source_sha,
-        branch_ref="refs/heads/main",
-        label="main source",
-        require_symbolic_head=True,
+        expected_sha=inputs.candidate_sha,
+        label="candidate",
     )
-    _require_clean_exact_checkout(
-        inputs.prod_root,
-        expected_sha=inputs.prod_sha,
-        branch_ref="refs/heads/prod",
-        label="prod result",
-    )
-    _require_authoritative_remote_ref(
-        inputs.repo_root,
-        expected_sha=inputs.source_sha,
-        branch_ref="refs/remotes/origin/main",
-        label="main source",
-    )
-    _require_authoritative_remote_ref(
-        inputs.prod_root,
-        expected_sha=inputs.prod_sha,
-        branch_ref="refs/remotes/origin/prod",
-        label="prod result",
-    )
-    final_changes, final_diff_fingerprint = _promotion_diff(inputs)
-    final_prod_refs_fingerprint = _promotion_refs_fingerprint(inputs.prod_root)
+    final_ref_fingerprint = _authoritative_ref_fingerprint(inputs.repo_root, inputs.candidate_sha)
     final_evidence = _validated_candidate_evidence(
-        inputs, current_refs_fingerprint=final_prod_refs_fingerprint
+        inputs, current_ref_fingerprint=final_ref_fingerprint
     )
-    if _promotion_git(
-        inputs.prod_root,
-        "for-each-ref",
-        "--format=%(refname)%00%(objectname)",
-        tag_ref,
-    ):
-        raise VerificationError(f"expected release tag appeared during preflight: {tag_ref}")
-    if final_changes != changes or final_diff_fingerprint != diff_fingerprint:
-        raise VerificationError("promotion diff changed during preflight")
+    final_contract = release_contract()
+    validate_release_contract(final_contract)
+    if _canonical_tag_exists(inputs.repo_root, canonical_tag):
+        raise VerificationError(f"canonical release tag appeared during preflight: {canonical_tag}")
     if final_evidence.get("evidence_fingerprint") != evidence.get("evidence_fingerprint"):
         raise VerificationError("candidate evidence changed during preflight")
-    if final_prod_refs_fingerprint != prod_refs_fingerprint:
-        raise VerificationError("prod refs changed during preflight")
-    payload["authorization_fingerprint"] = _sha256_bytes(_canonical_json(payload))
+    if final_ref_fingerprint != ref_fingerprint:
+        raise VerificationError("authoritative ref changed during preflight")
+    if _sha256_bytes(_canonical_json(final_contract)) != contract_fingerprint:
+        raise VerificationError("release contract changed during preflight")
     return payload
 
 
-def promotion_preflight(namespace: argparse.Namespace) -> dict[str, object]:
-    inputs = _resolve_promotion_inputs(namespace, require_authorization_out=True)
-    payload = _promotion_payload(inputs)
+def authorization_preflight(namespace: argparse.Namespace) -> dict[str, object]:
+    inputs = _resolve_authorization_inputs(namespace, require_authorization_out=True)
+    payload = _authorization_payload(inputs)
     if inputs.authorization_out is None:
-        raise VerificationError("promotion authorization destination is required")
+        raise VerificationError("release authorization destination is required")
     _write_evidence(inputs.authorization_out, payload)
     return payload
 
 
 def publication_freshness(namespace: argparse.Namespace) -> dict[str, object]:
-    inputs = _resolve_promotion_inputs(namespace, require_authorization_out=False)
-    authorization_path = _plain_file(namespace.authorization, "promotion authorization")
-    authorization = _load_object(authorization_path, "promotion authorization")
-    supplied_fingerprint = authorization.get("authorization_fingerprint")
-    unsigned = dict(authorization)
-    unsigned.pop("authorization_fingerprint", None)
-    if supplied_fingerprint != _sha256_bytes(_canonical_json(unsigned)):
-        raise VerificationError("promotion authorization fingerprint is invalid")
-    current = _promotion_payload(inputs)
+    inputs = _resolve_authorization_inputs(namespace, require_authorization_out=False)
+    authorization_path = _plain_file(namespace.authorization, "release authorization")
+    authorization = _load_object(authorization_path, "release authorization")
+    current = _authorization_payload(inputs)
     if authorization != current:
-        raise VerificationError("promotion authorization is stale for current refs, diff, or evidence")
+        raise VerificationError("release authorization is stale for the current candidate or evidence")
     return current
 
 
@@ -1353,20 +1256,18 @@ class _ModeArgumentParser(argparse.ArgumentParser):
                 *common,
                 "evidence_out",
             ),
-            "promotion-preflight": (
-                "source_sha",
-                "prod_sha",
+            "authorization-preflight": (
+                "candidate_version",
+                "candidate_sha",
                 "repo_root",
-                "prod_root",
                 *common,
                 "evidence",
                 "authorization_out",
             ),
             "publication-freshness": (
-                "source_sha",
-                "prod_sha",
+                "candidate_version",
+                "candidate_sha",
                 "repo_root",
-                "prod_root",
                 *common,
                 "evidence",
                 "authorization",
@@ -1387,15 +1288,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = _ModeArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("verify", "promotion-preflight", "publication-freshness", "publication-assets"),
+        choices=("verify", "authorization-preflight", "publication-freshness", "publication-assets"),
         default="verify",
     )
     parser.add_argument("--candidate-version")
     parser.add_argument("--candidate-sha")
-    parser.add_argument("--source-sha")
-    parser.add_argument("--prod-sha")
     parser.add_argument("--repo-root")
-    parser.add_argument("--prod-root")
     parser.add_argument("--candidate-root")
     parser.add_argument("--artifacts")
     parser.add_argument("--host-evidence-root")
@@ -1412,8 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
         namespace = _parser().parse_args(argv)
         if namespace.mode == "verify":
             verify(namespace)
-        elif namespace.mode == "promotion-preflight":
-            promotion_preflight(namespace)
+        elif namespace.mode == "authorization-preflight":
+            authorization_preflight(namespace)
         elif namespace.mode == "publication-freshness":
             publication_freshness(namespace)
         else:

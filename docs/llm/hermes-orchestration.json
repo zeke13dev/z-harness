@@ -1,7 +1,7 @@
 {
   "concept": "hermes-orchestration",
   "summary": "Dormant-by-default Hermes parallel execution layer: generates workstream DAGs, runs conflict-safe workstreams in isolated git worktrees, serializes merges, and can schedule conflict-free plans under sorted plan-claim locks when workflow.hermes_enabled is explicitly true.",
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-21",
   "covers_spec": "hermes-integration-v1",
   "source_file": [
     "scripts/hermes-execute.py",
@@ -177,7 +177,8 @@
     "scope_unknown intentionally over-serializes.",
     "GIT_OPTIONAL_LOCKS=0 is used to reduce git contention.",
     "generate-workstreams.py now hard-fails on a TASKS.md dependency cycle (CycleError, exit 2, no workstreams.json written) instead of the older partial_tree:true empty-manifest fallback; callers must treat nonzero exit as 'no manifest', not 'empty manifest'.",
-    "scripts/hermes/config.py's discord.so block (DiscordSoConfig/DiscordProjectAlias) is consumed by the external Hermes gateway (~/.hermes/hermes-agent), not by hermes-execute.py; this repo only parses/validates it."
+    "scripts/hermes/config.py's discord.so block (DiscordSoConfig/DiscordProjectAlias) is consumed by the external Hermes gateway (~/.hermes/hermes-agent), not by hermes-execute.py; this repo only parses/validates it.",
+    "The retired Discord so job-registry, supervisor, and webhook backend has been removed; scripts/hermes/session.py remains only for legacy pi z-execute lifecycle helpers."
   ],
   "memories": []
 }
