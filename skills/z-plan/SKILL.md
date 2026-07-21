@@ -130,14 +130,14 @@ Amend/resume routing remains phase-specific: scope or goal changes resume at **S
      - **abort** → push-notify, then halt through the funnel — z-preflight.sh's run-brief-init step already ran regardless of register's outcome, so the same `RB_HALT_REASON` + fragment + `z-teardown.sh` shape applies (teardown's deregister step is a harmless no-op when no record exists; its release step still frees the claim we hold):
        ```bash
        RB_HALT_REASON="active-plan registry register failed"
-       # include: _fragments/run-brief-halt-finalize-plan.md
+       # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
          --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
        exit 1
        ```
    - **Unattended**: proceed without coordination (log prominently) unless `Z_HARNESS_STRICT_OVERLAP=1` → run the same abort funnel above and halt.
 
-   **Teardown funnel (single source of truth for the entire run).** Every controlled exit after a successful preflight funnels through one call — `scripts/z-teardown.sh --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status complete|aborted` — never a bespoke release/deregister sequence (SKILL-STYLE.md §2). On any halt: set `RB_HALT_REASON`, include `_fragments/run-brief-halt-finalize-plan.md` (sets outcome/next, finalizes/renders/requires the brief), then call teardown with `--status aborted`. On normal completion (Phase 9), call it with `--status complete`. Teardown's release and deregister steps are both best-effort no-ops when nothing was ever held/registered, so the same call is safe on every halt path regardless of how far setup got. The one exception: a checkpoint-seam PAUSE is not an exit — no teardown; the next invocation resumes.
+   **Teardown funnel (single source of truth for the entire run).** Every controlled exit after a successful preflight funnels through one call — `scripts/z-teardown.sh --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status complete|aborted` — never a bespoke release/deregister sequence (SKILL-STYLE.md §2). On any halt: set `RB_HALT_REASON`, apply the inline **Run Brief — halt finalize** block at the end of this skill (sets outcome/next, finalizes/renders/requires the brief), then call teardown with `--status aborted`. On normal completion (Phase 9), call it with `--status complete`. Teardown's release and deregister steps are both best-effort no-ops when nothing was ever held/registered, so the same call is safe on every halt path regardless of how far setup got. The one exception: a checkpoint-seam PAUSE is not an exit — no teardown; the next invocation resumes.
 6. **Plan-start awareness read (after claim + register; non-fatal read-only).** After a successful claim and register, read the lockless registry to surface concurrent peers as an FYI — never a hard gate (Invariant 1):
    ```bash
    AWARENESS_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json 2>/dev/null)"
@@ -1158,7 +1158,7 @@ case "$SEAM_RC" in
   1) exit 0 ;;  # new checkpoint written — pause here, not an error; next invocation resumes
   2)
     RB_HALT_REASON="context pressure estimate failed in strict mode at plan-entry seam"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -1331,7 +1331,7 @@ Branch on `$RESULT_DECISIONS`:
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
     RB_HALT_REASON="no_ask_blocked on workflow.plan_decisions_approval"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -1763,7 +1763,7 @@ if [[ ! -f "$PHASE7_TASKS_PATH" || "$PHASE7_TASKS_STALE_REASON" == "amended-inte
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
         '{"reason":"intent_missing_before_phase7_tasks"}' 2>/dev/null || true
       RB_HALT_REASON="intent artifact missing before Phase 7 TASKS guard"
-      # include: _fragments/run-brief-halt-finalize-plan.md
+      # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
         --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
       exit 1
@@ -1829,7 +1829,7 @@ task_to_intent_mapping_required: true"
         "$(printf '{"reason":"phase7_intent_initial_tasks_failed","generator_status":"%s","termination_condition":"%s"}' \
           "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
       RB_HALT_REASON="intent initial task generation failed before Phase 7"
-      # include: _fragments/run-brief-halt-finalize-plan.md
+      # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
         --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
       exit 1
@@ -1839,7 +1839,7 @@ task_to_intent_mapping_required: true"
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
       "$(printf '{"reason":"full_mode_tasks_missing_before_phase7","path":"%s"}' "$PHASE7_TASKS_PATH")" 2>/dev/null || true
     RB_HALT_REASON="full-mode TASKS.md missing before Phase 7 review"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -1929,7 +1929,7 @@ if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; the
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
       '{"reason":"phase8_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
     RB_HALT_REASON="TASKS.md missing after Phase 7 pre-dispatch guard"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -1944,7 +1944,7 @@ if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; the
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
       "$(printf '{"reason":"intent_initial_tasks_sanity_failed","errors":%s}' "$TASKS_SANITY_JSON")" 2>/dev/null || true
     RB_HALT_REASON="intent initial task sanity failed"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -1979,7 +1979,7 @@ base: $Z_HARNESS_PLAN_DIR"
       "$(printf '{"reason":"phase8_workstreams_generation_failed","rc":%d,"output":%s,"path":"%s"}' \
         "$WORKSTREAM_GEN_RC" "$WORKSTREAM_GEN_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent workstreams generation failed"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -2034,7 +2034,7 @@ PYEOF
       "$(printf '{"reason":"phase8_workstreams_validation_failed","output":%s,"path":"%s"}' \
         "$WORKSTREAM_VALIDATE_JSON" "$WORKSTREAMS_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent workstreams validation failed"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -2128,7 +2128,7 @@ PYEOF
       "$(printf '{"reason":"phase8_work_graph_generation_failed","rc":%d,"output":%s,"path":"%s"}' \
         "$WORK_GRAPH_RC" "$WORK_GRAPH_JSON" "$WORK_GRAPH_FILE")" 2>/dev/null || true
     RB_HALT_REASON="intent known-work graph generation failed"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -2258,7 +2258,7 @@ PYEOF
       "$(printf '{"reason":"phase8_execution_strategy_failed","rc":%d,"output":%s,"path":"%s"}' \
         "$EXECUTION_STRATEGY_RC" "$EXECUTION_STRATEGY_JSON" "$Z_HARNESS_PLAN_DIR/execution-strategy.md")" 2>/dev/null || true
     RB_HALT_REASON="intent execution strategy generation failed"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -2285,7 +2285,7 @@ if [[ ! -f "$Z_HARNESS_PLAN_DIR/TASKS.md" ]]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
     '{"reason":"phase8_full_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
   RB_HALT_REASON="full-mode TASKS.md missing after Phase 7 review"
-  # include: _fragments/run-brief-halt-finalize-plan.md
+  # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
     --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
   exit 1
@@ -2569,7 +2569,7 @@ case "$SEAM_RC" in
   1) exit 0 ;;  # new checkpoint written — pause here, not an error; next invocation resumes
   2)
     RB_HALT_REASON="context pressure estimate failed in strict mode at pre-execute handoff seam"
-    # include: _fragments/run-brief-halt-finalize-plan.md
+    # Apply the inline "Run Brief — halt finalize" block at the end of this skill.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/z-teardown.sh" \
       --run "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --status aborted
     exit 1
@@ -2681,7 +2681,7 @@ After planning, prefer the shared watcher-readable clear checkpoint over manual 
 
 ## Run Brief — halt finalize
 
-Shared halt shape reused by every mid-file halt site (RB_HALT_REASON + `_fragments/run-brief-halt-finalize-plan.md` include + `z-teardown.sh --status aborted`). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next). If register never succeeded, `z-teardown.sh`'s deregister step is a harmless no-op — no separate "register failed" branch is needed here.
+Shared inline halt shape reused by every mid-file halt site (`RB_HALT_REASON` + the block below + `z-teardown.sh --status aborted`). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, finalization auto-downgrades to **lite** (Intent + Outcome + Next). If register never succeeded, `z-teardown.sh`'s deregister step is a harmless no-op — no separate "register failed" branch is needed here.
 
 **Known gap:** halts before Setup step 2's `z-preflight.sh` call completes (e.g. the `workflow.slug_confirm` resolver `halt` during slug derivation) skip this block entirely — no brief JSON exists yet, so a bare `exit 0`/`exit 1` is correct there.
 

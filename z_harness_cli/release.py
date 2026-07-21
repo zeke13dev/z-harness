@@ -20,8 +20,9 @@ Invariants:
   :func:`parse_release_candidate`; Git state is not an identity fallback.
 - Stable and beta candidates render deterministically across Git/SemVer and
   Python/PEP 440 ecosystems and compare through ``packaging.version.Version``.
-- Publication requires the canonical tag's peeled commit, ``GITHUB_SHA``, and
-  the freshly fetched ``prod`` tip to be identical full GitHub commit IDs.
+- Publication binds an immutable ``candidate_sha`` to freshly fetched
+  ``origin/main`` and requires exact release evidence and authorization through
+  publication on protected ``main``.
 - Fetch honors Z_HARNESS_RELEASE_URL env var (mirror-safe).
 - schema_version newer than SUPPORTED_SCHEMA_VERSION → exit 1 with
   "update z-harness" message (never silently proceed).
@@ -62,7 +63,6 @@ _CANDIDATE_RE = re.compile(
     rf"(?P<patch>{_VERSION_NUMBER})"
     rf"(?:(?:-beta\.|b)(?P<beta>{_VERSION_NUMBER}))?$"
 )
-_GITHUB_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 # Looks like a git short-SHA or SHA256 fragment (hex, 7–40 chars, no dots)
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
@@ -177,53 +177,6 @@ class FetchError(Exception):
 
 class ReleaseArtifactError(ValueError):
     """Raised when assembled release outputs diverge from the candidate."""
-
-
-class ReleaseProvenanceError(ValueError):
-    """Raised when the publication tag, checkout, and prod tip are not exact."""
-
-
-def verify_publication_provenance(
-    candidate_version: str,
-    trigger_tag: str,
-    tag_commit: str,
-    workflow_sha: str,
-    prod_tip: str,
-) -> ReleaseCandidate:
-    """Prove that one canonical candidate names the exact reviewed prod commit.
-
-    Args:
-        candidate_version: Explicit stable or beta candidate supplied by the workflow.
-        trigger_tag: Exact triggering Git tag name.
-        tag_commit: Commit obtained by peeling ``trigger_tag``.
-        workflow_sha: Commit checked out by the release workflow.
-        prod_tip: Commit at the freshly fetched ``prod`` tip.
-
-    Returns:
-        The parsed candidate for reuse by the caller.
-
-    Raises:
-        ValueError: When ``candidate_version`` is invalid.
-        ReleaseProvenanceError: When the tag is non-canonical or any commit differs.
-    """
-
-    candidate = parse_release_candidate(candidate_version)
-    if trigger_tag != candidate.git_tag:
-        raise ReleaseProvenanceError(
-            f"trigger tag {trigger_tag!r} is not canonical for {candidate.plugin_version!r}"
-        )
-    for label, commit in (
-        ("peeled release tag", tag_commit),
-        ("GITHUB_SHA", workflow_sha),
-        ("fetched prod tip", prod_tip),
-    ):
-        if _GITHUB_COMMIT_RE.fullmatch(commit) is None:
-            raise ReleaseProvenanceError(f"{label} is not a full lowercase GitHub commit SHA")
-    if tag_commit != workflow_sha:
-        raise ReleaseProvenanceError("peeled release tag commit does not match GITHUB_SHA")
-    if tag_commit != prod_tip:
-        raise ReleaseProvenanceError("peeled release tag commit does not match fetched prod tip")
-    return candidate
 
 
 def _release_comparison_version(version: str) -> Version:

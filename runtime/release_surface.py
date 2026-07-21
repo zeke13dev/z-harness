@@ -249,7 +249,6 @@ _PROD_SCRIPT_PATHS = frozenset(
         "scripts/curl-install.sh",
         "scripts/detect-host.sh",
         "scripts/discover-providers.py",
-        "scripts/emit-hermes-marker.sh",
         "scripts/estimate-tokens.py",
         "scripts/extract-dismissals.py",
         "scripts/followup-view-lookup.py",

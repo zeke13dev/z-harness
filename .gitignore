@@ -4,7 +4,8 @@
 *.swp
 .antigravitycli/
 
-# Per-user provider config (repo-local override)
+# Per-user provider config (repo-local override). The tracked
+# .z-harness/providers.json project default is an intentional exception.
 .z-harness/
 
 # Build artifacts
@@ -26,6 +27,7 @@ __pycache__/
 /prompts/
 /.agent/
 /.pi/
+# Generated OMP exports only. The tracked .omp/config.yml project default stays.
 /.omp/z-harness/
 /.hermes/
 /.codex-plugin/

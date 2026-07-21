@@ -1,7 +1,7 @@
 {
   "concept": "watchdog",
   "summary": "Two-layer liveness protection: supervised-run.sh enforces hard process-group deadlines for killable subprocesses (confirmed active in production telemetry); schedule-hang-check.sh/hang-check.sh schedule a metrics-derived one-shot stall detector for native-agent stalls that has never been observed to fire outside tests.",
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-21",
   "covers_spec": "silent-failure-watchdog/statusline-hud",
   "source_file": [
     "scripts/supervised-run.sh",
@@ -13,7 +13,6 @@
     "scripts/check-timeout.sh",
     "scripts/config.py",
     "scripts/active-plan-registry.py",
-    "scripts/hermes/watchdog_webhook.py",
     "agents/reviewer.md",
     "agents/remote-runner.md",
     "skills/z-execute/SKILL.md",
@@ -99,13 +98,6 @@
       "summary": "Legacy pid-file cleanup during deregister; best-effort and non-fatal."
     },
     {
-      "file": "scripts/hermes/watchdog_webhook.py",
-      "line": 1,
-      "symbol": "watchdog_webhook (orphaned)",
-      "kind": "module",
-      "summary": "Only self-referenced; no importers found. Superseded by scripts/hermes/mcp-hermes-orchestrator.py."
-    },
-    {
       "file": "agents/reviewer.md",
       "line": 48,
       "symbol": "reviewer supervised-run",
@@ -147,7 +139,6 @@
     "liveness.sh ignores broad lifecycle brackets and focuses on subagent/action starts with matching ends.",
     "hang-threshold.py class keys depend on event fields that actually exist (persona_attempt_outcome role/tier, subagent_model, or kind).",
     "Remote command timeouts may leave a remote systemd-run unit alive; remote-runner emits remote_orphan_possible guidance.",
-    "scripts/hermes/watchdog_webhook.py is dead code (no importers); do not treat as live Discord so integration.",
     "check-timeout.sh header comments still reference watchdog-sweep.sh as a caller; stale comment, not a real dependency."
   ],
   "event_vocabulary": [

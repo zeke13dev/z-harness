@@ -207,6 +207,14 @@ class TestNoAxiomKeyAbsent(_EnvelopeBase):
         self.assertIn(env["source"], KNOWN_SOURCES,
                       msg=f"Unexpected source value: {env['source']!r}")
 
+    def test_legacy_hermes_marker_env_does_not_override_resolution(self):
+        """A stale marker-path env var must not bypass ordinary resolution."""
+        marker_path = self.proj / "legacy-marker.jsonl"
+        env = self._resolve(env_extra={"HERMES_MARKER_FILE": str(marker_path)})
+        self.assertEqual(env["result"], "ask")
+        self.assertEqual(env["source"], "none")
+        self.assertFalse(marker_path.exists())
+
     def test_axiom_for_different_question_no_participation(self):
         """Axiom targeting a different question → still no-axiom path for QID."""
         _seed_axiom(self.approved, "ax-bc-other01", ["workflow.audit_to_amend:amend"])

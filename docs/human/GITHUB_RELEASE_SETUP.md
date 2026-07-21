@@ -9,11 +9,10 @@ This document records the repository settings required before z-harness is made 
 3. Protect `main` using the exact successful check names reported by GitHub.
 4. Create the protected `release-evidence` environment and add its release-only secrets.
 5. Register a repository-owned self-hosted runner carrying the `z-harness-release-evidence` label.
-6. Prepare and protect `prod` only when cutting a release candidate.
-7. Run release evidence, conformance, and publication against the exact `prod` SHA.
-8. Make the repository public only after the public-page and secret-history checks pass.
+6. Run release evidence, conformance, and publication against one exact SHA at the freshly fetched `origin/main` tip.
+7. Make the repository public only after the public-page and secret-history checks pass.
 
-Do not push `prod`, create a release tag, or make the repository public merely to test the setup.
+Do not create a release tag or make the repository public merely to test the setup.
 
 ## Protect `main`
 
@@ -55,18 +54,11 @@ z-harness-release-evidence
 
 Use a dedicated runner account or machine with no persistent provider credentials. The workflow supplies release-only credentials through the protected environment and creates isolated host homes for execution.
 
-## Protect `prod` when a candidate is cut
+## Authorize one protected-main candidate
 
-`prod` is the public-release branch, not a development branch. Create or refresh it only from a clean, reviewed `main`, carrying the explicitly approved release surface.
+Before running release evidence, confirm the reviewed candidate is the exact `origin/main` tip and stop further mutation until publication completes. Evidence, conformance, and publication independently fetch `origin/main`, require a clean detached checkout at that exact SHA, and reject stale or mismatched bindings. Publication refreshes `origin/main` again immediately before creating the release and targets the authorized candidate SHA.
 
-Before running release evidence:
-
-- push the exact candidate to `prod`;
-- protect `prod` from force pushes and deletion;
-- confirm the candidate SHA is the authoritative `origin/prod` tip; and
-- stop all further mutation of the candidate.
-
-The evidence, conformance, and release workflows independently refetch authoritative refs and reject stale or mismatched SHAs.
+These workflows verify Git identities and immutable evidence; they do not query or prove GitHub ruleset configuration. Branch protection is the administrative prerequisite described above and must be checked in repository settings.
 
 ## Public visibility checklist
 
@@ -85,11 +77,11 @@ Visibility changes and release publication are separate decisions. A repository 
 
 ## Release workflow order
 
-For a canonical version and protected `prod` SHA:
+For a canonical version and exact protected `main` candidate SHA:
 
 1. Run `Produce exact release evidence` with `candidate_version` and `candidate_sha`.
 2. Record the successful immutable evidence run ID.
 3. Run `Exact release-candidate conformance` with the same version, SHA, and evidence run ID.
-4. Run `Release reviewed prod candidate` with the version, reviewed `main` SHA, `prod` SHA, and evidence run ID.
+4. Run `Release protected main candidate` with the same version, candidate SHA, and evidence run ID.
 
-Publication creates the tag and release only after all exact-candidate and freshness checks pass.
+Publication creates the canonical tag and release at `candidate_sha` only after all exact-candidate and freshness checks pass.

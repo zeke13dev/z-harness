@@ -125,33 +125,6 @@ Minimum consumer behavior:
 
 When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SLUG` and `Z_HARNESS_PLAN_DIR` in the new session's environment to enable z-harness command continuity.
 
-### Hermes handoff_continue marker (managed-session consumption)
-
-When `HERMES_MARKER_FILE` is set (the session is Hermes-managed), `/z-handoff` Phase 3b emits a `handoff_continue` marker via `scripts/emit-hermes-marker.sh --strict` so the Hermes watcher can drive `/clear` and then the `next_step` resume command. This is the **same marker** `write-clear-checkpoint.sh`'s automatic checkpoint path emits (best-effort, not `--strict`); `/z-handoff`'s explicit `--strict` invocation is deliberate — a genuine write failure (unwritable marker path, full disk, envelope build error) must surface and exit non-zero rather than silently stranding the session. When `HERMES_MARKER_FILE` is unset (non-Hermes runs), `emit-hermes-marker.sh` is a strict no-op regardless of `--strict`, so this is invisible to pi/Claude-Code/Codex runs.
-
-### Hermes fanout marker (distinct from handoff_continue)
-
-Hermes-managed z-harness sessions may also emit marker JSONL for `handoff_fanout` (via `/z-plan-split`) — a request to turn one split-plan parent into grouped child `so` sessions. It uses the same best-effort marker envelope:
-
-```json
-{
-  "v": 1,
-  "kind": "handoff_fanout",
-  "task": "split-session-fanout",
-  "payload": {
-    "slug": "split-session-fanout",
-    "group_id": "optional-stable-group-id",
-    "workstreams_path": "z-harness/split-session-fanout/workstreams.json",
-    "handoff_paths": ["z-harness/split-session-fanout/HANDOFF.md"],
-    "shared_concerns_path": "z-harness/split-session-fanout/SHARED-CONCERNS.md",
-    "ack_required": true,
-    "partial_tree": false
-  }
-}
-```
-
-`group_id` is optional; the MCP `so` fanout bridge can derive one. Consumers must validate `slug` and repo-relative paths before starting sessions. Failed workstreams in `workstreams.json` are non-executable by default.
-
 ## Examples
 
 ### Context pressure mid-plan

@@ -7,7 +7,7 @@
 
 All z-harness plan artifacts resolve under an external artifact base directory, returned by `z_harness_base()` in `scripts/plan-path.sh`. The base follows a 5-tier fallback chain: an explicit `Z_HARNESS_BASE_DIR` env var (tier 1, escape hatch), then `$XDG_STATE_HOME/z-harness/<repo-id>` (tier 2), then `$HOME/.local/state/z-harness/<repo-id>` (tier 3), then `<git-common-dir>/z-harness` (tier 4), then `$(pwd)/z-harness` (tier 5, last resort). The external tiers are active by default (`Z_HARNESS_EXTERNAL_DEFAULT` unset equals 1), meaning plans are stored outside the repo worktree and survive a `git clean`. Set `Z_HARNESS_EXTERNAL_DEFAULT=0` to revert to the old in-repo tier-5 behavior.
 
-Within the chosen base the directory structure is: `<base>/plans/<slug>/` for plan artifacts, `<base>/active-plans/` for the coordination registry, `<base>/active-plans/claims/` for per-slug hard claim locks, `<base>/followups/` for the follow-up queue, and `<base>/metrics.jsonl` for the aggregate event log. A `<git-common-dir>/.z-harness-base` anchor file locks tiers 2-5 to a single resolved path (split-brain guard); any mismatch is a hard fatal. Tier-1 explicit `Z_HARNESS_BASE_DIR` bypasses the anchor entirely so CI and benchmark environments can relocate artifacts without conflicting with a developer machine's pre-existing anchor. `scripts/log-event.sh` is the shared append point for both per-run `events.jsonl` and the aggregate `metrics.jsonl`, and (since 2026-06-29) also fans out a best-effort Hermes liveness marker when `HERMES_MARKER_FILE` is set, so hermes-managed sessions get status/heartbeat signals for free without changing the base-resolution logic.
+Within the chosen base the directory structure is: `<base>/plans/<slug>/` for plan artifacts, `<base>/active-plans/` for the coordination registry, `<base>/active-plans/claims/` for per-slug hard claim locks, `<base>/followups/` for the follow-up queue, and `<base>/metrics.jsonl` for the aggregate event log. A `<git-common-dir>/.z-harness-base` anchor file locks tiers 2-5 to a single resolved path (split-brain guard); any mismatch is a hard fatal. Tier-1 explicit `Z_HARNESS_BASE_DIR` bypasses the anchor entirely so CI and benchmark environments can relocate artifacts without conflicting with a developer machine's pre-existing anchor. `scripts/log-event.sh` is the shared append point for both per-run `events.jsonl` and the aggregate `metrics.jsonl`.
 
 ## Key entry points
 
@@ -33,13 +33,11 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `scripts/migrate-plan-layout.sh:485` — `migrate_plan_slug` — migrates one slug from both legacy sources to `<base>/plans/<slug>`
 - `scripts/migrate-plan-layout.sh:612` — `migrate_full` — full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup
 - `scripts/log-event.sh:91` — `resolve_run_dir` — slug-aware run-archive-dir resolution; mid-flight legacy-dir detection when `Z_HARNESS_BASE_DIR` is unset
-- `scripts/log-event.sh:178` — Hermes marker fan-out — best-effort call into `emit-hermes-marker.sh` (status/heartbeat) when `HERMES_MARKER_FILE` is set; strict no-op otherwise
 
 ## How it interacts with others
 
 - `active-plan-registry` — `active_plans_dir()` feeds the registry's storage path; `migrate-plan-layout.sh` calls `active-plan-registry.py list --json` for the live-run barrier before any real move
 - `plan-claim` — `claims_dir()` (`<base>/active-plans/claims`) is the canonical lock-file directory for `plan-claim.sh`'s per-slug hard mutex
-- `hermes-orchestration` — `log-event.sh` best-effort forwards a status/heartbeat marker to `emit-hermes-marker.sh` whenever `HERMES_MARKER_FILE` is set (hermes-managed sessions only); this is additive and never changes base-resolution or event-append behavior for non-hermes runs
 - `scripts` — `log-event.sh` sources `plan-path.sh` to route events and metrics under the resolved base; source-loop guard (`_Z_HARNESS_RESOLVING_BASE`) prevents infinite recursion when `z_harness_base()` tries to emit `base_resolved`
 - `followup-sink` — `followups_dir()` from plan-path.sh is the canonical path for the follow-up queue; `migrate-plan-layout.sh` skips followups by default (`--with-followups` opts in) to avoid stranding in-flight locks
 - `commands` — every command that constructs plan-relative paths sources or invokes `plan-path.sh` helpers; inline `z-harness/` literals are a DRY violation and fail the command-coverage audit
@@ -56,7 +54,6 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `all_plan_slugs()` excludes the infrastructure names `plans`, `archive`, `adhoc`, `followups`, `improvements`, `active-plans`, `metrics.jsonl`, and `bench`.
 - The `--slug NAME` flag is required to migrate a flat `z-harness/TASKS.md` (no-slug layout); without it the file is skipped with a loud warning.
 - Archiving a session **worktree** that still holds in-repo z-harness state (legacy tier-5 layout) permanently discards those logs. `migrate-plan-layout.sh` cannot rescue them: it REFUSES while a run is `status:running` (invariant 8) and SKIPs on a non-empty target. Use `rescue-worktree-state.sh` instead — the inverse operation: it COPIES (never moves) the worktree's `plans/`, `archive/`, `improvements/`, `adhoc/`, and `metrics.jsonl` to the external base with no live-run barrier, displaced destination files are preserved as `*.pre-rescue`, and `metrics.jsonl` is dedup-appended. It never copies `active-plans/` (would create a zombie `running` record), `*.lock`, or `followups/`. Run it from inside the worktree before archiving.
-- `log-event.sh`'s Hermes marker fan-out (added 2026-06-29) is strictly best-effort and gated on `HERMES_MARKER_FILE`: `emit-hermes-marker.sh` exits 0 immediately when the env var is unset, so non-hermes runs pay only the cost of one cheap env-var test, not a subprocess fork. `kind` maps `context_pressure` events to `heartbeat`; every other event kind maps to `status`.
 - `claims_dir()` returns `<base>/active-plans/claims` (not `<base>/claims`) — the `plan-claim.sh` mutex stores per-slug `.lock` files there.
 
 ## Memories

@@ -230,44 +230,6 @@ When in a plan, the resume consumers (`/z-attend`, the `/z-execute` compaction f
 
 `SESSION_CONTEXT.md` is the required live handoff brief for `/z-handoff`. `SESSION.md` remains the bounded curated execution log produced by `context-curator`; do not rely on it for live conversational state. If both exist, include both in `context_files` with `SESSION_CONTEXT.md` before `SESSION.md`.
 
-## Phase 3b — Hermes handoff_continue marker (managed-session consumption)
-
-If `HERMES_MARKER_FILE` is set, the session is Hermes-managed: emit a `handoff_continue`
-marker so the Hermes watcher consumes this **user-triggered** handoff and performs the
-announced `/clear` + resume (the same marker the automatic `scripts/write-clear-checkpoint.sh`
-path emits — this is what makes `/z-handoff` Hermes-consumable at every trigger, not just the
-auto-checkpoint ones). The marker's `handoff_text` carries the resume command (`next_step`) so
-the watcher can drive `/clear` then that command.
-
-**Reliability requirement:** when `HERMES_MARKER_FILE` is set, this emission MUST NOT silently
-no-op. Invoke `emit-hermes-marker.sh` with `--strict` so a genuine write failure (unwritable marker
-path, full disk, envelope build error) returns non-zero — then surface the error and exit non-zero.
-A Hermes-managed handoff that writes `handoff.json` but drops the marker would leave the watcher
-unaware and the session stranded. Without `--strict` the script is best-effort (always exits 0), so
-the flag is what makes the guard below actually fire. (When `HERMES_MARKER_FILE` is unset — non-Hermes
-runs — `emit-hermes-marker.sh` is a strict no-op regardless of `--strict`, so this block is invisible
-to pi/Claude-Code/Codex runs.)
-
-```bash
-if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
-  _HCC_NEXT="$(python3 -c '
-import json, sys
-try:
-    print(json.load(open(sys.argv[1])).get("next_step") or "")
-except Exception:
-    print("")
-' "$HANDOFF_PATH" 2>/dev/null || true)"
-  _HCC_TEXT="${_HCC_NEXT:-${NEXT_STEP:-}}"
-  _HCC_TASK="${Z_HARNESS_SLUG:-${RUN_ID:-orchestration}}"
-  _HCC_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"handoff_text": sys.argv[1]}))' "$_HCC_TEXT")"
-  if ! bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/emit-hermes-marker.sh" --strict \
-        "handoff_continue" "$_HCC_TASK" "$_HCC_PAYLOAD"; then
-    echo "handoff: FAILED to emit handoff_continue marker — Hermes will not consume this handoff" >&2
-    exit 1
-  fi
-fi
-```
-
 ## Phase 4 — Emit telemetry
 
 If z-harness telemetry is available (`scripts/log-event.sh` exists):
@@ -310,9 +272,8 @@ After writing `handoff.json`:
    ```
    ````
 
-   Emit this block even when Hermes is managing the session (`HERMES_MARKER_FILE` set) — the
-   watcher consumes the marker, not chat output, so the block is harmless there and essential
-   everywhere else.
+   This block is the portable fallback for a human operator driving the handoff without an
+   automatic watcher.
 3. Exit the agent session. A watcher detects `handoff.json` and spawns the next session.
 
 ## Examples

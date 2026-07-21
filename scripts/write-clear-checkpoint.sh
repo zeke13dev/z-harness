@@ -298,41 +298,12 @@ fi
 
 bash "$_PLUGIN_ROOT/scripts/log-event.sh" "$RUN_ID" clear_checkpoint_written "$PAYLOAD" >/dev/null 2>&1 || true
 
-# Hermes handoff_continue marker — emitted only when HERMES_MARKER_FILE is set.
-# Signals the autonomous-resume watcher that the run has yielded at a durable
-# clear-checkpoint (compaction_pause / resumable yield) and is NOT finished.
-#
-# Intentionally best-effort (`|| true`), NOT --strict — unlike /z-handoff's
-# Phase 3b which fails loud. This runs mid-/z-execute on the yield path, and a
-# fatal marker emit here would abort the checkpoint/STATUS contract the caller
-# depends on. Making this path strict (a dropped marker here also strands the
-# session) is a deliberate follow-up, out of scope for the strict-mode fix.
-if [[ -n "${HERMES_MARKER_FILE:-}" ]]; then
-  _HCC_NEXT="$(python3 -c '
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-    v = d.get("next_step") or ""
-    print(v)
-except Exception:
-    print("")
-' "$HANDOFF_FILE" 2>/dev/null || true)"
-  _HCC_TEXT="${_HCC_NEXT:-$STATUS_VALUE}"
-  _HCC_TASK="${Z_HARNESS_SLUG:-${RUN_ID:-orchestration}}"
-  _HCC_PAYLOAD="$(python3 -c \
-    'import json, sys; print(json.dumps({"handoff_text": sys.argv[1]}))' \
-    "$_HCC_TEXT" 2>/dev/null || printf '{"handoff_text":""}')"
-  bash "$_PLUGIN_ROOT/scripts/emit-hermes-marker.sh" \
-    "handoff_continue" "$_HCC_TASK" "$_HCC_PAYLOAD" >/dev/null 2>&1 || true
-fi
-
 printf 'STATUS: clear_checkpoint handoff=%s session=%s status=%s resume=%q bytes=%s phase_id=%s state=%s\n' \
   "$HANDOFF_FILE" "${SESSION_PATH:-none}" "$STATUS_VALUE" "$RESUME_COMMAND" "$HANDOFF_BYTES" \
   "${PHASE_ID:-none}" "${STATE_FILE:-none}"
 
 # Human copy-paste resume block — printed AFTER the STATUS line so prefix
 # parsers (`case "$CHECKPOINT_OUT" in STATUS:\ clear_checkpoint*)` and the
-# startswith() test assertions) are unaffected. Hermes ignores stdout (it
-# consumes the marker file); this is for a human operator driving the
-# /clear + resume by hand.
+# startswith() test assertions) are unaffected. This is for a human operator
+# driving the /clear + resume by hand.
 printf '\nResume after /clear — copy-paste:\n\n```\n%s\n```\n' "$RESUME_COMMAND"

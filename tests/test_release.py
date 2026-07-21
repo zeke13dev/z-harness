@@ -39,7 +39,6 @@ from z_harness_cli.release import (
     ManifestSchemaError,
     ReleaseArtifactError,
     ReleaseManifest,
-    ReleaseProvenanceError,
     VersionComparisonResult,
     compare_versions,
     fetch_manifest,
@@ -48,7 +47,6 @@ from z_harness_cli.release import (
     parse_manifest,
     verify_sha256,
     verify_release_artifacts,
-    verify_publication_provenance,
     require_plugin_tarball_metadata,
 )
 
@@ -119,64 +117,6 @@ class TestReleaseCandidate(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_release_candidate(value)
-
-
-class TestPublicationProvenance(unittest.TestCase):
-
-    def test_exact_canonical_tag_checkout_and_prod_tip_are_accepted(self):
-        commit = "a" * 40
-
-        candidate = verify_publication_provenance(
-            "2.4.1-beta.10",
-            "v2.4.1-beta.10",
-            commit,
-            commit,
-            commit,
-        )
-
-        self.assertEqual(candidate.plugin_version, "2.4.1-beta.10")
-
-    def test_noncanonical_or_wrong_tag_is_rejected(self):
-        commit = "a" * 40
-
-        with self.assertRaisesRegex(ReleaseProvenanceError, "not canonical"):
-            verify_publication_provenance("2.4.1", "2.4.1", commit, commit, commit)
-
-    def test_wrong_workflow_sha_is_rejected(self):
-        commit = "a" * 40
-
-        with self.assertRaisesRegex(ReleaseProvenanceError, "GITHUB_SHA"):
-            verify_publication_provenance(
-                "2.4.1",
-                "v2.4.1",
-                commit,
-                "b" * 40,
-                commit,
-            )
-
-    def test_abbreviated_or_missing_commit_is_rejected(self):
-        commit = "a" * 40
-
-        with self.assertRaisesRegex(ReleaseProvenanceError, "full lowercase"):
-            verify_publication_provenance(
-                "2.4.1",
-                "v2.4.1",
-                "a" * 12,
-                commit,
-                commit,
-            )
-
-    def test_stale_prod_tip_is_rejected(self):
-        commit = "a" * 40
-
-        with self.assertRaisesRegex(ReleaseProvenanceError, "prod tip"):
-            verify_publication_provenance(
-                "2.4.1",
-                "v2.4.1",
-                commit,
-                commit,
-                "b" * 40,
-            )
 
 
 def _write_release_artifact_fixture(
