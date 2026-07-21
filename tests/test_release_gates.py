@@ -213,6 +213,8 @@ def test_release_docs_treat_branch_protection_as_administrative_setup() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "administrative prerequisite" in setup
     assert "do not query or prove GitHub ruleset configuration" in setup
+    assert "Protect the canonical release-tag namespace (`v*`)" in setup
+    assert "full-history credential and privacy scan has passed" in setup
     assert "a Git fetch proves the branch tip, not its ruleset configuration" in readme
 
 
@@ -221,9 +223,10 @@ def test_release_publication_depends_on_both_os_and_rechecks_freshness_immediate
     publish = workflow.index("publish:")
     refresh = workflow.index("Refresh authoritative refs immediately before publication", publish)
     freshness = workflow.index("Immediate publication freshness check", publish)
+    tag = workflow.index("Atomically publish and verify the canonical candidate tag", publish)
     publication = workflow.index("Create GitHub release from the exact allowlist", publish)
     assert "needs: verify" in workflow[publish:]
-    assert refresh < freshness < publication
+    assert refresh < freshness < tag < publication
     between = workflow[refresh:publication]
     assert "--mode publication-freshness" in between
     assert "--authorization" in between
@@ -232,7 +235,12 @@ def test_release_publication_depends_on_both_os_and_rechecks_freshness_immediate
     assert 'git ls-remote --refs origin "refs/tags/v$CANDIDATE_VERSION"' in between
     assert "refs/remotes/origin/prod" not in workflow
     assert "uses:" not in between
-    assert "push:" not in workflow
+    tag_block = workflow[tag:publication]
+    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in tag_block
+    assert 'git ls-remote --refs origin "refs/tags/$TAG"' in tag_block
+    assert '[[ "$REMOTE_TAG" == "$CANDIDATE_SHA" ]]' in tag_block
+    assert "--force" not in tag_block
+    assert "push:" not in workflow.split("jobs:", 1)[0]
     assert "tags:" not in workflow
     assert "target_commitish: ${{ inputs.candidate_sha }}" in workflow
     assets = workflow[publication:]
