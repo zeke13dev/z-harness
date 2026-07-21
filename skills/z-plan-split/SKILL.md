@@ -641,6 +641,13 @@ Recommended next:
 
 For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-execute` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
 
+Phase 5 MUST ensure `workstreams.json` exists via
+`scripts/generate-workstreams.py --source z-plan-split --plan-dir "$Z_HARNESS_PLAN_DIR"`.
+The generated manifest is the vendor-neutral handoff from the split plan tree to
+downstream execution: it records ready workstreams, dependency order, shared
+concerns, and partial-tree state without enrolling the planning session in any
+watchdog or host-specific fanout transport.
+
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 7): normal completion deregisters with `complete`.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
