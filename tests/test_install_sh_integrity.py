@@ -121,7 +121,7 @@ class InstallShIntegrityTest(unittest.TestCase):
                     mirror.mkdir()
                     (mirror / ".git").mkdir()
                     for name in (
-                        ".codex-plugin",
+                        ".claude-plugin",
                         "skills",
                         "agents",
                         "runtime",

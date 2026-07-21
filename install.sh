@@ -24,7 +24,8 @@
 #   Installs: skills/, agents/, runtime/ (includes runtime/drivers/)
 #
 # Codex symlink mode (repo clone detected):
-#   Requires: cwd contains .git AND .codex-plugin/plugin.json AND skills/
+#   Requires: cwd contains .git + skills/. A missing generated Codex manifest
+#             is bootstrapped from the tracked Claude version stamp.
 #   Creates: ~/plugins/z-harness -> <cwd>
 #   Creates/updates: ~/.agents/plugins/marketplace.json
 #   Runs: codex plugin add z-harness@personal when codex is on PATH
@@ -158,6 +159,33 @@ is_repo_clone() {
 
 is_codex_plugin_source() {
   [[ -e ".git" && -f ".codex-plugin/plugin.json" && -d "skills" ]]
+}
+
+bootstrap_codex_source_manifest() {
+  [[ -f ".codex-plugin/plugin.json" ]] && return 0
+  [[ -e ".git" && -d "skills" && -f ".claude-plugin/plugin.json" ]] || return 1
+  python3 -c '
+import json
+import os
+import sys
+from pathlib import Path
+
+source = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+version = source.get("version")
+if not isinstance(version, str) or not version:
+    raise SystemExit("tracked Claude plugin manifest has no version")
+manifest = {
+    "name": "z-harness",
+    "version": version,
+    "description": "z-harness planning and implementation workflow for Codex CLI",
+    "skills": "./skills/",
+}
+target = Path(sys.argv[2])
+target.parent.mkdir(parents=True, exist_ok=True)
+temporary = target.with_name(f".{target.name}.tmp.{os.getpid()}")
+temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+os.replace(temporary, target)
+' ".claude-plugin/plugin.json" ".codex-plugin/plugin.json"
 }
 
 ensure_can_replace() {
@@ -1820,6 +1848,16 @@ install_transaction_from_tarball() {
 
 # Main dispatch
 main_result=0
+if [[ -z "$TARBALL_URL" ]] \
+  && [[ "$TARGET" == "codex" || "$TARGET" == "all" ]] \
+  && [[ ! -f ".codex-plugin/plugin.json" ]] \
+  && is_repo_clone; then
+  if ! bootstrap_codex_source_manifest; then
+    printf 'install.sh: ERROR: failed to bootstrap the Codex source manifest.\n' >&2
+    release_transaction_lock
+    exit 1
+  fi
+fi
 if [[ -n "$TARBALL_URL" ]]; then
   install_transaction_from_tarball "$TARBALL_URL" || main_result=$?
 elif { [[ "$TARGET" == "claude" ]] && is_repo_clone; } \
@@ -1833,7 +1871,7 @@ elif [[ -n "${Z_HARNESS_RELEASE_URL:-}" ]]; then
 else
   printf 'install.sh: ERROR: not a compatible repo clone for --target=%s.\n' "$TARGET" >&2
   printf '  Claude needs .git + skills/ + agents/ + runtime/.\n' >&2
-  printf '  Codex needs .git + .codex-plugin/plugin.json + skills/.\n' >&2
+  printf '  Codex needs .git + skills/ and a tracked Claude version stamp (the Codex manifest is generated).\n' >&2
   printf '  To install from tarball: bash install.sh --target=%s --tarball=<url>\n' "$TARGET" >&2
   printf '  Or set Z_HARNESS_RELEASE_URL and re-run.\n' >&2
   main_result=1

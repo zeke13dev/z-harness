@@ -136,7 +136,13 @@ fi
 [ -n "$CANDIDATES" ] || exit 0             # nothing to guard -> allow
 
 NOW="$(date +%s 2>/dev/null)" || exit 0
-mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+mtime_of() {
+  local value
+  value="$(stat -c %Y "$1" 2>/dev/null)" || value=""
+  case "$value" in (*[!0-9]*|'') : ;; (*) printf '%s\n' "$value"; return ;; esac
+  value="$(stat -f %m "$1" 2>/dev/null)" || value=""
+  case "$value" in (*[!0-9]*|'') printf '0\n' ;; (*) printf '%s\n' "$value" ;; esac
+}
 
 # --- guard one path: block primary, otherwise stamp/observe a linked-tree claim ---
 # Echoes "PRIMARY <worktree>" and returns 3 for primary content edits; echoes

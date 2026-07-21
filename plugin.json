@@ -1,6 +1,6 @@
 {
   "name": "z-harness",
-  "version": "1.0.414",
+  "version": "1.0.415",
   "description": "Plugin/workflow layer for existing AI coding harnesses: setup, planning, implementation, review, docs, and release gates with explicit host capability limits.",
   "author": {
     "name": "zeke"

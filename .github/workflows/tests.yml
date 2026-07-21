@@ -43,6 +43,13 @@ jobs:
           # 3.11+ is required: scripts/config.py imports the stdlib tomllib.
           python-version: "3.11"
 
+      - name: Set up pinned uv for release-assembly tests
+        uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca # v6.0.1
+        with:
+          version: "0.11.3"
+          checksum: "c0f3236f146e55472663cfbcc9be3042a9f1092275bbe3fe2a56a6cbfd3da5ce"
+          enable-cache: false
+
       - name: Install dependencies
         # pytest is the runner; tomlkit is an optional dep config.py uses for
         # comment-preserving TOML writes — install it so CI exercises the same
