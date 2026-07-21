@@ -54,7 +54,7 @@ assert_eq() {
 
 assert_contains() {
   local label="$1" needle="$2" haystack="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if [[ "$haystack" == *"$needle"* ]]; then
     echo "  PASS: $label"
     PASS=$(( PASS + 1 ))
   else
@@ -67,7 +67,7 @@ assert_contains() {
 
 assert_not_contains() {
   local label="$1" needle="$2" haystack="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if [[ "$haystack" == *"$needle"* ]]; then
     echo "  FAIL: $label (found unwanted substring)"
     echo "        unwanted: [$needle]"
     echo "        in: [$haystack]"
@@ -273,7 +273,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_start":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 
 # Extract dispatch_id from dispatch_end event
@@ -283,7 +282,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_end":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 
 # dispatch_id must be non-empty
@@ -335,7 +333,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_start":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 
 DID_END_007="$(echo "$EVENTS_007" | python3 -c '
@@ -344,7 +341,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_end":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 
 assert_eq "custom dispatch_id in dispatch_start" "$CUSTOM_DID" "$DID_START_007"
@@ -375,7 +371,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_start":
         print(e.get("timeout_s", ""))
-        break
 ')"
 
 # Config default for cargo is 1800; fallback is 600 if config unreachable.
@@ -439,7 +434,6 @@ for l in sys.stdin:
     e = json.loads(l)
     if e.get("kind") == "dispatch_start":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 DID_010_END="$(echo "$EVENTS_010" | python3 -c '
 import json, sys
@@ -447,7 +441,6 @@ for l in sys.stdin:
     e = json.loads(l)
     if e.get("kind") == "dispatch_end":
         print(e.get("dispatch_id", ""))
-        break
 ')"
 assert_eq "dispatch_id consistent across start+end" "$DID_010_START" "$DID_010_END"
 
@@ -458,7 +451,6 @@ for l in sys.stdin:
     e = json.loads(l)
     if e.get("kind") == "dispatch_end":
         print(e.get("exit_code", ""))
-        break
 ')"
 assert_eq "dispatch_end records exit_code 124" "124" "$EXIT_CODE_010"
 
@@ -467,21 +459,51 @@ rm -rf "$BASE_010"
 # ---------------------------------------------------------------------------
 # Helper: build a PATH with timeout/gtimeout stripped.
 # Sets the named variable to the stripped PATH string.
-# Does NOT copy scripts — the real scripts dir is used (SCRIPT_DIR).
+# A directory that contains timeout may also contain bash/python/coreutils
+# (notably /usr/bin on Linux). Replace only that directory with a symlink
+# shadow that omits timeout/gtimeout so the fallback test keeps its runtime.
 # ---------------------------------------------------------------------------
+STRIPPED_PATH_CACHE=""
+STRIPPED_PATH_SHADOWS=()
+
+_cleanup_stripped_path_shadows() {
+  local shadow
+  for shadow in "${STRIPPED_PATH_SHADOWS[@]}"; do
+    rm -rf -- "$shadow"
+  done
+}
+trap _cleanup_stripped_path_shadows EXIT
+
 _stripped_path_no_timeout() {
   local OUT_PATH_VAR="$1"
+  if [[ -n "$STRIPPED_PATH_CACHE" ]]; then
+    printf -v "$OUT_PATH_VAR" '%s' "$STRIPPED_PATH_CACHE"
+    return
+  fi
+
   local _stripped_path=""
   local _IFS_SAVE="$IFS"
   IFS=":"
   for _p in $PATH; do
-    # Skip any dir that provides timeout/gtimeout
+    # Shadow any directory that provides timeout/gtimeout, preserving every
+    # other executable rather than dropping the whole directory from PATH.
     if [[ -x "$_p/timeout" ]] || [[ -x "$_p/gtimeout" ]]; then
-      continue
+      local _shadow
+      _shadow="$(_tmpdir)"
+      STRIPPED_PATH_SHADOWS+=("$_shadow")
+      local _entry _name
+      for _entry in "$_p"/*; do
+        [[ -x "$_entry" ]] || continue
+        _name="${_entry##*/}"
+        [[ "$_name" == "timeout" || "$_name" == "gtimeout" ]] && continue
+        ln -s "$_entry" "$_shadow/$_name" 2>/dev/null || true
+      done
+      _p="$_shadow"
     fi
     _stripped_path="${_stripped_path:+${_stripped_path}:}${_p}"
   done
   IFS="$_IFS_SAVE"
+  STRIPPED_PATH_CACHE="$_stripped_path"
   printf -v "$OUT_PATH_VAR" '%s' "$_stripped_path"
 }
 
@@ -553,7 +575,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "timeout_degraded":
         print(e.get("backend",""), e.get("recommend",""))
-        break
 ')
 assert_contains "degraded payload has backend=bash_fallback" "bash_fallback" "$DEGRADED_PAYLOAD_012"
 assert_contains "degraded payload has recommend hint"        "brew install"    "$DEGRADED_PAYLOAD_012"
@@ -676,7 +697,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_start":
         print(e.get("pid", "MISSING"))
-        break
 ')"
 
 # pid must be a positive integer (not 0 and not null).
@@ -728,7 +748,6 @@ for line in sys.stdin:
     e = json.loads(line)
     if e.get("kind") == "dispatch_start":
         print(e.get("pid", "MISSING"))
-        break
 ')"
 
   if [[ "$PID_016" == "0" ]]; then
@@ -767,7 +786,8 @@ fi
 #   (a) dispatch_start is in events.jsonl, AND
 #   (b) its pid field is a positive integer (real child pid), AND
 #   (c) the wrapper process is still alive (confirms we're mid-hang, not post-hang).
-# Then kill the wrapper to avoid waiting for the full timeout.
+# Then let the wrapper enforce its own short deadline so its child and reaper
+# exit through the production cleanup path.
 # ---------------------------------------------------------------------------
 echo ""
 echo "TEST-017: bash fallback — dispatch_start emitted PROMPTLY mid-hang (before timeout)"
@@ -821,8 +841,8 @@ print("MISSING")
   sleep 0.2
 done
 
-# Kill the wrapper (avoids waiting for the full 10s timeout).
-kill "$WRAPPER_PID_017" 2>/dev/null || true
+# Let the wrapper reach its 10-second deadline. Killing the wrapper directly
+# would orphan the fallback child/reaper and leave inherited output pipes open.
 wait "$WRAPPER_PID_017" 2>/dev/null || true
 
 # Assertion (a) + (b): dispatch_start present with real non-zero pid.
