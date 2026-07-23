@@ -5,7 +5,7 @@ axiom-store.py — CRUD + validation over the two-layer axiom store.
 Subcommands:
   path      --scope <global|project> [--repo-root <p>]
   add       --scope <s> --from-json <path|->
-  list      [--scope <s>] [--status <st>] [--discipline <d>]
+  list      [--scope <s>] [--status <st>] [--discipline <d>] [--limit <n>]
   get       <id> [--scope <s>]
   validate  <id>|--all [--scope <s>]
   approve   <id> --scope <s> [--ack-observation]
@@ -649,6 +649,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     scope = getattr(args, "scope", None)
     status_filter = getattr(args, "status", None)
     discipline_filter = getattr(args, "discipline", None)
+    limit = getattr(args, "limit", None)
     repo_root = getattr(args, "repo_root", None)
 
     # Gather records
@@ -677,6 +678,8 @@ def cmd_list(args: argparse.Namespace) -> None:
         result = [r for r in result if r.get("status") == status_filter]
     if discipline_filter:
         result = [r for r in result if r.get("discipline") == discipline_filter]
+    if limit is not None:
+        result = result[:limit]
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -1256,6 +1259,16 @@ def cmd_edit(args: argparse.Namespace) -> None:
 # Argument parser
 # ---------------------------------------------------------------------------
 
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="axiom-store.py",
@@ -1280,6 +1293,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--scope", choices=["global", "project"], default=None)
     p_list.add_argument("--status", choices=["candidate", "approved", "rejected"], default=None)
     p_list.add_argument("--discipline", default=None)
+    p_list.add_argument("--limit", type=_positive_int, default=None,
+                        help="Limit the number of records printed")
     p_list.add_argument("--repo-root", dest="repo_root", default=None)
 
     # get
