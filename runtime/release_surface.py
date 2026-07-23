@@ -152,9 +152,9 @@ _DEV_ONLY_MCP_TOOLS = frozenset(
 # Hosts that may be explicitly exported in a public release. T002 narrows public
 # setup/help defaults further; this list only classifies export consumers.
 _PROD_EXPORT_TARGETS = frozenset(
-    {"antigravity", "claude", "cline", "codex", "copilot", "cursor", "kiro", "omp", "pi", "windsurf"}
+    {"antigravity", "claude", "cline", "codex", "copilot", "cursor", "kiro", "omp", "pi", "sterling", "windsurf"}
 )
-_RUNTIME_DRIVER_EXPORT_TARGETS = frozenset({"pi", "windsurf", "kiro", "cline", "copilot"})
+_RUNTIME_DRIVER_EXPORT_TARGETS = frozenset({"pi", "sterling", "windsurf", "kiro", "cline", "copilot"})
 
 
 # Public release defaults are intentionally narrower than the complete set of
@@ -201,6 +201,7 @@ _PUBLIC_HOST_CLAIMS = {
     "copilot": {"tier": "export_only", "status": "not_release_default"},
     "kiro": {"tier": "export_only", "status": "not_release_default"},
     "pi": {"tier": "export_only", "status": "not_release_default"},
+    "sterling": {"tier": "export_only", "status": "not_release_default"},
     "windsurf": {"tier": "export_only", "status": "not_release_default"},
 }
 
@@ -380,6 +381,8 @@ _PROD_BACKEND_PATHS = frozenset(
         "runtime/drivers/omp/subprocess_driver.py",
         "runtime/drivers/pi/__init__.py",
         "runtime/drivers/pi/export.py",
+        "runtime/drivers/sterling/__init__.py",
+        "runtime/drivers/sterling/export.py",
         "runtime/drivers/windsurf/__init__.py",
         "runtime/drivers/windsurf/export.py",
         "runtime/release_surface.py",
@@ -424,6 +427,7 @@ _PROD_SCHEMA_PATHS = frozenset(
         "docs/schemas/handoff.schema.json",
         "docs/schemas/invariant.schema.json",
         "runtime/contract/agent.schema.json",
+        "runtime/contract/sterling-export.schema.json",
         "runtime/contract/command.schema.json",
         "runtime/contract/event.schema.json",
         "runtime/contract/provider.schema.json",
