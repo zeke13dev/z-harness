@@ -287,7 +287,7 @@ DEFAULTS: dict = {
     "export": {
         # Which export hosts to target.  Absent → all four current defaults.
         # Closed set: adapter names {claude, antigravity, cursor, codex} ∪
-        # export-only driver names {pi, windsurf, cline, kiro, copilot}.
+        # export-only driver names {pi, sterling, windsurf, cline, kiro, copilot}.
         # Env transport: Z_HARNESS_EXPORT_HOSTS as JSON-encoded array string.
         "hosts": ["cursor", "codex", "agy", "omp", "pi"],  # default "all" set; omp is a first-class native host
         # Export strategy enum.  Each driver interprets it for its host.
@@ -663,7 +663,7 @@ def _default_for_dotted_key(dotted_key: str) -> object:
 #   export-only driver names (handled by runtime/drivers/<name>/export.py)
 _EXPORT_VALID_HOSTS: frozenset[str] = frozenset({
     "claude", "antigravity", "cursor", "codex", "omp",   # adapter names
-    "pi", "windsurf", "cline", "kiro", "copilot",        # export-only driver names
+    "pi", "sterling", "windsurf", "cline", "kiro", "copilot", # export-only driver names
     "agy",                                                # alias for antigravity used in z-export.md
 })
 
@@ -673,7 +673,7 @@ def _validate_export_hosts(value: object) -> bool:
 
     Valid host names are the union of adapter names {claude, antigravity, agy,
     cursor, codex, omp} and export-only driver names {pi, windsurf, cline,
-    kiro, copilot}.  Unknown names are rejected.  The list must be non-empty.
+    kiro, copilot, sterling}. Unknown names are rejected. The list must be non-empty.
     """
     if isinstance(value, str):
         # Env-layer transport: JSON-encoded list, e.g. '["cursor","codex"]'

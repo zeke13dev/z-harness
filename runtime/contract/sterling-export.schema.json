@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Sterling z-harness export manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "workers", "workflows", "contract"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"const": "z-harness"},
+    "source_commit": {"type": ["string", "null"]},
+    "workers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "workflows": {"type": "object"},
+    "contract": {
+      "type": "object",
+      "required": ["harness_owns", "sterling_owns"],
+      "properties": {
+        "harness_owns": {"type": "array", "items": {"type": "string"}},
+        "sterling_owns": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

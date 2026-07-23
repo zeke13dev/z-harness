@@ -320,7 +320,8 @@ def test_release_contract_freezes_exact_evidence_bounded_host_claims() -> None:
         "cline": {"tier": "export_only", "status": "not_release_default"},
         "copilot": {"tier": "export_only", "status": "not_release_default"},
         "kiro": {"tier": "export_only", "status": "not_release_default"},
-        "pi": {"tier": "export_only", "status": "not_release_default"},
+            "pi": {"tier": "export_only", "status": "not_release_default"},
+            "sterling": {"tier": "export_only", "status": "not_release_default"},
         "windsurf": {"tier": "export_only", "status": "not_release_default"},
     }
 
