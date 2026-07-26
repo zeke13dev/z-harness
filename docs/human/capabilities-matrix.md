@@ -1,7 +1,7 @@
 # Host Capabilities Matrix
 
-> Last updated: 2026-07-17
-> Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/codex_parity_gate.py, z_harness_cli/adapters/omp.py, z_harness_cli/adapters/omp_parity_gate.py, runtime/drivers/codex/probe.py, runtime/drivers/codex/export.py, runtime/drivers/codex/mcp.py, runtime/drivers/omp/export.py, runtime/drivers/omp/subprocess_driver.py, runtime/drivers/windsurf/export.py, runtime/drivers/kiro/export.py, runtime/drivers/cline/export.py, runtime/drivers/copilot/export.py, .omp/config.yml, runtime/release_surface.py
+> Last updated: 2026-07-25
+> Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/codex_parity_gate.py, z_harness_cli/adapters/omp.py, z_harness_cli/adapters/omp_parity_gate.py, runtime/drivers/codex/probe.py, runtime/drivers/codex/export.py, runtime/drivers/codex/mcp.py, runtime/drivers/omp/export.py, runtime/drivers/omp/subprocess_driver.py, runtime/drivers/windsurf/export.py, runtime/drivers/kiro/export.py, runtime/drivers/cline/export.py, runtime/drivers/copilot/export.py, scripts/orchestration-status.py, .omp/config.yml, runtime/release_surface.py
 
 ## Public release contract
 
@@ -19,7 +19,7 @@ The public host claims are evidence-bounded:
 | Codex | `partial` | `preview` | `blocking_clean_plugin` |
 | OMP | `native` | `conditional` | `clean_installed_wheel_proof` |
 | Antigravity, Cursor | `dev_advanced` | `not_release_default` | development/advanced use only |
-| Cline, Copilot, Kiro, pi, Windsurf | `export_only` | `not_release_default` | export use only |
+| Cline, Copilot, Kiro, pi, Sterling, Windsurf | `export_only` | `not_release_default` | export use only |
 
 The public surface excludes `/z-attend`, `/z-explore`, `/z-map`,
 `/z-overnight`, `/z-research`, user-facing `z-axiom-*`, the
@@ -60,7 +60,7 @@ The capabilities matrix describes how completely z-harness features work on each
 
 **Adapter/export hosts** (OMP native for 4 families, Antigravity/agy, Cursor, Codex CLI) — these have a `HostAdapter` class in `z_harness_cli/adapters/`, can be launched/injected, and are registered in the adapter registry. Each is assigned a **fidelity tier** and per-command tiers that tell callers whether a given `/z-*` command runs natively, in degraded mode, or is blocked entirely. Both OMP and Codex now read their fidelity and command tiers from dedicated parity gates (`omp_parity_gate.py`, `codex_parity_gate.py`) rather than a hardcoded dict — `base.py`'s `register_command_tiers()` accepts an optional `tier_provider` callable so `command_tier()` re-reads live gate state instead of a frozen import-time snapshot. OMP's gate (T009) has resolved: `/z-execute`, `/z-consult`, `/z-gate`, `/z-panel` are `native`; all remaining OMP families stay `degraded`. Codex's gate remains conservative: adapter fidelity is `flattened`, export fidelity is `partial`, and all four multi-agent families are `blocked` pending both behavioral parity evidence *and* a separately-gated `native_subagent_dispatch` runtime primitive.
 
-**Export-only hosts** (Windsurf, Kiro, Cline, Copilot, and legacy pi) — these have a runtime export driver in `runtime/drivers/<host>/export.py` but **no HostAdapter, no adapter-registry entry, and no launch/inject support**. They can only be used via `/z-export` or the runtime CLI. They are not in the `COMMAND_CAPABILITY_MATRIX` and will never be.
+**Export-only hosts** (Windsurf, Kiro, Cline, Copilot, Sterling, and legacy pi) — these have a runtime export driver in `runtime/drivers/<host>/export.py` but **no HostAdapter, no adapter-registry entry, and no launch/inject support**. They can only be used via `/z-export` or the runtime CLI. They are not in the `COMMAND_CAPABILITY_MATRIX` and will never be.
 
 The `COMMAND_CAPABILITY_MATRIX` dict in `base.py` is populated at import time by each adapter's `register_command_tiers()` call; `command_tier(host, cmd)` provides fail-safe O(1) lookup (unknown = blocked), checking `COMMAND_CAPABILITY_PROVIDERS[host]` first (for parity-gated hosts) before falling back to the frozen matrix snapshot.
 
@@ -69,6 +69,54 @@ The adapters also declare static `Capabilities` flags covering MCP support, trus
 OMP is tracked here as a first-class host whose native claims are bounded by the parity gate (T009, `z_harness_cli/adapters/omp_parity_gate.py`). The three synchronized surfaces — `OmpAdapter.fidelity_tier`, `ExportResult.fidelity` from the OMP exporter, and `COMMAND_CAPABILITY_MATRIX["omp"]` — all read from the gate. Command families in `PARITY_EVIDENCE` promote to `native` only when their T008 test class is importable; removing that class immediately downgrades the family.
 
 Codex is tracked as a first-class host with explicit probe-backed surface separation, gated by `codex_parity_gate.py`. The checked-in adapter path is still the Codex CLI path and remains flattened; export fidelity is partial because the runtime exporter emits native `SKILL.md`, custom-agent TOML, plugin manifest, `AGENTS.md` reference, and MCP config artifacts. Native command-family promotion for the four multi-agent families requires **both** command-level parity evidence (`PARITY_EVIDENCE`, module `runtime.tests.test_codex_parity`) **and** a separately-gated runtime primitive (`native_subagent_dispatch`, `COMMAND_RUNTIME_PRIMITIVES`) — exported `.codex/agents/*.toml` files are not proof of a callable dispatch primitive. `runtime/drivers/codex/probe.py` emits `codex_capabilities` fields for app/plugin multi-agent support, CLI-visible agent support, AskUser/gate support, and event-frame support, which feed evidence but do not themselves promote a command tier. Codex app/plugin capability and Codex CLI capability must not be conflated.
+
+## Codex App safety boundary (Release A)
+
+Codex plugin exports deliberately omit `/z-execute`, so direct Codex App ingress
+cannot start that multi-agent workflow or reach child dispatch. This is a narrow
+workflow admission block: unrelated safe Codex skills remain exported and
+available; it does not disable globally available native collaboration tools.
+Direct source and tarball installs materialize that same filtered Codex payload,
+and re-export removes a stale generated `/z-execute` skill before publishing.
+
+This Release A control does not claim that an already active child can be timed
+out or cancelled. Admission expiry only stops a new workflow from being
+admitted; active-child termination requires a host-owned terminating primitive.
+
+## Orchestration status truth boundary
+
+`scripts/orchestration-status.py` is the synchronized machine/human status
+surface. Its JSON output and default human output are rendered from the same
+normalized document, so they cannot disagree about lifecycle or release
+posture.
+
+| Release | Status | Truthful scope |
+|---|---|---|
+| A | `shipped` | Direct Codex App `/z-execute` admission is blocked and canonical privacy-safe telemetry is available. |
+| B | `shipped` | Transactional admission/reservation enforcement and the tested degraded single-unit boundary are available. |
+| C | `blocked` | Terminal unavailable-broker outcome: no protected broker provides authoritative preemptive counters, unescapable descendant containment, and protected append-only authority. Criteria #10 and #11 remain unmet and are not waived. |
+
+The status schema reports `admission_status=reservation_expired` separately
+from `child_status`. This host has no protected broker or receipt verifier that
+can establish active-child termination, so every reported `timed_out` or
+`cancelled` outcome is rendered as `child_status=unknown`. Caller-supplied
+`evidence_status`, `primitive_id`, and `evidence_id` fields cannot change that
+result. The machine output keeps the reported outcome only as an `unverified`
+audit fact and emits neither primitive nor evidence identity; the human output
+likewise says `reported_timed_out=unverified` or
+`reported_cancelled=unverified`, never that the child actually stopped.
+
+Example:
+
+```bash
+python3 scripts/orchestration-status.py --json status-evidence.json
+python3 scripts/orchestration-status.py status-evidence.json
+```
+
+Release C does not delay the shipped Release A/B controls. The unavailable
+protected broker is a valid terminal outcome for this plan, but never a
+promotion or waiver: Release C remains blocked, criteria #10 and #11 remain
+unmet, and fresh promotion would still require every protected-broker gate.
 
 Codex MCP registration (`runtime/drivers/codex/mcp.py`) was hardened in a follow-up (2026-07-06): registration is idempotent against a *full* desired-state comparison (command, args, env, `enabled_tools`, `disabled_tools`, `default_tools_approval_mode`), not just presence of the `[mcp_servers.z-harness]` key. If the registered entry doesn't match, the module removes and re-adds it (`codex mcp remove` then `codex mcp add`) rather than leaving a stale entry. Because `codex mcp add` has no CLI flag for tool-approval policy or tool filters, the module patches those keys directly into `~/.codex/config.toml` after `add` succeeds. The exported MCP config (`runtime/drivers/codex/export.py::_render_mcp_config`) now narrows the z-harness MCP server to `enabled_tools: ["z_detect"]` with `default_tools_approval_mode: "approve"` — Codex uses native plugin skills as its `/z-*` command surface, so MCP is intentionally scoped to a lightweight detection helper only, preventing a skill run from recursively invoking z-harness command tools over MCP.
 

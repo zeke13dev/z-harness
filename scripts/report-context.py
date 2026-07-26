@@ -25,6 +25,9 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from runtime.telemetry.native_usage import summarize_sources  # noqa: E402
 
 SCHEMA_VERSION = 1
 
@@ -882,6 +885,14 @@ def _extract_halts(events: list[dict]) -> list[dict]:
     return [ev for ev in events if ev.get("kind") in _HALT_KINDS]
 
 
+def _canonical_native_usage(run_dir: Path) -> dict | None:
+    """Return canonical usage/timing for this run without cross-run fallback."""
+    source = run_dir / "native-usage.jsonl"
+    if not source.is_file():
+        return None
+    return summarize_sources([("archive", source)])
+
+
 def _resolve_followups(slug: str, warnings: list[str]) -> list[dict]:
     """Load all follow-up entries from project + global sinks, filtered to this slug."""
     followup_view_py = SCRIPT_DIR / "followup-view-lookup.py"
@@ -983,8 +994,12 @@ def _estimate_cost(run_dir: Path, warnings: list[str]) -> dict:
 
 def _collect_artifacts(run_dir: Path, plan_dir: Path | None) -> list[str]:
     """Return paths to known artifact files present in run or plan dir."""
-    artifact_names = ["SPEC.md", "PLAN.md", "TASKS.md", "FIX.md", "DEBUG.md",
-                      "MORNING_REPORT.md", "run-brief.json", "REPORT.md"]
+    artifact_names = [
+        "SPEC.md", "PLAN.md", "TASKS.md", "TASKS.final.md", "FIX.md", "DEBUG.md",
+        "INTENT.md", "INTENT.frozen.md", "LEDGER.md", "LEDGER.final.md",
+        "work-graph.json", "work-graph.final.json", "MORNING_REPORT.md",
+        "run-brief.json", "REPORT.md",
+    ]
     found: list[str] = []
     search_dirs = [d for d in [run_dir, plan_dir] if d is not None]
     seen: set[str] = set()
@@ -995,6 +1010,116 @@ def _collect_artifacts(run_dir: Path, plan_dir: Path | None) -> list[str]:
                 seen.add(str(p))
                 found.append(str(p))
     return found
+
+
+_PLAN_CONTEXT_FILE_LIMIT = 16_000
+_PLAN_CONTEXT_SUMMARY_LIMIT = 4_000
+_PLAN_CONTEXT_TOTAL_LIMIT = 64_000
+_TASK_SUMMARY_RE = re.compile(r"^T(\d+)$")
+
+
+def _bounded_text(
+    path: Path,
+    *,
+    limit: int,
+    remaining: int,
+    warnings: list[str],
+) -> tuple[dict | None, int]:
+    """Read a deterministic bounded text projection for report synthesis."""
+    if remaining <= 0 or not path.is_file():
+        return None, remaining
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        warnings.append(f"plan context read failed for {path}: {exc}")
+        return None, remaining
+    allowed = min(limit, remaining)
+    clipped = text[:allowed]
+    item = {
+        "path": str(path),
+        "text": clipped,
+        "chars": len(clipped),
+        "truncated": len(text) > len(clipped),
+    }
+    return item, remaining - len(clipped)
+
+
+def _first_bounded_text(
+    candidates: list[Path],
+    *,
+    limit: int,
+    remaining: int,
+    warnings: list[str],
+) -> tuple[dict | None, int]:
+    for path in candidates:
+        if path.is_file():
+            return _bounded_text(path, limit=limit, remaining=remaining, warnings=warnings)
+    return None, remaining
+
+
+def _extract_plan_context(
+    run_dir: Path,
+    plan_dir: Path | None,
+    warnings: list[str],
+) -> dict | None:
+    """Expose bounded INTENT-era narrative directly in context.json.
+
+    Standard reports cannot rely on a synthesizer opening arbitrary artifact paths.
+    This projection keeps the factual contract deterministic and size-bounded.
+    """
+    if plan_dir is None:
+        return None
+    remaining = _PLAN_CONTEXT_TOTAL_LIMIT
+    context: dict[str, object] = {"version": 1}
+
+    intent, remaining = _first_bounded_text(
+        [run_dir / "INTENT.frozen.md", plan_dir / "INTENT.md", run_dir / "INTENT.md"],
+        limit=_PLAN_CONTEXT_FILE_LIMIT,
+        remaining=remaining,
+        warnings=warnings,
+    )
+    if intent is not None:
+        context["intent"] = intent
+
+    ledger, remaining = _first_bounded_text(
+        [plan_dir / "LEDGER.md", run_dir / "LEDGER.final.md", run_dir / "LEDGER.md"],
+        limit=_PLAN_CONTEXT_FILE_LIMIT,
+        remaining=remaining,
+        warnings=warnings,
+    )
+    if ledger is not None:
+        context["ledger"] = ledger
+
+    summaries: list[dict] = []
+    tasks_dir = plan_dir / "archive" / "tasks"
+    if tasks_dir.is_dir():
+        task_dirs = []
+        for path in tasks_dir.iterdir():
+            match = _TASK_SUMMARY_RE.match(path.name)
+            if path.is_dir() and match:
+                task_dirs.append((int(match.group(1)), path.name, path))
+        for _number, task_id, task_dir in sorted(task_dirs):
+            item, remaining = _bounded_text(
+                task_dir / "SUMMARY.md",
+                limit=_PLAN_CONTEXT_SUMMARY_LIMIT,
+                remaining=remaining,
+                warnings=warnings,
+            )
+            if item is not None:
+                item["task_id"] = task_id
+                summaries.append(item)
+            if remaining <= 0:
+                break
+    if summaries:
+        context["task_summaries"] = summaries
+
+    context["chars"] = _PLAN_CONTEXT_TOTAL_LIMIT - remaining
+    context["truncated"] = remaining <= 0 or any(
+        bool(item.get("truncated"))
+        for item in [intent, ledger, *summaries]
+        if isinstance(item, dict)
+    )
+    return context if len(context) > 3 else None
 
 
 def _extract_run_brief(run_dir: Path, warnings: list[str]) -> dict | None:
@@ -1049,12 +1174,44 @@ def _resolve_run_dir(descriptor: dict, warnings: list[str]) -> Path | None:
                     m for m in base.glob(f"**/archive/{run_id}")
                     if m.is_dir()
                 ]
-                matches = sorted(matches)  # deterministic order
+                def candidate_rank(path: Path) -> tuple:
+                    try:
+                        relative = path.relative_to(base)
+                        parts = relative.parts
+                    except ValueError:
+                        parts = path.parts
+                    if len(parts) == 4 and parts[0] == "plans" and parts[2] == "archive":
+                        layout = 0  # canonical active plan
+                    elif len(parts) == 5 and parts[:2] == ("plans", "archive") and parts[3] == "archive":
+                        layout = 1  # archived-plan graveyard
+                    elif len(parts) == 3 and parts[1] == "archive":
+                        layout = 2  # legacy flat plan
+                    elif len(parts) == 2 and parts[0] == "archive":
+                        layout = 3  # global telemetry fallback
+                    else:
+                        layout = 4
+                    events = path / "events.jsonl"
+                    try:
+                        events_size = events.stat().st_size
+                    except OSError:
+                        events_size = 0
+                    evidence = sum(
+                        candidate.is_file()
+                        for candidate in (
+                            events,
+                            path / "run-brief.json",
+                            path / "INTENT.frozen.md",
+                            path / "scope.json",
+                        )
+                    )
+                    return (layout, -evidence, -events_size, str(path))
+
+                matches = sorted(matches, key=candidate_rank)
                 if matches:
                     if len(matches) > 1:
                         warnings.append(
-                            f"Multiple archive dirs found for run_id={run_id!r}; "
-                            f"using {matches[0]}"
+                            f"Multiple archive dirs found for run_id={run_id!r} "
+                            f"({len(matches)} candidates); using {matches[0]}"
                         )
                     return matches[0]
 
@@ -1069,7 +1226,10 @@ def _resolve_run_dir(descriptor: dict, warnings: list[str]) -> Path | None:
                 archive_dir = plan_dir / "archive"
                 if archive_dir.is_dir():
                     run_dirs = sorted(
-                        (d for d in archive_dir.iterdir() if d.is_dir()),
+                        (
+                            d for d in archive_dir.iterdir()
+                            if d.is_dir() and _RUN_ID_RE.match(d.name)
+                        ),
                         key=lambda d: d.name,
                         reverse=True,
                     )
@@ -1089,7 +1249,10 @@ def _resolve_run_dir(descriptor: dict, warnings: list[str]) -> Path | None:
             archive_dir = plan_dir / "archive"
             if archive_dir.is_dir():
                 run_dirs = sorted(
-                    (d for d in archive_dir.iterdir() if d.is_dir()),
+                    (
+                        d for d in archive_dir.iterdir()
+                        if d.is_dir() and _RUN_ID_RE.match(d.name)
+                    ),
                     key=lambda d: d.name,
                     reverse=True,
                 )
@@ -1149,6 +1312,12 @@ def _assemble_run_slug_bundle(
             bundle["transcripts_dir"] = str(transcripts_dir)
         if slug:
             bundle["slug"] = slug
+        plan_context = _extract_plan_context(run_dir, plan_dir, warnings)
+        if plan_context is not None:
+            bundle["plan_context"] = plan_context
+        native_usage = _canonical_native_usage(run_dir)
+        if native_usage is not None:
+            bundle["native_usage"] = native_usage
         return bundle
 
     # Load events
@@ -1215,6 +1384,13 @@ def _assemble_run_slug_bundle(
 
     if slug:
         bundle["slug"] = slug
+    plan_context = _extract_plan_context(run_dir, plan_dir, warnings)
+    if plan_context is not None:
+        bundle["plan_context"] = plan_context
+
+    native_usage = _canonical_native_usage(run_dir)
+    if native_usage is not None:
+        bundle["native_usage"] = native_usage
 
     # Overnight special-case
     if _OVERNIGHT_RE.search(run_id):

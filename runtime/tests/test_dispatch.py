@@ -23,10 +23,18 @@ import json
 import os
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from runtime.capability_authority import (
+    AUTHORITY_VERSION,
+    Capability,
+    CapabilityAuthority,
+    CapabilityEvidence,
+    CapabilityKey,
+)
 from runtime.dispatch.driver import DispatchHandle, HostDriver
 from runtime.dispatch.dispatcher import (
     Dispatcher,
@@ -41,6 +49,14 @@ from runtime.dispatch.dispatcher import (
 from runtime.dispatch.env import build_env
 from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError, TimeoutReaper
+from runtime.orchestration_boundary import (
+    AdmissionDenied,
+    AdmissionRequest,
+    BoundarySources,
+    OrchestrationBoundary,
+    TransitionIds,
+)
+from runtime.orchestration_ledger import OrchestrationLedger
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ZEXECUTE_SKILL_PATH = REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
@@ -68,6 +84,122 @@ class _MinimalDriver(HostDriver):
             _events_fn=lambda: iter([]),
             _wait_fn=lambda: DispatchResult(exit_code=0, is_error=False),
         )
+
+
+class _CountingDriver(_MinimalDriver):
+    """Driver that records each costly dispatch callback."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def dispatch(self, command_id, args, env):
+        self.calls += 1
+        return super().dispatch(command_id, args, env)
+
+
+def _admission(tmp_path: Path) -> tuple[OrchestrationBoundary, AdmissionRequest]:
+    """Return a degraded boundary and exact request for dispatcher tests."""
+
+    key = CapabilityKey("codex", "cli", "build-1", "z-execute", "degraded")
+    authority = CapabilityAuthority(tmp_path / "authority.json")
+    authority.persist(
+        CapabilityEvidence(
+            evidence_id="dispatch-evidence",
+            authority_version=AUTHORITY_VERSION,
+            key=key,
+            capability=Capability.DEGRADED_SINGLE_AGENT,
+            evidence_surface="cli",
+            installed_export_fingerprint="export-1",
+            issued_at=1,
+            expires_at=100,
+        )
+    )
+    boundary = OrchestrationBoundary(
+        authority,
+        OrchestrationLedger(tmp_path / "ledger.sqlite"),
+        BoundarySources(
+            supervisor_id="dispatch-supervisor",
+            host=lambda: "codex",
+            surface=lambda: "cli",
+            runtime_build=lambda driver: "build-1",
+            installed_export_fingerprint=lambda: "export-1",
+            command="z-execute",
+            posture="degraded",
+            driver_type=_CountingDriver,
+            clock=lambda: 2,
+        ),
+    )
+    request = AdmissionRequest(
+        logical_work_id="task-1",
+        reservation_id="reservation-1",
+        writer_id="writer-1",
+        transitions=TransitionIds("r", "d", "s", "i", "z"),
+    )
+    return boundary, request
+
+
+def test_public_run_reserves_before_driver_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dispatcher invokes its driver only after executable admission."""
+
+    boundary, request = _admission(tmp_path)
+    driver = _CountingDriver()
+    driver.init({"args_template": []})
+    monkeypatch.setattr(
+        "runtime.dispatch.dispatcher.log_event", lambda *args, **kwargs: None
+    )
+
+    result = Dispatcher(
+        repo_root=str(tmp_path),
+        run_id="untrusted-run",
+        orchestration_boundary=boundary,
+    ).run(
+        driver,
+        "/z-execute",
+        [],
+        {"args_template": []},
+        admission=request,
+    )
+
+    assert result.success is True
+    assert driver.calls == 1
+
+
+def test_public_run_mismatched_driver_never_calls_driver(tmp_path: Path) -> None:
+    """The public entrypoint binds admission to the actual driver type."""
+
+    boundary, request = _admission(tmp_path)
+    driver = _MinimalDriver()
+    driver.init({"args_template": []})
+
+    with pytest.raises(AdmissionDenied, match="boundary_driver_mismatch"):
+        Dispatcher(
+            repo_root=str(tmp_path),
+            run_id="untrusted-run",
+            orchestration_boundary=boundary,
+        ).run(
+            driver,
+            "/z-execute",
+            [],
+            {"args_template": []},
+            admission=request,
+        )
+
+
+def test_public_run_without_boundary_fails_before_driver(tmp_path: Path) -> None:
+    """Production callers cannot reach raw dispatch through ``run``."""
+
+    driver = _CountingDriver()
+    driver.init({"args_template": []})
+    with pytest.raises(AdmissionDenied, match="requires executable admission"):
+        _make_dispatcher(tmp_path).run(
+            driver,
+            "/z-execute",
+            [],
+            {"args_template": []},
+        )
+    assert driver.calls == 0
 
 
 # ---------------------------------------------------------------------------

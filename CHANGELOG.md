@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-07-25
+
+- _(auto)_ Block direct checkout wheel builds _(release)_
+
 ## 2026-07-16
 
 - _(auto)_ Add supervised planning lifecycle _(watchdog)_

@@ -64,12 +64,16 @@ import importlib.util
 import json
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from runtime.compat import log_event
 from runtime.dispatch.driver import HostDriver
 from runtime.dispatch.env import build_env
 from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError
+
+if TYPE_CHECKING:
+    from runtime.orchestration_boundary import AdmissionRequest, OrchestrationBoundary
 
 
 def _compose_argv(provider_config: dict, effective_model: str | None) -> list[str]:
@@ -414,9 +418,9 @@ class Dispatcher:
         Absolute path to the z-harness repository root.  Forwarded to every
         ``log_event()`` call so ``compat.py`` can locate ``log-event.sh``.
     run_id : str
-        The current run identifier.  Bound at construction time so all events
-        from this dispatcher instance carry the same run identifier without
-        callers having to thread it through every ``run()`` call.
+        The current telemetry identifier.  Bound at construction time so all
+        events carry it consistently; it never selects an admission ceiling or
+        degraded execution lock.
 
     Usage::
 
@@ -424,9 +428,16 @@ class Dispatcher:
         result = d.run(driver, "z-ask", ["--model", "haiku"], provider_config)
     """
 
-    def __init__(self, repo_root: str, run_id: str) -> None:
+    def __init__(
+        self,
+        repo_root: str,
+        run_id: str,
+        *,
+        orchestration_boundary: OrchestrationBoundary | None = None,
+    ) -> None:
         self._repo_root = repo_root
         self._run_id = run_id
+        self._orchestration_boundary = orchestration_boundary
 
     # ------------------------------------------------------------------
     # Public API
@@ -450,8 +461,18 @@ class Dispatcher:
         model_effort: str | None = None,
         model_override_applied: bool | None = None,
         model_override_support: str | None = None,
+        admission: AdmissionRequest | None = None,
     ) -> DispatchResult:
-        """Execute a command via *driver* and return the final result.
+        """Execute an admitted command via *driver* and return its result.
+
+        This is the only public production entrypoint for orchestration
+        dispatch.  ``z-execute`` always requires a configured boundary and
+        admission; a dispatcher configured for degraded orchestration requires
+        them for every attempted path, so review/recovery command substitutions
+        reach the boundary and fail closed.  Other commands on a dispatcher
+        with no orchestration boundary preserve standalone single-agent use.
+        Capability facts, time, export state, command, driver, and supervisor
+        scope are derived outside ``admission``.
 
         Sequence
         --------
@@ -479,6 +500,8 @@ class Dispatcher:
         ``exit_code=-2, is_error=True`` before re-raising.
 
         Args:
+            admission: Immutable logical-work and transition identities.  It
+                contains no authority tuple or run identity.
             driver: An initialised :class:`~runtime.dispatch.driver.HostDriver`
                 instance (``driver.init()`` must have been called before
                 ``run()``).
@@ -531,7 +554,78 @@ class Dispatcher:
                 dispatch exceeds ``provider_config.get("timeout_s", 300)``
                 seconds.  Raised *after* ``dispatch_end`` is emitted and
                 ``driver.teardown()`` is called.
+            AdmissionDenied: If no executable boundary is configured or exact
+                capability/reservation checks reject before driver execution.
         """
+        from runtime.orchestration_boundary import AdmissionDenied
+
+        if self._orchestration_boundary is None:
+            if command_id.lstrip("/") == "z-execute":
+                raise AdmissionDenied("dispatcher requires executable admission")
+            return self._run_raw(
+                driver,
+                command_id,
+                caller_args,
+                provider_config,
+                session_id=session_id,
+                model=model,
+                runtime=runtime,
+                role=role,
+                model_source=model_source,
+                model_route=model_route,
+                model_route_kind=model_route_kind,
+                model_thinking=model_thinking,
+                model_reasoning=model_reasoning,
+                model_effort=model_effort,
+                model_override_applied=model_override_applied,
+                model_override_support=model_override_support,
+            )
+        if admission is None:
+            raise AdmissionDenied("dispatcher requires executable admission")
+        return self._orchestration_boundary._execute_dispatch(
+            admission,
+            driver=driver,
+            command_id=command_id,
+            callback=lambda: self._run_raw(
+                driver,
+                command_id,
+                caller_args,
+                provider_config,
+                session_id=session_id,
+                model=model,
+                runtime=runtime,
+                role=role,
+                model_source=model_source,
+                model_route=model_route,
+                model_route_kind=model_route_kind,
+                model_thinking=model_thinking,
+                model_reasoning=model_reasoning,
+                model_effort=model_effort,
+                model_override_applied=model_override_applied,
+                model_override_support=model_override_support,
+            ),
+        )
+
+    def _run_raw(
+        self,
+        driver: HostDriver,
+        command_id: str,
+        caller_args: list[str],
+        provider_config: dict,
+        session_id: str | None = None,
+        model: str | None = None,
+        runtime: str | None = None,
+        role: str | None = None,
+        model_source: str | None = None,
+        model_route: str | None = None,
+        model_route_kind: str | None = None,
+        model_thinking: str | None = None,
+        model_reasoning: str | None = None,
+        model_effort: str | None = None,
+        model_override_applied: bool | None = None,
+        model_override_support: str | None = None,
+    ) -> DispatchResult:
+        """Implement dispatch after admission; this private seam hard-fails."""
         driver_name = type(driver).__name__
         timeout_s: float = float(provider_config.get("timeout_s", 300))
 

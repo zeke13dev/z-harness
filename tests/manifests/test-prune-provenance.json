@@ -1,0 +1,38 @@
+{
+  "authorization": {
+    "authorized_deletions": [],
+    "consult_degraded": true,
+    "individual_integration_reviews_required": 741,
+    "safe_to_delete": 0
+  },
+  "report": {
+    "bulk_survivors": 0,
+    "bytes": 633916,
+    "first_task": "T-TP-001",
+    "format": "z-harness-test-prune-frontmatter-v1",
+    "integration_entries": 741,
+    "last_task": "T-TP-741",
+    "lines": 6698,
+    "schema": {
+      "artifact": "test-prune",
+      "consult_available": true,
+      "consult_degraded": true,
+      "generated_at": "2026-07-21T23:19:51Z",
+      "high_confidence": 0,
+      "integration_boundary": 741,
+      "low_confidence": 0,
+      "med_confidence": 0,
+      "run_id": "20260721T215719Z-test-prune",
+      "slug": "cheap-flow-test-prune",
+      "total_candidates": 0
+    },
+    "sha256": "deb003aae252e2ace7afd02670760d184d2c6e83913f37b3c93448fd25e53199"
+  },
+  "schema_version": 1,
+  "source": {
+    "artifact": "TEST-PRUNE.md",
+    "plan_slug": "cheap-flow-test-prune",
+    "run_id": "20260721T215719Z-test-prune",
+    "source_commit": "83b4a976cf68635131394d3169b69593180bad93"
+  }
+}

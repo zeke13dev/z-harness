@@ -490,7 +490,7 @@ def test_unclaimed_development_hosts_stay_out_of_roster() -> None:
     claims, errors = derive_release_claims()
     assert not errors
     assert set(claims).isdisjoint(
-        {"antigravity", "cursor", "cline", "copilot", "kiro", "pi", "windsurf"}
+        {"antigravity", "cursor", "cline", "copilot", "kiro", "pi", "sterling", "windsurf"}
     )
 
 

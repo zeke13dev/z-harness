@@ -1,8 +1,8 @@
 {
   "concept": "capabilities-matrix",
-  "summary": "Per-host adapter/export/command-tier capability matrix plus the C1 pre-1.0-beta public release reference, with exact evidence-bounded host claims and clean-candidate requirements consumed from the canonical release contract.",
-  "last_updated": "2026-07-17",
-  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native; INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T001 Codex capability contract, gate-driven command tiers, native subagent dispatch primitive gating; fix(codex) MCP hardening follow-ups (refresh stale registration, auto-approve, narrow surface) 2026-07-06",
+  "summary": "Per-host adapter/export/command-tier capability matrix and C1 pre-1.0-beta release reference with exact evidence-bounded host claims, clean-candidate requirements, and synchronized orchestration status truth: Releases A/B are shipped, Release C is blocked by an unavailable protected broker, and verified active-child timeout/cancellation is unavailable on this host.",
+  "last_updated": "2026-07-25",
+  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native; INTENT: codex-full-support (frozen 2026-07-05T17:52:45Z) T001 Codex capability contract, gate-driven command tiers, native subagent dispatch primitive gating; fix(codex) MCP hardening follow-ups (refresh stale registration, auto-approve, narrow surface) 2026-07-06; INTENT: codex-z-harness-token-efficiency-root-fix criteria #5, #10, #11, and #13 truthful lifecycle status, protected-broker promotion gates, and independent Release A/B/C posture",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
     "z_harness_cli/adapters/antigravity.py",
@@ -23,7 +23,8 @@
     "runtime/drivers/cline/export.py",
     "runtime/drivers/copilot/export.py",
     ".omp/config.yml",
-    "runtime/release_surface.py"
+    "runtime/release_surface.py",
+    "scripts/orchestration-status.py"
   ],
   "confidence": "high",
   "release_contract_reference": {
@@ -162,6 +163,10 @@
         "status": "not_release_default"
       },
       "pi": {
+        "tier": "export_only",
+        "status": "not_release_default"
+      },
+      "sterling": {
         "tier": "export_only",
         "status": "not_release_default"
       },
@@ -335,6 +340,13 @@
       "symbol": "OmpHostDriver",
       "kind": "struct",
       "summary": "Native OMP dispatch driver (T007): frozen argv/prompt-transport/event/session/model contract. Separate from scripts/omp-consult.sh. Rejects empty prompts; normalizes events; redacts secrets from telemetry."
+    },
+    {
+      "file": "scripts/orchestration-status.py",
+      "line": 222,
+      "symbol": "main",
+      "kind": "script",
+      "summary": "Renders synchronized JSON or human orchestration status; separates reservation expiry from child termination and always treats reported timed_out/cancelled as unverified because this host has no protected receipt verifier."
     }
   ],
   "depends_on": [
@@ -345,7 +357,8 @@
     "launch-command",
     "export-command",
     "doctor-command",
-    "setup-command"
+    "setup-command",
+    "orchestration-status"
   ],
   "fidelity_tiers": {
     "native": {
@@ -447,6 +460,34 @@
     "runtime_primitive_evidence": ["TestCodexNativeSubagentDispatchPrimitive"],
     "promotion_rule": "A multi-agent family promotes to native only when BOTH its PARITY_EVIDENCE entries resolve AND the native_subagent_dispatch runtime primitive resolves (COMMAND_RUNTIME_PRIMITIVES). Non-multi-agent families with resolvable PARITY_EVIDENCE promote directly; unlisted families stay degraded. codex_adapter_fidelity()=native requires ALL native-candidate families proven plus ADAPTER_EVIDENCE; codex_export_fidelity()=native additionally requires EXPORT_EVIDENCE. As of this refresh none resolve (all evidence modules/classes absent), so codex stays flattened/partial/blocked as shipped.",
     "explicitly_rejected_evidence": "Exported .codex/agents/*.toml files and the current interactive session's own subagent tools are NOT accepted as native_subagent_dispatch evidence."
+  },
+  "codex_app_safety_boundary": {
+    "source": ["runtime/drivers/codex/export.py", "install.sh", "runtime/release_surface.py"],
+    "release_a": "Codex plugin exports omit z-execute, direct source/tarball installs materialize the same filtered payload, and re-export removes stale generated z-execute skills before publishing.",
+    "scope": "This blocks only the named z-execute workflow; unrelated safe Codex skills remain exported and globally available native collaboration tools are not disabled.",
+    "lifecycle_claim": "Admission expiry prevents a new workflow from being admitted. It is not active-child timeout or cancellation, which require a host-owned terminating primitive.",
+    "release_status": "Releases A and B are shipped independently. Release C is blocked because no protected broker provides authoritative preemptive counters, unescapable descendant containment, and protected append-only authority; this terminal unavailable-broker outcome does not delay either shipped control and does not waive criteria #10 or #11."
+  },
+  "orchestration_status_contract": {
+    "source": "scripts/orchestration-status.py",
+    "schema_version": 1,
+    "rendering_rule": "Machine JSON and human text are projections of the same normalized status document.",
+    "release_posture": {
+      "A": "shipped — direct Codex App z-execute admission block plus canonical privacy-safe telemetry",
+      "B": "shipped — transactional admission/reservation enforcement plus tested degraded single-unit boundary",
+      "C": "blocked — terminal protected-broker-unavailable outcome; no authoritative preemptive counters, unescapable descendant containment, or protected append-only authority; criteria #10 and #11 remain unmet and unwaived"
+    },
+    "release_c_terminal_outcome": {
+      "terminal": true,
+      "terminal_outcome": "protected_broker_unavailable",
+      "promotion_eligible": false,
+      "unmet_criteria": [10, 11],
+      "waived_criteria": []
+    },
+    "lifecycle_separation": "admission_status=reservation_expired never implies child_status=timed_out or cancelled",
+    "verified_active_child_termination": "unavailable — this host has no protected broker or receipt verifier that can authenticate a terminating primitive invocation",
+    "fail_closed_rule": "Every reported timed_out or cancelled outcome renders child_status=unknown and claim_status=unverified, with primitive_id/evidence_id omitted (null); caller-supplied evidence_status, primitive_id, and evidence_id cannot verify the claim.",
+    "human_equivalence": "Reported timed_out/cancelled outcomes print only child=unknown plus reported_<outcome>=unverified and the unavailable-verifier reason."
   },
   "codex_mcp_hardening": {
     "source": ["runtime/drivers/codex/mcp.py", "runtime/drivers/codex/export.py::_render_mcp_config"],
@@ -761,6 +802,10 @@
     }
   },
   "invariants": [
+    "Reservation/admission expiry is never active-child timeout or cancellation evidence; orchestration-status.py preserves admission_status separately from child_status.",
+    "Verified active-child termination is unavailable on this host: caller-supplied evidence_status, primitive_id, and evidence_id never promote a reported timed_out or cancelled outcome beyond child_status=unknown and claim_status=unverified.",
+    "Releases A and B are shipped controls while Release C is blocked by the terminal protected-broker-unavailable outcome; both human and machine status derive this posture from one normalized document.",
+    "Protected-broker unavailability never promotes Release C or waives criteria #10/#11; both remain unmet until authoritative preemptive counters, unescapable descendant containment, and protected append-only authority produce admissible evidence.",
     "adapter fidelity_tier is stable per host except parity-gated hosts (OMP and Codex), whose adapter/export fidelity and command tiers are resolved through their parity gates at call time (not cached)",
     "multi-agent commands (z-execute, z-panel, z-consult, z-gate) are degraded on high-tier hosts and blocked on flattened hosts",
     "flattened adapter = single-agent transliteration only; no proven runtime subagent dispatch",
@@ -787,6 +832,9 @@
     "registry.select() filters/orders auto-selection by release_surface.public_release_hosts() when the process default surface is prod; --host <name> bypasses this filter for any registered adapter"
   ],
   "gotchas": [
+    "Do not translate reservation_expired into timed_out/cancelled: reservation expiry controls admission and says nothing about whether synchronous active work stopped.",
+    "Do not render a terminal child claim from caller input, even when it self-asserts evidence_status=verified with primitive and evidence identities; no protected verifier exists on this host.",
+    "Do not reinterpret the terminal protected-broker-unavailable outcome as Release C promotion or as a waiver of criteria #10/#11; terminal means the plan may close fail-closed, not that the promotion gates passed.",
     "codex is first-class but surface-split: the shipped Codex CLI adapter is flattened, export fidelity is partial, and app/plugin multi-agent evidence is recorded separately by ProbeResults.codex_capabilities.app_plugin_multi_agent_support.",
     "codex multi-agent promotion needs TWO independent gate resolutions (command PARITY_EVIDENCE + native_subagent_dispatch runtime primitive) — check codex_command_decision(command).reason for which one is missing, do not assume a resolved PARITY_EVIDENCE entry alone promotes the family",
     "cursor and the Codex CLI adapter both declare adapter fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not. Codex partial export fidelity and app/plugin probe evidence must not be substituted for CLI command parity.",

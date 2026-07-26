@@ -22,6 +22,9 @@ Cases:
   tokens_char_estimate_fallback — prompt_chars/response_chars //4 fallback
                                    when provider token fields are absent
   tokens_skips_missing_model    — events without subagent_model are ignored
+  native_usage_uses_canonical_marginals_and_timing
+                                 — cumulative child counters and overlapping
+                                   timing retain canonical uncertainty/provenance
   coordination_all_seven_shown  — all 7 kinds always present, zero for absent
   coordination_run_id_filter    — --run-id filters out other runs' events
   halts_last_ten_only           — only the last 10 halt-kind events kept
@@ -62,6 +65,25 @@ def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _write_native_usage(path: Path) -> None:
+    """Write a root/child fixture with cumulative counters and overlapping timing."""
+    rows = [
+        {"event": "usage", "session_id": "root", "timestamp": 10_000_000_000, "input_tokens": 80, "cached_input_tokens": 10, "output_tokens": 20, "reasoning_output_tokens": 5, "total_tokens": 100},
+        {"event": "turn_start", "session_id": "root", "timestamp": 10_000_000_000, "turn_id": "root-turn"},
+        {"event": "tool_start", "session_id": "root", "timestamp": 10_000_000_200, "tool_call_id": "root-tool"},
+        {"event": "tool_end", "session_id": "root", "timestamp": 10_000_000_600, "tool_call_id": "root-tool"},
+        {"event": "usage", "session_id": "root", "timestamp": 10_000_001_000, "input_tokens": 120, "cached_input_tokens": 10, "output_tokens": 30, "reasoning_output_tokens": 5, "total_tokens": 150},
+        {"event": "turn_end", "session_id": "root", "timestamp": 10_000_001_000, "turn_id": "root-turn"},
+        {"event": "usage", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_100, "input_tokens": 80, "cached_input_tokens": 10, "output_tokens": 20, "reasoning_output_tokens": 5, "total_tokens": 100},
+        {"event": "turn_start", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_100, "turn_id": "child-turn"},
+        {"event": "tool_start", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_400, "tool_call_id": "child-tool"},
+        {"event": "tool_end", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_600, "tool_call_id": "child-tool"},
+        {"event": "usage", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_700, "input_tokens": 100, "cached_input_tokens": 10, "output_tokens": 25, "reasoning_output_tokens": 5, "total_tokens": 125},
+        {"event": "turn_end", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_900, "turn_id": "child-turn"},
+    ]
+    _write(path, "\n".join(json.dumps(row) for row in rows) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +170,75 @@ def test_tokens_skips_missing_model():
     events = [{"subagent_input_tokens": 100}]
     rows = stats.compute_tokens(events)
     assert rows == []
+
+
+def test_native_usage_uses_canonical_marginals_and_timing(tmp_path):
+    """INTENT criteria #8/#9: stats preserves unknown usage and overlap timing."""
+    _write_native_usage(tmp_path / "native-usage.jsonl")
+    result = stats.compute_native_usage(tmp_path)
+    assert result is not None
+    sessions = {item["session_hash"]: item for item in result["sessions"]}
+    root = sessions[stats.session_hash("root")]
+    child = sessions[stats.session_hash("child")]
+    assert root["canonical_usage"] == {
+        "schema_version": 1,
+        "known_subtotal_tokens": 150,
+        "unknown_segment_count": 0,
+        "unknown_reasons": [],
+        "completeness": "complete",
+        "marginal_deltas": root["canonical_usage"]["marginal_deltas"],
+        "quality_flags": [],
+    }
+    assert child["canonical_usage"]["known_subtotal_tokens"] == 25
+    assert child["canonical_usage"]["unknown_segment_count"] == 1
+    assert child["canonical_usage"]["unknown_reasons"] == ["ambiguous_inheritance"]
+    assert child["canonical_usage"]["completeness"] == "partial"
+    assert root["canonical_timing"]["run_elapsed_ms"] == 1000
+    assert root["canonical_timing"]["clock_provenance"] == ["provider"]
+    assert root["canonical_timing"]["overlap_duration_ms"] == 400
+    assert root["canonical_timing"]["derived_idle_ms"] == 0
+
+
+def test_cli_native_usage_reports_the_canonical_result(tmp_path):
+    """The user-facing stats subcommand emits the same canonical contract."""
+    _write_native_usage(tmp_path / "native-usage.jsonl")
+    proc = subprocess.run(
+        [sys.executable, str(_SCRIPT), "native-usage", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    sessions = json.loads(proc.stdout)["sessions"]
+    usages = {item["canonical_usage"]["completeness"]: item["canonical_usage"] for item in sessions}
+    assert usages["complete"]["known_subtotal_tokens"] == 150
+    assert usages["partial"]["known_subtotal_tokens"] == 25
+
+
+def test_tokens_command_prefers_canonical_marginals_over_cumulative_events(tmp_path):
+    """INTENT criterion #8: the established command cannot double-count children."""
+    _write_native_usage(tmp_path / "native-usage.jsonl")
+    metrics = _write(
+        tmp_path / "metrics.jsonl",
+        json.dumps({
+            "subagent_model": "sonnet",
+            "subagent_input_tokens": 500,
+            "subagent_output_tokens": 250,
+        }) + "\n",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(_SCRIPT), "tokens", str(metrics)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == (
+        "native-marginal observations=3 known_tok=175 "
+        "unknown_segments=1 unknown_reasons=ambiguous_inheritance "
+        "completeness=partial"
+    )
+    assert "750" not in proc.stdout
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ carries path-guard and env-resolution complexity incompatible with CI smoke runs
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -75,27 +76,35 @@ def main() -> int:
     total_warnings = 0
     any_error = False
 
-    for host_name, export_fn in hosts.items():
-        host_dest = out_root / host_name
-        host_dest.mkdir(parents=True, exist_ok=True)
-        print(f"[{host_name}] generating → {host_dest}")
-        try:
-            result = export_fn(REPO_ROOT, host_dest)  # type: ignore[operator]
-        except Exception as exc:  # noqa: BLE001
-            # Broad catch is intentional: any uncaught driver exception is a
-            # hard failure — re-raise context is printed to stderr.
-            print(f"[{host_name}] ERROR: {exc}", file=sys.stderr)
-            any_error = True
-            continue
+    previous_surface = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
+    os.environ["Z_HARNESS_RELEASE_SURFACE"] = "prod"
+    try:
+        for host_name, export_fn in hosts.items():
+            host_dest = out_root / host_name
+            host_dest.mkdir(parents=True, exist_ok=True)
+            print(f"[{host_name}] generating → {host_dest}")
+            try:
+                result = export_fn(REPO_ROOT, host_dest)  # type: ignore[operator]
+            except Exception as exc:  # noqa: BLE001
+                # Broad catch is intentional: any uncaught driver exception is a
+                # hard failure — re-raise context is printed to stderr.
+                print(f"[{host_name}] ERROR: {exc}", file=sys.stderr)
+                any_error = True
+                continue
 
-        n_files = len(result.files)
-        n_warn = len(result.warnings)
-        print(f"[{host_name}] fidelity={result.fidelity}  files={n_files}  warnings={n_warn}")
+            n_files = len(result.files)
+            n_warn = len(result.warnings)
+            print(f"[{host_name}] fidelity={result.fidelity}  files={n_files}  warnings={n_warn}")
 
-        if result.warnings:
-            for w in result.warnings:
-                print(f"[{host_name}]   WARNING: {w}", file=sys.stderr)
-            total_warnings += n_warn
+            if result.warnings:
+                for w in result.warnings:
+                    print(f"[{host_name}]   WARNING: {w}", file=sys.stderr)
+                total_warnings += n_warn
+    finally:
+        if previous_surface is None:
+            os.environ.pop("Z_HARNESS_RELEASE_SURFACE", None)
+        else:
+            os.environ["Z_HARNESS_RELEASE_SURFACE"] = previous_surface
 
     if any_error:
         print("generate-exports: FAILED (driver error)", file=sys.stderr)

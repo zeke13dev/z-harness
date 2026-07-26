@@ -15,7 +15,9 @@ Subcommands:
                                   (absorbs the former /z-where command body).
   progress BASE SLUG             TASKS.md done/in_progress/pending/skipped.
   walltime METRICS               Per-phase-kind wall_ms sum/avg, desc by sum.
-  tokens METRICS                 Per-subagent_model input/output token split.
+  tokens METRICS                 Canonical native marginal usage when present;
+                                  otherwise legacy per-model token estimates.
+  native-usage RUN_DIR           Canonical marginal usage and overlap timing.
   coordination METRICS [--run-id ID]
                                   Tally of the 7 coordination event kinds.
   halts METRICS                  Last 10 halt/decision/security-warn events.
@@ -35,6 +37,10 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from runtime.telemetry.native_usage import session_hash, summarize_sources  # noqa: E402
 
 _COORD_KINDS = [
     "lease_claimed",
@@ -91,6 +97,18 @@ def _read_events(metrics_path: Path | None) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return events
+
+
+def compute_native_usage(run_dir: Path) -> dict | None:
+    """Return canonical usage/timing for one run when native telemetry exists.
+
+    The fixed run-local filename prevents a report from borrowing observations
+    from another run through a plan-level or global fallback.
+    """
+    source = run_dir / "native-usage.jsonl"
+    if not source.is_file():
+        return None
+    return summarize_sources([("archive", source)])
 
 
 def _list_active_plans(registry_py: Path) -> list[dict] | None:
@@ -260,9 +278,49 @@ def compute_tokens(events: list[dict]) -> list[tuple[str, int, int, int]]:
 
 
 def cmd_tokens(args: argparse.Namespace) -> int:
-    events = _read_events(Path(args.metrics) if args.metrics else None)
+    metrics_path = Path(args.metrics) if args.metrics else None
+    run_dir = None
+    if metrics_path is not None:
+        run_dir = metrics_path if metrics_path.is_dir() else metrics_path.parent
+    native_usage = compute_native_usage(run_dir) if run_dir is not None else None
+    if native_usage is not None:
+        known_tokens = 0
+        unknown_segments = 0
+        known_observations = 0
+        unknown_reasons: set[str] = set()
+        completeness = "complete"
+        for session in native_usage["sessions"]:
+            usage = session["canonical_usage"]
+            known_tokens += usage["known_subtotal_tokens"]
+            unknown_segments += usage["unknown_segment_count"]
+            unknown_reasons.update(usage["unknown_reasons"])
+            known_observations += sum(
+                delta["marginal_tokens"] is not None
+                for delta in usage["marginal_deltas"]
+            )
+        if native_usage["quality_flags"] or not native_usage["sessions"]:
+            completeness = "partial" if known_tokens else "unknown"
+        elif unknown_segments:
+            completeness = "partial" if known_tokens else "unknown"
+        reasons = ",".join(sorted(unknown_reasons)) or "none"
+        print(
+            "native-marginal "
+            f"observations={known_observations} known_tok={known_tokens} "
+            f"unknown_segments={unknown_segments} unknown_reasons={reasons} "
+            f"completeness={completeness}"
+        )
+        return 0
+
+    events = _read_events(metrics_path)
     for model, calls, input_tok, output_tok in compute_tokens(events):
         print(f"{model:<10} calls={calls:<4} input_tok={input_tok} output_tok={output_tok}")
+    return 0
+
+
+def cmd_native_usage(args: argparse.Namespace) -> int:
+    """Print the canonical native usage/timing result for one isolated run."""
+    result = compute_native_usage(Path(args.run_dir))
+    print(json.dumps(result or {}, sort_keys=True, separators=(",", ":")))
     return 0
 
 
@@ -487,8 +545,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wall = sub.add_parser("walltime", help="Per-phase-kind wall_ms sum/avg.")
     p_wall.add_argument("metrics")
 
-    p_tok = sub.add_parser("tokens", help="Per-subagent_model token split.")
+    p_tok = sub.add_parser(
+        "tokens",
+        help="Canonical native marginal usage, or legacy per-model estimates.",
+    )
     p_tok.add_argument("metrics")
+
+    p_native = sub.add_parser("native-usage", help="Canonical native usage/timing for one run.")
+    p_native.add_argument("run_dir")
 
     p_coord = sub.add_parser("coordination", help="Coordination event tallies.")
     p_coord.add_argument("metrics")
@@ -510,6 +574,7 @@ _DISPATCH = {
     "progress": cmd_progress,
     "walltime": cmd_walltime,
     "tokens": cmd_tokens,
+    "native-usage": cmd_native_usage,
     "coordination": cmd_coordination,
     "halts": cmd_halts,
     "next-command": cmd_next_command,

@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "privacy_contract": {
+    "forbidden_keys": [
+      "content",
+      "conversation",
+      "message",
+      "prompt",
+      "messages",
+      "input",
+      "output",
+      "arguments",
+      "tool_argument",
+      "tool_arguments",
+      "tool_output",
+      "tool_results",
+      "environment",
+      "cwd",
+      "path",
+      "secret"
+    ],
+    "forbidden_value": "CONTENT_SENTINEL_DO_NOT_RETAIN"
+  },
+  "usage_cases": [
+    {
+      "id": "normal_completion",
+      "lifecycle": ["normal_completion"],
+      "observations": [
+        {
+          "id": "normal-1",
+          "session_hash": "1111111111111111",
+          "root_hash": "1111111111111111",
+          "parent_hash": null,
+          "segment_id": "normal",
+          "baseline": "zero",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 10,
+          "quality_flags": []
+        },
+        {
+          "id": "normal-2",
+          "session_hash": "1111111111111111",
+          "root_hash": "1111111111111111",
+          "parent_hash": null,
+          "segment_id": "normal",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 2000,
+          "total_tokens": 15,
+          "quality_flags": []
+        }
+      ],
+      "expected": {
+        "known_subtotal_tokens": 15,
+        "unknown_segment_count": 0,
+        "unknown_reasons": [],
+        "completeness": "complete",
+        "marginal_tokens": [10, 5],
+        "quality_flags": []
+      }
+    },
+    {
+      "id": "halt_resume_nested_forks",
+      "lifecycle": ["halt_resume", "nested_forks", "ambiguous_baseline"],
+      "observations": [
+        {
+          "id": "root-1",
+          "session_hash": "2222222222222222",
+          "root_hash": "2222222222222222",
+          "parent_hash": null,
+          "segment_id": "root",
+          "baseline": "zero",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 20,
+          "quality_flags": []
+        },
+        {
+          "id": "child-1",
+          "session_hash": "3333333333333333",
+          "root_hash": "2222222222222222",
+          "parent_hash": "2222222222222222",
+          "segment_id": "child",
+          "baseline": "ambiguous",
+          "counter_scope": "inherited",
+          "observed_at_ms": 2000,
+          "total_tokens": 12,
+          "quality_flags": []
+        },
+        {
+          "id": "child-2",
+          "session_hash": "3333333333333333",
+          "root_hash": "2222222222222222",
+          "parent_hash": "2222222222222222",
+          "segment_id": "child",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 3000,
+          "total_tokens": 18,
+          "quality_flags": []
+        },
+        {
+          "id": "grandchild-1",
+          "session_hash": "4444444444444444",
+          "root_hash": "2222222222222222",
+          "parent_hash": "3333333333333333",
+          "segment_id": "grandchild",
+          "baseline": "ambiguous",
+          "counter_scope": "inherited",
+          "observed_at_ms": 4000,
+          "total_tokens": 8,
+          "quality_flags": []
+        },
+        {
+          "id": "grandchild-2",
+          "session_hash": "4444444444444444",
+          "root_hash": "2222222222222222",
+          "parent_hash": "3333333333333333",
+          "segment_id": "grandchild",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 5000,
+          "total_tokens": 11,
+          "quality_flags": []
+        }
+      ],
+      "expected": {
+        "known_subtotal_tokens": 29,
+        "unknown_segment_count": 2,
+        "unknown_reasons": ["ambiguous_inheritance"],
+        "completeness": "partial",
+        "marginal_tokens": [20, null, 6, null, 3],
+        "quality_flags": []
+      }
+    },
+    {
+      "id": "reset_missing_and_ambiguous",
+      "lifecycle": ["counter_reset", "missing_baseline", "ambiguous_baseline"],
+      "observations": [
+        {
+          "id": "reset-1",
+          "session_hash": "5555555555555555",
+          "root_hash": "5555555555555555",
+          "parent_hash": null,
+          "segment_id": "reset",
+          "baseline": "zero",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 10,
+          "quality_flags": []
+        },
+        {
+          "id": "reset-2",
+          "session_hash": "5555555555555555",
+          "root_hash": "5555555555555555",
+          "parent_hash": null,
+          "segment_id": "reset",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 2000,
+          "total_tokens": 3,
+          "quality_flags": ["counter_reset"]
+        },
+        {
+          "id": "reset-3",
+          "session_hash": "5555555555555555",
+          "root_hash": "5555555555555555",
+          "parent_hash": null,
+          "segment_id": "reset",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 3000,
+          "total_tokens": 5,
+          "quality_flags": []
+        },
+        {
+          "id": "missing-1",
+          "session_hash": "6666666666666666",
+          "root_hash": "6666666666666666",
+          "parent_hash": null,
+          "segment_id": "missing",
+          "baseline": "missing",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 7,
+          "quality_flags": []
+        },
+        {
+          "id": "missing-2",
+          "session_hash": "6666666666666666",
+          "root_hash": "6666666666666666",
+          "parent_hash": null,
+          "segment_id": "missing",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 2000,
+          "total_tokens": 9,
+          "quality_flags": []
+        },
+        {
+          "id": "ambiguous-1",
+          "session_hash": "7777777777777777",
+          "root_hash": "5555555555555555",
+          "parent_hash": "5555555555555555",
+          "segment_id": "ambiguous",
+          "baseline": "ambiguous",
+          "counter_scope": "inherited",
+          "observed_at_ms": 1000,
+          "total_tokens": 20,
+          "quality_flags": []
+        },
+        {
+          "id": "ambiguous-2",
+          "session_hash": "7777777777777777",
+          "root_hash": "5555555555555555",
+          "parent_hash": "5555555555555555",
+          "segment_id": "ambiguous",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 2000,
+          "total_tokens": 24,
+          "quality_flags": []
+        }
+      ],
+      "expected": {
+        "known_subtotal_tokens": 18,
+        "unknown_segment_count": 3,
+        "unknown_reasons": ["ambiguous_inheritance", "counter_reset", "missing_baseline"],
+        "completeness": "partial",
+        "marginal_tokens": [10, null, 2, null, 2, null, 4],
+        "quality_flags": ["counter_reset"]
+      }
+    },
+    {
+      "id": "replay_equal_out_of_order",
+      "lifecycle": ["replay", "repeated_equal", "out_of_order"],
+      "observations": [
+        {
+          "id": "equal-2",
+          "session_hash": "8888888888888888",
+          "root_hash": "8888888888888888",
+          "parent_hash": null,
+          "segment_id": "equal",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 2000,
+          "total_tokens": 10,
+          "quality_flags": []
+        },
+        {
+          "id": "equal-1",
+          "session_hash": "8888888888888888",
+          "root_hash": "8888888888888888",
+          "parent_hash": null,
+          "segment_id": "equal",
+          "baseline": "zero",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 10,
+          "quality_flags": []
+        },
+        {
+          "id": "equal-1",
+          "session_hash": "8888888888888888",
+          "root_hash": "8888888888888888",
+          "parent_hash": null,
+          "segment_id": "equal",
+          "baseline": "zero",
+          "counter_scope": "session_own",
+          "observed_at_ms": 1000,
+          "total_tokens": 10,
+          "quality_flags": []
+        },
+        {
+          "id": "equal-3",
+          "session_hash": "8888888888888888",
+          "root_hash": "8888888888888888",
+          "parent_hash": null,
+          "segment_id": "equal",
+          "baseline": "previous",
+          "counter_scope": "session_own",
+          "observed_at_ms": 3000,
+          "total_tokens": 10,
+          "quality_flags": []
+        }
+      ],
+      "expected": {
+        "known_subtotal_tokens": 10,
+        "unknown_segment_count": 0,
+        "unknown_reasons": [],
+        "completeness": "complete",
+        "marginal_tokens": [10, 0, 0],
+        "quality_flags": ["out_of_order", "replay"]
+      }
+    }
+  ],
+  "ledger_cases": [
+    {
+      "id": "normal_completion",
+      "lifecycle": ["normal_completion"],
+      "ceiling": 1,
+      "operations": [
+        {"op": "reserve", "alias": "root", "logical_work_id": "work-root", "reservation_id": "reservation-root", "transition_id": "reserve-root", "writer_id": "writer-root"},
+        {"op": "advance", "alias": "root", "transition_id": "dispatch-root", "to_state": "dispatching"},
+        {"op": "advance", "alias": "root", "transition_id": "start-root", "to_state": "started"},
+        {"op": "advance", "alias": "root", "transition_id": "settle-root", "to_state": "settled"}
+      ],
+      "expected": {"admissions_used": 1, "settled_aliases": ["root"], "logical_work_count": 1}
+    },
+    {
+      "id": "rejection_recovery_halt_resume",
+      "lifecycle": ["rejection_recovery", "halt_resume", "replay"],
+      "ceiling": 2,
+      "operations": [
+        {"op": "reserve", "alias": "first", "logical_work_id": "work-recover", "reservation_id": "reservation-first", "transition_id": "reserve-first", "writer_id": "writer-first"},
+        {"op": "advance", "alias": "first", "transition_id": "halt-first", "to_state": "indeterminate"},
+        {"op": "reopen"},
+        {"op": "expect_error", "error": "DuplicateLiveWork", "operation": {"op": "reserve", "alias": "duplicate", "logical_work_id": "work-recover", "reservation_id": "reservation-duplicate", "transition_id": "reserve-duplicate", "writer_id": "writer-duplicate", "reentry_alias": "first"}},
+        {"op": "transfer", "alias": "first", "transition_id": "recover-first", "new_writer_id": "writer-recovery"},
+        {"op": "advance", "alias": "first", "transition_id": "settle-first", "to_state": "settled"},
+        {"op": "reserve", "alias": "second", "logical_work_id": "work-recover", "reservation_id": "reservation-second", "transition_id": "reserve-second", "writer_id": "writer-second", "reentry_alias": "first"},
+        {"op": "reserve", "alias": "second", "logical_work_id": "work-recover", "reservation_id": "reservation-second", "transition_id": "reserve-second", "writer_id": "writer-second", "reentry_alias": "first"},
+        {"op": "advance", "alias": "second", "transition_id": "settle-second", "to_state": "settled"},
+        {"op": "reopen"}
+      ],
+      "expected": {"admissions_used": 2, "settled_aliases": ["first", "second"], "logical_work_count": 1}
+    },
+    {
+      "id": "crash_resume_nested_n_plus_one",
+      "lifecycle": ["crash_resume", "nested_forks", "n_plus_one_rejection", "non_deniable_settlement"],
+      "ceiling": 2,
+      "operations": [
+        {"op": "reserve", "alias": "root", "logical_work_id": "work-root", "reservation_id": "reservation-crash-root", "transition_id": "reserve-crash-root", "writer_id": "writer-crash-root"},
+        {"op": "advance", "alias": "root", "transition_id": "start-crash-root", "to_state": "dispatching"},
+        {"op": "reopen"},
+        {"op": "reserve", "alias": "child", "logical_work_id": "work-root/child", "reservation_id": "reservation-crash-child", "transition_id": "reserve-crash-child", "writer_id": "writer-crash-child"},
+        {"op": "advance", "alias": "child", "transition_id": "start-crash-child", "to_state": "dispatching"},
+        {"op": "reopen"},
+        {"op": "expect_error", "error": "AdmissionCeilingExceeded", "operation": {"op": "reserve", "alias": "n-plus-one", "logical_work_id": "work-root/child/grandchild", "reservation_id": "reservation-n-plus-one", "transition_id": "reserve-n-plus-one", "writer_id": "writer-n-plus-one"}},
+        {"op": "advance", "alias": "root", "transition_id": "settle-crash-root", "to_state": "settled"},
+        {"op": "advance", "alias": "child", "transition_id": "settle-crash-child", "to_state": "settled"},
+        {"op": "reopen"}
+      ],
+      "expected": {"admissions_used": 2, "settled_aliases": ["root", "child"], "logical_work_count": 2}
+    }
+  ]
+}

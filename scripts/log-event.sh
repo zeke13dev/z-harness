@@ -130,19 +130,17 @@ resolve_run_dir
 mkdir -p "$RUN_DIR"
 mkdir -p "$ZH_BASE"
 
-# Resolve host lazily: use Z_HARNESS_HOST if set, else call detect-host.sh once
-# and cache the result to a per-process tmp sentinel keyed on $PPID (the parent
-# orchestrator/shell PID). Each `bash log-event.sh ...` is a new process ($$
-# differs), so caching on $PPID ensures the cache survives across multiple
-# log-event.sh invocations in a single orchestration process.
+# Resolve host/surface lazily and cache the authoritative JSON pair to a
+# per-process sentinel keyed on $PPID. Each `bash log-event.sh ...` is a new
+# process ($$ differs), so caching on $PPID survives multiple event writes from
+# one orchestration shell. detect-host.sh validates explicit evidence and rejects
+# conflicting markers before an event can be attributed incorrectly.
 _HOST_SENTINEL="/tmp/zh-host-$PPID"
-if [[ -n "${Z_HARNESS_HOST:-}" ]]; then
-  HOST_VALUE="$Z_HARNESS_HOST"
-elif [[ -s "$_HOST_SENTINEL" ]]; then
-  HOST_VALUE="$(cat "$_HOST_SENTINEL")"
+if [[ -s "$_HOST_SENTINEL" ]]; then
+  HOST_SURFACE_VALUE="$(cat "$_HOST_SENTINEL")"
 else
-  HOST_VALUE="$(bash "$(dirname "$0")/detect-host.sh")"
-  printf '%s' "$HOST_VALUE" > "$_HOST_SENTINEL"
+  HOST_SURFACE_VALUE="$(bash "$(dirname "$0")/detect-host.sh" --json)"
+  printf '%s' "$HOST_SURFACE_VALUE" > "$_HOST_SENTINEL"
 fi
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -154,14 +152,16 @@ fi
 
 EVENT="$(python3 -c '
 import json, sys
-ts, run, kind, slug, host, payload = sys.argv[1:7]
+ts, run, kind, slug, attribution, payload = sys.argv[1:7]
 obj = {"ts": ts, "run": run, "kind": kind}
 if slug:
     obj["slug"] = slug
 obj.update(json.loads(payload))
-obj["host"] = host  # set after payload merge so log-event.sh resolution is authoritative
+resolved = json.loads(attribution)
+obj["host"] = resolved["host"]
+obj["surface"] = resolved["surface"]
 print(json.dumps(obj, separators=(",", ":")))
-' "$TS" "$RUN" "$KIND" "$SLUG" "$HOST_VALUE" "$PAYLOAD")"
+' "$TS" "$RUN" "$KIND" "$SLUG" "$HOST_SURFACE_VALUE" "$PAYLOAD")"
 
 append() {
   local target="$1"

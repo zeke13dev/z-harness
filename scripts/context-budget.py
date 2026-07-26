@@ -24,6 +24,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from runtime.telemetry.native_usage import summarize_sources  # noqa: E402
+
 # Thresholds for warnings
 MAX_ARTIFACT_BYTES = 5 * 1024  # 5KB — artifacts above this are flagged
 HIGH_TOOL_CALL_DENSITY = 30     # tool calls per 100 events
@@ -207,6 +211,14 @@ def _context_pressure_telemetry_paths(root: Path, metrics_path: Path | None = No
     return paths
 
 
+def _canonical_native_usage(root: Path) -> tuple[dict | None, list[Path]]:
+    """Reduce native telemetry only when it belongs to this exact run root."""
+    source = root / "native-usage.jsonl"
+    if not source.is_file():
+        return None, []
+    return summarize_sources([("archive", source)]), [source]
+
+
 def _rough_context_components(run_dir: Path, metrics_path: Path | None = None) -> dict:
     telemetry_paths = _context_pressure_telemetry_paths(run_dir, metrics_path=metrics_path)
 
@@ -222,11 +234,28 @@ def _rough_context_components(run_dir: Path, metrics_path: Path | None = None) -
         telemetry_events_read += events_read
         telemetry_source_mix.update(source_mix)
 
+    canonical_usage, native_paths = _canonical_native_usage(run_dir)
+    native_tokens = None
+    native_usage_complete = False
+    if canonical_usage is not None:
+        native_tokens = sum(
+            session["canonical_usage"]["known_subtotal_tokens"]
+            for session in canonical_usage["sessions"]
+        )
+        native_usage_complete = (
+            bool(canonical_usage["sessions"])
+            and not canonical_usage["quality_flags"]
+            and all(
+                session["canonical_usage"]["completeness"] == "complete"
+                for session in canonical_usage["sessions"]
+            )
+        )
+
     artifact_bytes = 0
     artifact_files = 0
     large_artifact_files = 0
     if run_dir.is_dir():
-        telemetry_resolved = seen_telemetry_paths
+        telemetry_resolved = seen_telemetry_paths | {_path_key(path) for path in native_paths}
         for fpath in sorted(run_dir.rglob("*")):
             if not fpath.is_file():
                 continue
@@ -242,6 +271,15 @@ def _rough_context_components(run_dir: Path, metrics_path: Path | None = None) -
                 large_artifact_files += 1
 
     artifact_tokens = artifact_bytes // CHARS_PER_TOKEN
+    if native_tokens is None:
+        effective_telemetry_tokens = telemetry_tokens
+    elif native_usage_complete:
+        effective_telemetry_tokens = native_tokens
+    else:
+        # A known subtotal is a lower bound.  Until every segment is complete,
+        # retain the larger legacy estimate so an unknown segment cannot make
+        # checkpoint pressure look safer than the available evidence supports.
+        effective_telemetry_tokens = max(native_tokens, telemetry_tokens)
     return {
         "telemetry_tokens": telemetry_tokens,
         "telemetry_events_read": telemetry_events_read,
@@ -250,7 +288,8 @@ def _rough_context_components(run_dir: Path, metrics_path: Path | None = None) -
         "artifact_tokens": artifact_tokens,
         "artifact_files": artifact_files,
         "large_artifact_files": large_artifact_files,
-        "estimated_tokens": telemetry_tokens + artifact_tokens,
+        "native_usage": canonical_usage,
+        "estimated_tokens": effective_telemetry_tokens + artifact_tokens,
     }
 
 
@@ -361,8 +400,10 @@ def estimate_context_pressure(
         "warnings": warnings,
         "approximation_limits": (
             "Host/editor token counts are preferred when supplied. Otherwise this is a rough, "
-            "deterministic estimate: provider token fields first, then subagent token fields, "
-            "then prompt_chars/response_chars divided by 4, plus non-telemetry artifact bytes "
+            "deterministic estimate: complete canonical native marginal usage when present; "
+            "for incomplete native usage, the larger of its known subtotal and the fallback "
+            "estimate; otherwise provider token fields, subagent token fields, then "
+            "prompt_chars/response_chars divided by 4; plus non-telemetry artifact bytes "
             "divided by 4. It is suitable for checkpoint pressure decisions, not billing or "
             "exact context accounting."
         ),

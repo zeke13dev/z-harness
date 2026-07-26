@@ -222,6 +222,7 @@ def test_release_contract_is_positive_and_freezes_experiment_exclusions() -> Non
     assert "scripts/generate-workstreams.py" in inventory["scripts_backends"]
     assert "scripts/capture-release-host-evidence.py" in inventory["scripts_backends"]
     assert "scripts/check-pi-auth.sh" in inventory["scripts_backends"]
+    assert "scripts/orchestration-status.py" in inventory["scripts_backends"]
     assert "scripts/emit-hermes-marker.sh" not in inventory["scripts_backends"]
     assert "z_harness_cli/release_host_evidence.py" in inventory["scripts_backends"]
     assert "docs/schemas/handoff.schema.json" in inventory["schemas"]
@@ -229,6 +230,9 @@ def test_release_contract_is_positive_and_freezes_experiment_exclusions() -> Non
     assert ".codex-plugin/plugin.json" not in inventory["generated_requirements"]
     assert "requirements.txt" not in inventory["generated_requirements"]
     assert "install.sh" in inventory["generated_requirements"]
+    assert inventory["export_skill_inventories"]["codex"] == sorted(
+        set(inventory["skills"]) - {"z-execute"}
+    )
     assert contract["excluded_experiments"]["skills"] == [
         "z-attend",
         "z-explore",
@@ -252,7 +256,7 @@ def test_prod_inventory_exactly_closes_retained_literal_support_scripts() -> Non
 
     inventory = set(release_surface.release_contract()["prod_inventory"]["scripts_backends"])
     newly_admitted = literal_scripts - _PREEXISTING_LITERAL_SCRIPT_PATHS
-    assert len(newly_admitted) == 57
+    assert len(newly_admitted) == 58
     assert newly_admitted <= inventory
     assert "scripts/notify-discord.sh" not in literal_scripts
     assert "scripts/notify-discord.sh" not in inventory
@@ -320,7 +324,8 @@ def test_release_contract_freezes_exact_evidence_bounded_host_claims() -> None:
         "cline": {"tier": "export_only", "status": "not_release_default"},
         "copilot": {"tier": "export_only", "status": "not_release_default"},
         "kiro": {"tier": "export_only", "status": "not_release_default"},
-        "pi": {"tier": "export_only", "status": "not_release_default"},
+            "pi": {"tier": "export_only", "status": "not_release_default"},
+            "sterling": {"tier": "export_only", "status": "not_release_default"},
         "windsurf": {"tier": "export_only", "status": "not_release_default"},
     }
 
@@ -858,11 +863,18 @@ def test_stage_release_surface_is_positive_tracked_and_archive_reproducible(tmp_
         "candidate_version": "0.9.0-beta.2",
         "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
     }
-    module.stage_release_surface(repo_root, checkout_stage, **kwargs)
+    module.stage_release_surface(archive_source, checkout_stage, **kwargs)
     module.stage_release_surface(archive_root, archive_stage, **kwargs)
 
     assert module._tracked_paths(archive_root) is None
     assert _tree_snapshot(checkout_stage) == _tree_snapshot(archive_stage)
+    status_command = Path("scripts/orchestration-status.py")
+    assert (checkout_stage / status_command).read_bytes() == (
+        repo_root / status_command
+    ).read_bytes()
+    assert (archive_stage / status_command).read_bytes() == (
+        repo_root / status_command
+    ).read_bytes()
     assert not (checkout_stage / "untracked-secret.txt").exists()
     assert not (checkout_stage / "personas").exists()
     assert not (checkout_stage / "_fragments").exists()

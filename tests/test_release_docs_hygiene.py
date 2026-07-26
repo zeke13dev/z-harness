@@ -76,7 +76,7 @@ def _assert_human_reference_matches_contract(text: str) -> None:
         "codex": "| Codex | `partial` | `preview` | `blocking_clean_plugin` |",
         "omp": "| OMP | `native` | `conditional` | `clean_installed_wheel_proof` |",
         "dev": "| Antigravity, Cursor | `dev_advanced` | `not_release_default` | development/advanced use only |",
-        "export": "| Cline, Copilot, Kiro, pi, Windsurf | `export_only` | `not_release_default` | export use only |",
+            "export": "| Cline, Copilot, Kiro, pi, Sterling, Windsurf | `export_only` | `not_release_default` | export use only |",
     }
     assert all(row in public_section for row in expected_claim_rows.values())
 

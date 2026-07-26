@@ -302,7 +302,18 @@ class CodexAdapter:
             codex_export = None  # type: ignore[assignment]
 
         if codex_export is not None:
-            rt_result = codex_export(harness_root, dest)
+            # Plugin payload export is a production surface.  Release A
+            # deliberately omits /z-execute instead of reporting that
+            # admission block as a validation warning to callers.
+            previous_surface = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
+            os.environ["Z_HARNESS_RELEASE_SURFACE"] = "prod"
+            try:
+                rt_result = codex_export(harness_root, dest)
+            finally:
+                if previous_surface is None:
+                    os.environ.pop("Z_HARNESS_RELEASE_SURFACE", None)
+                else:
+                    os.environ["Z_HARNESS_RELEASE_SURFACE"] = previous_surface
             all_files.extend(rt_result.files)
             if rt_result.warnings:
                 # Surface validation warnings as a hard failure — preserving

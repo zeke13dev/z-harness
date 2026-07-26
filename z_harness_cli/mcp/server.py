@@ -584,6 +584,7 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False},
     "z_doc_rationale":   {"command_id": "/z-doc-rationale",   "description": "Produce ADRs, design rationale, and tradeoff explanations",          "is_heavy": False},
     "z_resume":          {"command_id": "/z-resume",          "description": "Read-only recovery for selecting and continuing prior work context",  "is_heavy": False},
+    "z_continue":        {"command_id": "/z-continue",        "description": "Inspect one handoff and authorize one exact read-only continuation",  "is_heavy": False},
     # ── Utility ──
     "z_export":          {"command_id": "/z-export",          "description": "Export z-harness commands/agents/skills to a host",                   "is_heavy": False},
     "z_detect":          {"command_id": "/z-detect",          "description": "Detect installed hosts and versions",                                 "is_heavy": False},

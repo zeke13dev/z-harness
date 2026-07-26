@@ -2,7 +2,7 @@
 name: z-export
 disable-model-invocation: false
 description: "Export z-harness skill, agent, and persona sources to OMP and explicit dev/advanced host layouts."
-argument-hint: "[--target=<cursor|codex|agy|omp|pi|windsurf|kiro|cline|copilot|all>] [--include=personas]"
+argument-hint: "[--target=<cursor|codex|agy|omp|pi|sterling|windsurf|kiro|cline|copilot|all>] [--include=personas]"
 runtime: c1
 driver_features_required: []
 unsupported_driver_behavior: explicit_gate
@@ -14,7 +14,7 @@ This command invokes the runtime export CLI (or, for `pi` and the export-only dr
 
 > **OMP target:** `omp` is a **first-class native host** (T009 complete). It exports `.omp/config.yml` plus `.omp/z-harness/{manifest.yml,skills,rules,prompts,agents,profiles}` and reports native fidelity. `OmpAdapter.fidelity_tier` and OMP `ExportResult.fidelity` are `"native"`. Four command families are native (z-execute, z-consult, z-gate, z-panel); all others are degraded. `.omp/config.yml` is never modified by the exporter.
 
-> **Export-only hosts:** `pi`, `windsurf`, `kiro`, `cline`, and `copilot` are **export-only** targets. They have runtime export drivers but no HostAdapter, no launch/inject capability, and no adapter-registry entry. They cannot be used with `/z-launch` or `/z-inject`. Only `/z-export` and the runtime CLI support them.
+> **Export-only hosts:** `pi`, `sterling`, `windsurf`, `kiro`, `cline`, and `copilot` are **export-only** targets. They have runtime export drivers but no HostAdapter, no launch/inject capability, and no adapter-registry entry. They cannot be used with `/z-launch` or `/z-inject`. Only `/z-export` and the runtime CLI support them.
 
 ## Fragment includes
 
@@ -30,7 +30,7 @@ During export, the runtime renderers inline the fragment file at each marker (re
 
 Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
-Valid `--target` values: `cursor`, `codex`, `agy`, `omp`, `pi`, `windsurf`, `kiro`, `cline`, `copilot`, `all`.
+Valid `--target` values: `cursor`, `codex`, `agy`, `omp`, `pi`, `sterling`, `windsurf`, `kiro`, `cline`, `copilot`, `all`.
 
 Default (no `--target` flag): `all`.
 
@@ -41,7 +41,7 @@ Default (no `--include` flag): include personas automatically (personas are alwa
 If an unrecognized `--target` value is given, immediately print:
 
 ```
-[z-export] error: --target must be one of: cursor, codex, agy, omp, pi, windsurf, kiro, cline, copilot, all
+[z-export] error: --target must be one of: cursor, codex, agy, omp, pi, sterling, windsurf, kiro, cline, copilot, all
 ```
 
 and exit nonzero. Do not proceed.
@@ -52,6 +52,7 @@ Build the target list:
 - `agy` → `["agy"]`
 - `omp` → `["omp"]`
 - `pi` → `["pi"]`
+- `sterling` → `["sterling"]`
 - `windsurf` → `["windsurf"]`
 - `kiro` → `["kiro"]`
 - `cline` → `["cline"]`
@@ -65,6 +66,7 @@ Build the target list:
 > **pi note:** the `pi` target emits a richer tree than the export-only pointer/curated drivers — executable subagent files under `<export-root>/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
 
 > **Export-only target notes:**
+> - `sterling` → portable worker/workflow IDL under `.sterling/z-harness/`; z-harness owns instructions and artifacts while Sterling owns execution.
 > - `windsurf` → curated rule files under `.windsurf/rules/*.md` with `trigger` frontmatter.
 > - `kiro` → curated steering files under `.kiro/steering/*.md` with `inclusion` frontmatter.
 > - `cline` → single pointer file `.clinerules/z-harness.md` (plain markdown, no frontmatter).
@@ -74,7 +76,7 @@ Build the target list:
 
 ## Phase 2 — Run per-target export
 
-For each target in the list, run the export in sequence (not in parallel). For **cursor**, **codex**, **agy**, and **omp**, invoke the runtime CLI. For **pi** and the export-only drivers (**windsurf**, **kiro**, **cline**, **copilot**), inline-import the standalone driver.
+For each target in the list, run the export in sequence (not in parallel). For **cursor**, **codex**, **agy**, and **omp**, invoke the runtime CLI. For **pi** and the export-only drivers (**sterling**, **windsurf**, **kiro**, **cline**, **copilot**), inline-import the standalone driver.
 
 ### cursor / codex / agy / omp targets
 
@@ -152,7 +154,7 @@ On nonzero exit (including when `result.warnings` is non-empty), capture the las
 ```
 Then continue to the final summary.
 
-### windsurf / kiro / cline / copilot targets (export-only)
+### sterling / windsurf / kiro / cline / copilot targets (export-only)
 
 These four targets use standalone runtime drivers with no adapter. Inline-import each driver directly:
 
@@ -161,7 +163,7 @@ python3 - <<'EOF'
 import sys, pathlib, importlib
 
 repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
-target = "<target>"  # windsurf | kiro | cline | copilot
+target = "<target>"  # sterling | windsurf | kiro | cline | copilot
 export_root = repo_root / "temp" / "exports" / target
 
 sys.path.insert(0, str(repo_root))
