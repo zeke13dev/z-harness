@@ -946,7 +946,7 @@ class InstallCommandProdScopeTest(unittest.TestCase):
             claude_link = Path(home) / ".claude" / "plugins" / "z-harness@zeke-tools"
             codex_link = Path(home) / "plugins" / "z-harness"
             claude_installed = claude_link.is_symlink()
-            codex_installed = codex_link.is_symlink()
+            codex_installed = codex_link.is_dir()
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("z-harness installed for Claude Code", result.stdout)

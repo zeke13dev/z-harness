@@ -54,6 +54,8 @@ fallback-version = "0.0.0.dev0"
 packages = ["z_harness_cli", "runtime"]
 force-include = { "scripts" = "scripts", "skills" = "skills", "agents" = "agents", "docs" = "docs", "install.sh" = "install.sh", "plugin.json" = "plugin.json", ".claude-plugin" = ".claude-plugin", "LICENSE" = "LICENSE", "README.md" = "README.md", "CAPABILITIES.md" = "CAPABILITIES.md", "VERSION" = "VERSION" }
 
+[tool.hatch.build.hooks.custom]
+
 [dependency-groups]
 dev = [
     "anyio>=4.13.0",

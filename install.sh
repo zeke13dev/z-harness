@@ -1458,7 +1458,25 @@ transaction_replace_payload() {
   atomic_text_write "${TRANSACTION_DIR}/${key}.mutation" "started" || return $?
   rm -rf "$destination" || return $?
   mkdir -p "$(dirname "$destination")" || return $?
-  if [[ -e "$source/.git" ]]; then
+  if [[ "$label" == "codex" ]]; then
+    # Codex discovers ./skills directly.  Materialize a Codex-specific
+    # payload for every source and tarball route so the source-only
+    # multi-agent /z-execute skill cannot bypass the exported filter.
+    local staged_copy="${TRANSACTION_DIR}/${key}.candidate"
+    cp -a "$source" "$staged_copy" || return $?
+    rm -rf "$staged_copy/skills" || return $?
+    mkdir -p "$staged_copy/skills" || return $?
+    local skill_dir
+    for skill_dir in "$source"/skills/*; do
+      [[ -d "$skill_dir" ]] || continue
+      [[ "$(basename "$skill_dir")" == "z-execute" ]] && continue
+      cp -a "$skill_dir" "$staged_copy/skills/" || return $?
+    done
+    if ! mv "$staged_copy" "$destination"; then
+      printf 'install.sh: ERROR: could not move staged %s install into place: %s\n' "$display_label" "$destination" >&2
+      return 1
+    fi
+  elif [[ -e "$source/.git" ]]; then
     ln -s "$source" "$destination" || return $?
   elif [[ -d "$source" && ! -L "$source" ]]; then
     local staged_copy="${TRANSACTION_DIR}/${key}.candidate"

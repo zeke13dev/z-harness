@@ -38,6 +38,7 @@ _PROD_VISIBLE_SKILLS = frozenset(
         "z-audit-plan-style",
         "z-brainstorm",
         "z-context-budget",
+        "z-continue",
         "z-debt",
         "z-debug",
         "z-doc-rationale",
@@ -75,6 +76,11 @@ _PROD_VISIBLE_SKILLS = frozenset(
         "z-update",
     }
 )
+
+# Codex installs a deliberately filtered direct-plugin payload.  Keep this
+# host-specific difference in the canonical release contract so closure checks
+# validate the installed graph instead of assuming every exporter is identical.
+_CODEX_BLOCKED_PLUGIN_SKILLS = frozenset({"z-execute"})
 
 _DEV_ONLY_SKILLS = frozenset(
     {
@@ -152,9 +158,9 @@ _DEV_ONLY_MCP_TOOLS = frozenset(
 # Hosts that may be explicitly exported in a public release. T002 narrows public
 # setup/help defaults further; this list only classifies export consumers.
 _PROD_EXPORT_TARGETS = frozenset(
-    {"antigravity", "claude", "cline", "codex", "copilot", "cursor", "kiro", "omp", "pi", "windsurf"}
+    {"antigravity", "claude", "cline", "codex", "copilot", "cursor", "kiro", "omp", "pi", "sterling", "windsurf"}
 )
-_RUNTIME_DRIVER_EXPORT_TARGETS = frozenset({"pi", "windsurf", "kiro", "cline", "copilot"})
+_RUNTIME_DRIVER_EXPORT_TARGETS = frozenset({"pi", "sterling", "windsurf", "kiro", "cline", "copilot"})
 
 
 # Public release defaults are intentionally narrower than the complete set of
@@ -201,6 +207,7 @@ _PUBLIC_HOST_CLAIMS = {
     "copilot": {"tier": "export_only", "status": "not_release_default"},
     "kiro": {"tier": "export_only", "status": "not_release_default"},
     "pi": {"tier": "export_only", "status": "not_release_default"},
+    "sterling": {"tier": "export_only", "status": "not_release_default"},
     "windsurf": {"tier": "export_only", "status": "not_release_default"},
 }
 
@@ -240,6 +247,7 @@ _PROD_SCRIPT_PATHS = frozenset(
         "scripts/capture-release-host-evidence.py",
         "scripts/check-compaction.sh",
         "scripts/check-pi-auth.sh",
+        "scripts/continuation-approval.py",
         "scripts/check-timeout.sh",
         "scripts/checkpoint-seam.sh",
         "scripts/changelog-from-commit.sh",
@@ -271,6 +279,7 @@ _PROD_SCRIPT_PATHS = frozenset(
         "scripts/normalize-task-state.sh",
         "scripts/omp-consult.sh",
         "scripts/omp-prod-export-smoke.py",
+        "scripts/orchestration-status.py",
         "scripts/parse-followups-block.py",
         "scripts/plan-claim.sh",
         "scripts/plan-path.sh",
@@ -380,6 +389,8 @@ _PROD_BACKEND_PATHS = frozenset(
         "runtime/drivers/omp/subprocess_driver.py",
         "runtime/drivers/pi/__init__.py",
         "runtime/drivers/pi/export.py",
+        "runtime/drivers/sterling/__init__.py",
+        "runtime/drivers/sterling/export.py",
         "runtime/drivers/windsurf/__init__.py",
         "runtime/drivers/windsurf/export.py",
         "runtime/release_surface.py",
@@ -424,6 +435,7 @@ _PROD_SCHEMA_PATHS = frozenset(
         "docs/schemas/handoff.schema.json",
         "docs/schemas/invariant.schema.json",
         "runtime/contract/agent.schema.json",
+        "runtime/contract/sterling-export.schema.json",
         "runtime/contract/command.schema.json",
         "runtime/contract/event.schema.json",
         "runtime/contract/provider.schema.json",
@@ -931,6 +943,9 @@ def release_contract() -> dict[str, Any]:
             "agents": sorted(_PROD_VISIBLE_AGENTS),
             "mcp_tools": sorted(_PROD_VISIBLE_MCP_TOOLS),
             "export_targets": sorted(_PROD_EXPORT_TARGETS),
+            "export_skill_inventories": {
+                "codex": sorted(_PROD_VISIBLE_SKILLS - _CODEX_BLOCKED_PLUGIN_SKILLS),
+            },
             "scripts_backends": sorted(_PROD_SCRIPT_PATHS | _PROD_BACKEND_PATHS),
             "schemas": sorted(_PROD_SCHEMA_PATHS),
             "public_documents": sorted(_PROD_PUBLIC_DOCUMENT_PATHS),
@@ -1254,7 +1269,12 @@ def _verify_mcp_handler_targets(repo_root: Path, graph: ProdDependencyGraph) -> 
     return errors
 
 
-def _verify_export_targets(repo_root: Path, expected_skills: set[str], expected_agents: set[str]) -> list[str]:
+def _verify_export_targets(
+    repo_root: Path,
+    expected_skills: set[str],
+    expected_agents: set[str],
+    export_skill_inventories: Mapping[str, Iterable[str]] | None = None,
+) -> list[str]:
     """Run Codex and OMP exporters and compare their resolved graph identities."""
 
     from runtime.drivers.codex.export import export as export_codex
@@ -1287,11 +1307,14 @@ def _verify_export_targets(repo_root: Path, expected_skills: set[str], expected_
                 ("codex", codex_skills, codex_agents),
                 ("omp", omp_skills, omp_agents),
             ):
-                if actual_skills != expected_skills:
+                host_expected_skills = set(
+                    (export_skill_inventories or {}).get(host, expected_skills)
+                )
+                if actual_skills != host_expected_skills:
                     errors.append(
                         f"export: {host} skill graph mismatch: "
-                        f"missing={sorted(expected_skills - actual_skills)!r} "
-                        f"extra={sorted(actual_skills - expected_skills)!r}"
+                        f"missing={sorted(host_expected_skills - actual_skills)!r} "
+                        f"extra={sorted(actual_skills - host_expected_skills)!r}"
                     )
                 if actual_agents != expected_agents:
                     errors.append(
@@ -1426,7 +1449,14 @@ def verify_prod_closure(repo_root: Path) -> ProdClosureVerification:
     expected_skills = set(inventory["skills"])
     expected_agents = set(inventory["agents"])
     if graph.ok:
-        errors.extend(_verify_export_targets(repo_root, expected_skills, expected_agents))
+        errors.extend(
+            _verify_export_targets(
+                repo_root,
+                expected_skills,
+                expected_agents,
+                inventory.get("export_skill_inventories"),
+            )
+        )
 
     memory_edge = ProdDependencyEdge(
         "skills/z-suggest-memory/SKILL.md",

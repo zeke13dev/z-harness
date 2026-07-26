@@ -27,6 +27,7 @@ import pytest
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 ASSEMBLER_PATH = REPO_ROOT / "scripts" / "assemble-release.py"
 STAGER_PATH = REPO_ROOT / "scripts" / "stage-release-surface.py"
+BUILD_HOOK_PATH = REPO_ROOT / "hatch_build.py"
 
 
 def _load_assembler():
@@ -43,6 +44,38 @@ def _load_stager():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_build_hook():
+    spec = importlib.util.spec_from_file_location("hatch_build", BUILD_HOOK_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_hatch_build_hook_rejects_direct_checkout_builds(tmp_path: Path) -> None:
+    """Direct Hatch builds must not bypass canonical release staging."""
+
+    hook_module = _load_build_hook()
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+
+    hook = object.__new__(hook_module.CustomBuildHook)
+    hook.root = str(checkout)
+    with pytest.raises(RuntimeError, match="direct checkout builds are disabled"):
+        hook.initialize("standard", {})
+
+
+def test_hatch_build_hook_allows_canonical_stage(tmp_path: Path) -> None:
+    hook_module = _load_build_hook()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    hook = object.__new__(hook_module.CustomBuildHook)
+    hook.root = str(stage)
+    hook.initialize("standard", {})
 
 
 def _sha256(path: Path) -> str:

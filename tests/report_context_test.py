@@ -513,6 +513,24 @@ def _make_run_dir(tmp_path: Path, run_id: str, *, with_events: bool = True) -> P
     return run_dir
 
 
+def _write_native_usage(path: Path) -> None:
+    rows = [
+        {"event": "usage", "session_id": "root", "timestamp": 10_000_000_000, "input_tokens": 80, "cached_input_tokens": 10, "output_tokens": 20, "reasoning_output_tokens": 5, "total_tokens": 100},
+        {"event": "turn_start", "session_id": "root", "timestamp": 10_000_000_000, "turn_id": "root-turn"},
+        {"event": "tool_start", "session_id": "root", "timestamp": 10_000_000_200, "tool_call_id": "root-tool"},
+        {"event": "tool_end", "session_id": "root", "timestamp": 10_000_000_600, "tool_call_id": "root-tool"},
+        {"event": "usage", "session_id": "root", "timestamp": 10_000_001_000, "input_tokens": 120, "cached_input_tokens": 10, "output_tokens": 30, "reasoning_output_tokens": 5, "total_tokens": 150},
+        {"event": "turn_end", "session_id": "root", "timestamp": 10_000_001_000, "turn_id": "root-turn"},
+        {"event": "usage", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_100, "input_tokens": 80, "cached_input_tokens": 10, "output_tokens": 20, "reasoning_output_tokens": 5, "total_tokens": 100},
+        {"event": "turn_start", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_100, "turn_id": "child-turn"},
+        {"event": "tool_start", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_400, "tool_call_id": "child-tool"},
+        {"event": "tool_end", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_600, "tool_call_id": "child-tool"},
+        {"event": "usage", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_700, "input_tokens": 100, "cached_input_tokens": 10, "output_tokens": 25, "reasoning_output_tokens": 5, "total_tokens": 125},
+        {"event": "turn_end", "session_id": "child", "parent_session_id": "root", "timestamp": 10_000_000_900, "turn_id": "child-turn"},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
 def _make_run_dir_with_halt(tmp_path: Path, run_id: str) -> Path:
     """Create a run directory with a halt event."""
     slug = "test-plan-halt"
@@ -699,6 +717,21 @@ class TestBundleRunSlug:
         bundle = _bundle_for_run_dir(run_dir)
         # The fixture events include slug="test-plan"
         assert bundle.get("slug") == "test-plan"
+
+    def test_bundle_uses_canonical_native_usage_and_timing(self, tmp_path):
+        """INTENT criteria #8/#9: reports preserve marginal and timing quality."""
+        run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
+        _write_native_usage(run_dir / "native-usage.jsonl")
+        native = _bundle_for_run_dir(run_dir)["native_usage"]
+        sessions = {item["canonical_usage"]["completeness"]: item for item in native["sessions"]}
+        assert sessions["complete"]["canonical_usage"]["known_subtotal_tokens"] == 150
+        assert sessions["partial"]["canonical_usage"]["known_subtotal_tokens"] == 25
+        assert sessions["partial"]["canonical_usage"]["unknown_segment_count"] == 1
+        assert sessions["partial"]["canonical_usage"]["unknown_reasons"] == ["ambiguous_inheritance"]
+        assert sessions["complete"]["canonical_timing"]["run_elapsed_ms"] == 1000
+        assert sessions["complete"]["canonical_timing"]["clock_provenance"] == ["provider"]
+        assert sessions["complete"]["canonical_timing"]["overlap_duration_ms"] == 400
+        assert sessions["complete"]["canonical_timing"]["derived_idle_ms"] == 0
 
 
 class TestBundleDegradedMissingEvents:
@@ -2362,6 +2395,109 @@ class TestResolveRunDirNestedLayout:
         assert result_nested == nested_run_dir, (
             f"Nested run_id resolved to wrong path: {result_nested!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# z-fix: INTENT report target resolution and bounded plan context
+# ---------------------------------------------------------------------------
+
+
+class TestIntentReportResolution:
+    def test_slug_ignores_support_directories_and_chooses_latest_canonical_run(self, tmp_path):
+        plan_dir = tmp_path / "zh-base" / "plans" / "intent-plan"
+        archive = plan_dir / "archive"
+        for name in (
+            "unknown-run",
+            "orchestration",
+            ".scratch",
+            "20260713T010000Z-older",
+            "20260714T010000Z-newer",
+        ):
+            (archive / name).mkdir(parents=True)
+
+        def fake_plan_path(subcommand, *args):
+            if subcommand == "resolve_plan_path":
+                return 0, str(plan_dir), ""
+            return 1, "", "not mocked"
+
+        warnings: list[str] = []
+        with patch.object(_mod, "_run_plan_path", side_effect=fake_plan_path):
+            result = _resolve_run_dir({"mode": "slug", "slug": "intent-plan"}, warnings)
+
+        assert result == archive / "20260714T010000Z-newer"
+        assert warnings == []
+
+    def test_duplicate_run_prefers_canonical_plan_archive_over_global_copy(self, tmp_path):
+        base = tmp_path / "zh-base"
+        run_id = "20260714T020000Z-implement"
+        global_run = base / "archive" / run_id
+        canonical_run = base / "plans" / "intent-plan" / "archive" / run_id
+        global_run.mkdir(parents=True)
+        canonical_run.mkdir(parents=True)
+        (global_run / "events.jsonl").write_text("{}\n", encoding="utf-8")
+        (canonical_run / "events.jsonl").write_text("{\"kind\":\"run_start\"}\n", encoding="utf-8")
+        (canonical_run / "run-brief.json").write_text("{}", encoding="utf-8")
+        (canonical_run / "INTENT.frozen.md").write_text("# intent", encoding="utf-8")
+
+        def fake_plan_path(subcommand, *args):
+            if subcommand == "base_dir":
+                return 0, str(base), ""
+            return 1, "", "not mocked"
+
+        warnings: list[str] = []
+        with patch.object(_mod, "_run_plan_path", side_effect=fake_plan_path):
+            result = _resolve_run_dir({"mode": "run", "run_id": run_id}, warnings)
+
+        assert result == canonical_run
+        assert len(warnings) == 1
+        assert "2 candidates" in warnings[0]
+        assert str(canonical_run) in warnings[0]
+
+
+class TestIntentPlanContext:
+    def _make_intent_plan(self, tmp_path: Path, *, with_events: bool = True) -> tuple[Path, Path]:
+        run_dir = _make_run_dir(
+            tmp_path,
+            "20260714T030000Z-intent-plan",
+            with_events=with_events,
+        )
+        plan_dir = run_dir.parent.parent
+        (run_dir / "INTENT.frozen.md").write_text("frozen intent\n", encoding="utf-8")
+        (plan_dir / "INTENT.md").write_text("live intent\n", encoding="utf-8")
+        (plan_dir / "LEDGER.md").write_text("ledger decisions\n", encoding="utf-8")
+        (plan_dir / "work-graph.json").write_text("{}\n", encoding="utf-8")
+        for task_id, text in (("T010", "task ten"), ("T002", "task two"), ("T001", "x" * 5000)):
+            task_dir = plan_dir / "archive" / "tasks" / task_id
+            task_dir.mkdir(parents=True)
+            (task_dir / "SUMMARY.md").write_text(text, encoding="utf-8")
+        return plan_dir, run_dir
+
+    def test_intent_artifacts_are_discoverable(self, tmp_path):
+        _plan_dir, run_dir = self._make_intent_plan(tmp_path)
+        names = {Path(path).name for path in _mod._collect_artifacts(run_dir, run_dir.parent.parent)}
+        assert {"INTENT.md", "INTENT.frozen.md", "LEDGER.md", "work-graph.json"} <= names
+
+    def test_normal_bundle_contains_bounded_ordered_plan_context(self, tmp_path):
+        _plan_dir, run_dir = self._make_intent_plan(tmp_path)
+        bundle = _bundle_for_run_dir(run_dir)
+        context = bundle["plan_context"]
+
+        assert context["intent"]["text"] == "frozen intent\n"
+        assert context["ledger"]["text"] == "ledger decisions\n"
+        assert [item["task_id"] for item in context["task_summaries"]] == ["T001", "T002", "T010"]
+        assert context["task_summaries"][0]["truncated"] is True
+        assert context["chars"] <= _mod._PLAN_CONTEXT_TOTAL_LIMIT
+        assert context["truncated"] is True
+
+    def test_no_events_bundle_still_contains_plan_context(self, tmp_path):
+        _plan_dir, run_dir = self._make_intent_plan(tmp_path, with_events=False)
+        bundle = _bundle_for_run_dir(run_dir)
+
+        assert bundle["degraded"] == "no_events"
+        assert bundle["plan_context"]["intent"]["text"] == "frozen intent\n"
+        assert [item["task_id"] for item in bundle["plan_context"]["task_summaries"]] == [
+            "T001", "T002", "T010",
+        ]
 
 
 # ---------------------------------------------------------------------------

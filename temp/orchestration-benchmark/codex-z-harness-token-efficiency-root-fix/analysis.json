@@ -1,0 +1,381 @@
+{
+  "admissible_pairs": 5,
+  "aggregate": {
+    "logical_nodes": 45,
+    "root_input_per_logical_node": {
+      "claude": 5134.666666666667,
+      "codex": 1644.8666666666666,
+      "codex_to_claude_ratio": 0.32034536484030124
+    },
+    "supervisor_turn_reduction": 0.8888888888888888,
+    "turns_per_logical_node": {
+      "claude": 1.0,
+      "codex": 0.1111111111111111,
+      "codex_to_claude_ratio": 0.1111111111111111
+    },
+    "weighting": "pooled_logical_nodes"
+  },
+  "distributions": {
+    "root_input_per_logical_node_ratio": {
+      "confidence": {
+        "level": 0.95,
+        "mean_lower": 0.30130218815653453,
+        "mean_upper": 0.33938854152406794,
+        "method": "paired_normal_95"
+      },
+      "maximum": 0.33621137366917686,
+      "mean": 0.32034536484030124,
+      "median": 0.33621137366917686,
+      "minimum": 0.2965463515969878,
+      "sample_stdev": 0.02172542733287827,
+      "values": [
+        0.2965463515969878,
+        0.2965463515969878,
+        0.33621137366917686,
+        0.33621137366917686,
+        0.33621137366917686
+      ]
+    },
+    "supervisor_turn_reduction": {
+      "confidence": {
+        "level": 0.95,
+        "mean_lower": 0.888888888888889,
+        "mean_upper": 0.888888888888889,
+        "method": "paired_normal_95"
+      },
+      "maximum": 0.8888888888888888,
+      "mean": 0.888888888888889,
+      "median": 0.8888888888888888,
+      "minimum": 0.8888888888888888,
+      "sample_stdev": 0.0,
+      "values": [
+        0.8888888888888888,
+        0.8888888888888888,
+        0.8888888888888888,
+        0.8888888888888888,
+        0.8888888888888888
+      ]
+    },
+    "turns_per_logical_node_ratio": {
+      "confidence": {
+        "level": 0.95,
+        "mean_lower": 0.11111111111111112,
+        "mean_upper": 0.11111111111111112,
+        "method": "paired_normal_95"
+      },
+      "maximum": 0.1111111111111111,
+      "mean": 0.11111111111111112,
+      "median": 0.1111111111111111,
+      "minimum": 0.1111111111111111,
+      "sample_stdev": 0.0,
+      "values": [
+        0.1111111111111111,
+        0.1111111111111111,
+        0.1111111111111111,
+        0.1111111111111111,
+        0.1111111111111111
+      ]
+    }
+  },
+  "excluded_failed_pairs": [],
+  "hard_gates": {
+    "all_hard_ceilings_enforced": false,
+    "all_logical_completions_verified": false,
+    "minimum_five_complete_pairs": true,
+    "native_usage_complete": true,
+    "no_failed_pairs": true,
+    "zero_duplicate_logical_dispatches": true
+  },
+  "passed": false,
+  "per_trial": [
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-1",
+        "kind": "terminal_verified_capture"
+      },
+      "native_usage": {
+        "claude": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "codex": {
+          "completeness": "complete",
+          "known_subtotal": 13756,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        }
+      },
+      "order": "claude_first",
+      "pair_id": "pair-1",
+      "root_input_per_logical_node": {
+        "claude": 5134.666666666667,
+        "codex": 1522.6666666666667,
+        "codex_to_claude_ratio": 0.2965463515969878
+      },
+      "supervisor_turn_reduction": 0.8888888888888888,
+      "thresholds": {
+        "root_input_per_logical_node_ratio_at_most_2": true,
+        "supervisor_turn_reduction_at_least_60_percent": true,
+        "turns_per_logical_node_ratio_at_most_1_5": true
+      },
+      "turns_per_logical_node": {
+        "claude": 1.0,
+        "codex": 0.1111111111111111,
+        "codex_to_claude_ratio": 0.1111111111111111
+      }
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-2",
+        "kind": "terminal_verified_capture"
+      },
+      "native_usage": {
+        "claude": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "codex": {
+          "completeness": "complete",
+          "known_subtotal": 13756,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        }
+      },
+      "order": "codex_first",
+      "pair_id": "pair-2",
+      "root_input_per_logical_node": {
+        "claude": 5134.666666666667,
+        "codex": 1522.6666666666667,
+        "codex_to_claude_ratio": 0.2965463515969878
+      },
+      "supervisor_turn_reduction": 0.8888888888888888,
+      "thresholds": {
+        "root_input_per_logical_node_ratio_at_most_2": true,
+        "supervisor_turn_reduction_at_least_60_percent": true,
+        "turns_per_logical_node_ratio_at_most_1_5": true
+      },
+      "turns_per_logical_node": {
+        "claude": 1.0,
+        "codex": 0.1111111111111111,
+        "codex_to_claude_ratio": 0.1111111111111111
+      }
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-3",
+        "kind": "terminal_verified_capture"
+      },
+      "native_usage": {
+        "claude": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "codex": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        }
+      },
+      "order": "claude_first",
+      "pair_id": "pair-3",
+      "root_input_per_logical_node": {
+        "claude": 5134.666666666667,
+        "codex": 1726.3333333333333,
+        "codex_to_claude_ratio": 0.33621137366917686
+      },
+      "supervisor_turn_reduction": 0.8888888888888888,
+      "thresholds": {
+        "root_input_per_logical_node_ratio_at_most_2": true,
+        "supervisor_turn_reduction_at_least_60_percent": true,
+        "turns_per_logical_node_ratio_at_most_1_5": true
+      },
+      "turns_per_logical_node": {
+        "claude": 1.0,
+        "codex": 0.1111111111111111,
+        "codex_to_claude_ratio": 0.1111111111111111
+      }
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-4",
+        "kind": "terminal_verified_capture"
+      },
+      "native_usage": {
+        "claude": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "codex": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        }
+      },
+      "order": "codex_first",
+      "pair_id": "pair-4",
+      "root_input_per_logical_node": {
+        "claude": 5134.666666666667,
+        "codex": 1726.3333333333333,
+        "codex_to_claude_ratio": 0.33621137366917686
+      },
+      "supervisor_turn_reduction": 0.8888888888888888,
+      "thresholds": {
+        "root_input_per_logical_node_ratio_at_most_2": true,
+        "supervisor_turn_reduction_at_least_60_percent": true,
+        "turns_per_logical_node_ratio_at_most_1_5": true
+      },
+      "turns_per_logical_node": {
+        "claude": 1.0,
+        "codex": 0.1111111111111111,
+        "codex_to_claude_ratio": 0.1111111111111111
+      }
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-5",
+        "kind": "terminal_verified_capture"
+      },
+      "native_usage": {
+        "claude": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "codex": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        }
+      },
+      "order": "claude_first",
+      "pair_id": "pair-5",
+      "root_input_per_logical_node": {
+        "claude": 5134.666666666667,
+        "codex": 1726.3333333333333,
+        "codex_to_claude_ratio": 0.33621137366917686
+      },
+      "supervisor_turn_reduction": 0.8888888888888888,
+      "thresholds": {
+        "root_input_per_logical_node_ratio_at_most_2": true,
+        "supervisor_turn_reduction_at_least_60_percent": true,
+        "turns_per_logical_node_ratio_at_most_1_5": true
+      },
+      "turns_per_logical_node": {
+        "claude": 1.0,
+        "codex": 0.1111111111111111,
+        "codex_to_claude_ratio": 0.1111111111111111
+      }
+    }
+  ],
+  "protocol_id": "paired-orchestration-v1",
+  "schema_version": 1,
+  "thresholds": {
+    "aggregate_root_input_per_logical_node_ratio_at_most_2": {
+      "passed": true,
+      "threshold": 2.0,
+      "value": 0.32034536484030124
+    },
+    "aggregate_supervisor_turn_reduction_at_least_75_percent": {
+      "passed": true,
+      "threshold": 0.75,
+      "value": 0.8888888888888888
+    },
+    "aggregate_turns_per_logical_node_ratio_at_most_1_5": {
+      "passed": true,
+      "threshold": 1.5,
+      "value": 0.1111111111111111
+    },
+    "every_trial_supervisor_turn_reduction_at_least_60_percent": {
+      "passed": true,
+      "threshold": 0.6,
+      "value": 0.8888888888888888
+    }
+  }
+}

@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# test_log_event_host.sh — T004 focused tests
+# test_log_event_host.sh — T002 focused attribution tests
 #
-# Verifies that log-event.sh stamps a `host` field on every event:
-#   T004-A: every emitted event carries a `host` field
-#   T004-B: Z_HARNESS_HOST override is honored
-#   T004-C: absent Z_HARNESS_HOST still yields a non-empty host
-#   T004-D: per-process sentinel cache is used (detect-host.sh called once per PPID)
+# Verifies that log-event.sh stamps authoritative host/surface fields and that
+# payloads cannot override the resolved attribution.
 #
 # Run with:
 #   bash scripts/test_log_event_host.sh
@@ -77,14 +74,14 @@ assert_nonempty() {
 }
 
 # ---------------------------------------------------------------------------
-# T004-A: every emitted event carries a `host` field
+# T002-A: every emitted event carries authoritative host/surface fields
 #
 # Invariant: log-event.sh stamps `host` on every event envelope.
 # Failure class: events lack host field — host telemetry absent from metrics.jsonl
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "T004-A: every emitted event carries a host field"
+echo "T002-A: every emitted event carries authoritative host/surface fields"
 
 REPO_A="$(_tmpdir)"
 BASE_A="$(_tmpdir)"
@@ -96,37 +93,38 @@ RUN_A="t004-a-run"
 
 (
   cd "$REPO_A"
-  Z_HARNESS_BASE_DIR="$BASE_A" Z_HARNESS_HOST="claude" \
-    bash "$LOG_EVENT" "$RUN_A" "t004_event_a" '{"payload":"test"}' 2>/dev/null
+  Z_HARNESS_BASE_DIR="$BASE_A" CODEX_THREAD_ID="app-thread" \
+    bash "$LOG_EVENT" "$RUN_A" "t002_event_a" '{"payload":"test","host":"claude","surface":"cli"}' 2>/dev/null
 )
 
 METRICS_A="$(cat "$BASE_A/metrics.jsonl" 2>/dev/null || echo "")"
-assert_contains "T004-A: metrics.jsonl line contains host field" \
-  '"host":' "$METRICS_A"
+assert_contains "T002-A: metrics host is resolved" '"host":"codex"' "$METRICS_A"
+assert_contains "T002-A: metrics surface is resolved" '"surface":"app"' "$METRICS_A"
 
 EVENTS_A="$(cat "$BASE_A/archive/$RUN_A/events.jsonl" 2>/dev/null || echo "")"
-assert_contains "T004-A: events.jsonl line contains host field" \
-  '"host":' "$EVENTS_A"
+assert_contains "T002-A: events host is resolved" '"host":"codex"' "$EVENTS_A"
+assert_contains "T002-A: events surface is resolved" '"surface":"app"' "$EVENTS_A"
 
 # Verify that the existing payload fields are not corrupted
-assert_contains "T004-A: payload field preserved in event" \
+assert_contains "T002-A: payload field preserved in event" \
   '"payload":"test"' "$EVENTS_A"
 
-assert_contains "T004-A: kind field preserved in event" \
-  '"kind":"t004_event_a"' "$EVENTS_A"
+assert_contains "T002-A: kind field preserved in event" \
+  '"kind":"t002_event_a"' "$EVENTS_A"
+assert_not_contains "T002-A: payload cannot override host" '"host":"claude"' "$EVENTS_A"
+assert_not_contains "T002-A: payload cannot override surface" '"surface":"cli"' "$EVENTS_A"
 
 rm -rf "$REPO_A" "$BASE_A"
 
 # ---------------------------------------------------------------------------
-# T004-B: Z_HARNESS_HOST override is honored
+# T002-B: explicit Codex CLI attribution is honored
 #
-# Invariant: when Z_HARNESS_HOST is set, its value appears in the host field.
-# Failure class: override ignored — host field carries detect-host.sh result
-#   instead of the explicitly provided value.
+# Invariant: the explicit pair is recorded instead of inferred evidence.
+# Failure class: explicit surface is lost or host is misattributed.
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "T004-B: Z_HARNESS_HOST override is honored"
+echo "T002-B: explicit Codex CLI attribution is honored"
 
 REPO_B="$(_tmpdir)"
 BASE_B="$(_tmpdir)"
@@ -138,41 +136,40 @@ RUN_B="t004-b-run"
 
 (
   cd "$REPO_B"
-  Z_HARNESS_BASE_DIR="$BASE_B" Z_HARNESS_HOST="cursor" \
+  env -u CODEX_THREAD_ID \
+    Z_HARNESS_BASE_DIR="$BASE_B" Z_HARNESS_HOST="codex" Z_HARNESS_SURFACE="cli" \
     bash "$LOG_EVENT" "$RUN_B" "t004_event_b" '{}' 2>/dev/null
 )
 
 METRICS_B="$(cat "$BASE_B/metrics.jsonl" 2>/dev/null || echo "")"
-assert_contains "T004-B: host field equals Z_HARNESS_HOST override value" \
-  '"host":"cursor"' "$METRICS_B"
-assert_not_contains "T004-B: host field does not contain wrong host" \
-  '"host":"claude"' "$METRICS_B"
+assert_contains "T002-B: host field equals explicit host" '"host":"codex"' "$METRICS_B"
+assert_contains "T002-B: surface field equals explicit surface" '"surface":"cli"' "$METRICS_B"
 
 # Verify multiple events in the same run also carry the override
 (
   cd "$REPO_B"
-  Z_HARNESS_BASE_DIR="$BASE_B" Z_HARNESS_HOST="pi" \
+  env -u CODEX_THREAD_ID \
+    Z_HARNESS_BASE_DIR="$BASE_B" Z_HARNESS_HOST="codex" Z_HARNESS_SURFACE="cli" \
     bash "$LOG_EVENT" "$RUN_B" "t004_event_b2" '{}' 2>/dev/null
 )
 
 EVENTS_B="$(cat "$BASE_B/archive/$RUN_B/events.jsonl" 2>/dev/null || echo "")"
-# Both events must have host; second event uses Z_HARNESS_HOST=pi
+# Both events must carry the same explicit pair.
 SECOND_LINE_B="$(printf '%s' "$EVENTS_B" | tail -1)"
-assert_contains "T004-B: second event with different Z_HARNESS_HOST also honored" \
-  '"host":"pi"' "$SECOND_LINE_B"
+assert_contains "T002-B: second event retains explicit host" '"host":"codex"' "$SECOND_LINE_B"
+assert_contains "T002-B: second event retains explicit surface" '"surface":"cli"' "$SECOND_LINE_B"
 
 rm -rf "$REPO_B" "$BASE_B"
 
 # ---------------------------------------------------------------------------
-# T004-C: absent Z_HARNESS_HOST still yields a non-empty host
+# T002-C: missing attribution is explicitly unknown, never Claude
 #
-# Invariant: when Z_HARNESS_HOST is unset, detect-host.sh is called; result
-#   is non-empty (detect-host.sh always yields one of claude|pi|codex|cursor|antigravity).
-# Failure class: host field is empty or missing when Z_HARNESS_HOST not set.
+# Invariant: absent evidence remains explicitly unknown.
+# Failure class: missing evidence is silently attributed to Claude.
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "T004-C: absent Z_HARNESS_HOST still yields a non-empty host"
+echo "T002-C: missing attribution is explicitly unknown"
 
 REPO_C="$(_tmpdir)"
 BASE_C="$(_tmpdir)"
@@ -182,8 +179,7 @@ git -C "$REPO_C" config user.name "Test"
 
 RUN_C="t004-c-run"
 
-# Explicitly unset Z_HARNESS_HOST; clear any pi/codex/cursor/antigravity signals
-# so detect-host.sh defaults to "claude"
+# Clear all positive evidence so attribution cannot be guessed.
 (
   cd "$REPO_C"
   Z_HARNESS_BASE_DIR="$BASE_C" \
@@ -192,32 +188,18 @@ RUN_C="t004-c-run"
         -u PI_TOKEN \
         -u CODEX_API_KEY \
         -u CODEX_EXEC \
-        -u CURSOR_API_KEY \
+        -u CURSOR_API_KEY -u CLAUDE_PLUGIN_ROOT -u CODEX_THREAD_ID \
     bash "$LOG_EVENT" "$RUN_C" "t004_event_c" '{}' 2>/dev/null
 )
 
 METRICS_C="$(cat "$BASE_C/metrics.jsonl" 2>/dev/null || echo "")"
-# Extract the host value — must be one of the known values and non-empty
-HOST_C="$(printf '%s' "$METRICS_C" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get("host",""))' 2>/dev/null || echo "")"
-assert_nonempty "T004-C: host field non-empty when Z_HARNESS_HOST unset" "$HOST_C"
-assert_contains "T004-C: host field present in raw JSON" '"host":' "$METRICS_C"
-
-# Verify it is one of the known valid host values
-case "$HOST_C" in
-  claude|pi|codex|cursor|antigravity)
-    echo "  PASS: T004-C: host is a known valid value ($HOST_C)"
-    PASS=$((PASS + 1))
-    ;;
-  *)
-    echo "  FAIL: T004-C: host '$HOST_C' is not a known valid value"
-    FAIL=$((FAIL + 1))
-    ;;
-esac
+assert_contains "T002-C: host is unknown without evidence" '"host":"unknown"' "$METRICS_C"
+assert_contains "T002-C: surface is unknown without evidence" '"surface":"unknown"' "$METRICS_C"
 
 rm -rf "$REPO_C" "$BASE_C"
 
 # ---------------------------------------------------------------------------
-# T004-D: per-process sentinel cache is written and reused
+# T002-D: per-process sentinel cache is written and reused
 #
 # Invariant: a /tmp/zh-host-<PPID> sentinel is written on first call;
 #   subsequent calls with the same parent PID read it without re-invoking
@@ -235,7 +217,7 @@ rm -rf "$REPO_C" "$BASE_C"
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "T004-D: per-process sentinel cache is written and reused"
+echo "T002-D: per-process sentinel cache is written and reused"
 
 REPO_D="$(_tmpdir)"
 BASE_D="$(_tmpdir)"
@@ -261,7 +243,7 @@ find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -exec rm -f {} + 2>/dev/null || t
       -u PI_TOKEN \
       -u CODEX_API_KEY \
       -u CODEX_EXEC \
-      -u CURSOR_API_KEY \
+      -u CURSOR_API_KEY -u CLAUDE_PLUGIN_ROOT -u CODEX_THREAD_ID \
     Z_HARNESS_BASE_DIR="$BASE_D" \
     bash "$LOG_EVENT" "$RUN_D" "t004_event_d1" '{}' 2>/dev/null
 )
@@ -274,10 +256,10 @@ done < <(find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -print0 2>/dev/null)
 
 SENTINEL_COUNT_D="${#SENTINELS_D[@]}"
 if [[ "$SENTINEL_COUNT_D" -ge 1 ]]; then
-  echo "  PASS: T004-D: at least one sentinel written after first call ($SENTINEL_COUNT_D found)"
+  echo "  PASS: T002-D: at least one sentinel written after first call ($SENTINEL_COUNT_D found)"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: T004-D: no sentinel written after first call"
+  echo "  FAIL: T002-D: no sentinel written after first call"
   FAIL=$((FAIL + 1))
 fi
 
@@ -289,12 +271,12 @@ if [[ -n "$FIRST_SENTINEL_D" && -s "$FIRST_SENTINEL_D" ]]; then
 fi
 
 case "${SENTINEL_CONTENT_D:-}" in
-  claude|pi|codex|cursor|antigravity)
-    echo "  PASS: T004-D: sentinel contains valid host value ($SENTINEL_CONTENT_D)"
+  '{"host":"unknown","surface":"unknown"}')
+    echo "  PASS: T002-D: sentinel contains canonical attribution"
     PASS=$((PASS + 1))
     ;;
   *)
-    echo "  FAIL: T004-D: sentinel content '${SENTINEL_CONTENT_D:-<empty>}' is not a known valid value"
+    echo "  FAIL: T002-D: sentinel content '${SENTINEL_CONTENT_D:-<empty>}' is not canonical attribution"
     FAIL=$((FAIL + 1))
     ;;
 esac
@@ -313,7 +295,7 @@ cat > "$WRAPPER_D" <<'WRAPPER_EOF'
 set -euo pipefail
 # Seed a sentinel for our own PID.  When we call bash "$@" (without exec),
 # the child bash process sees $PPID = our $$ and will find this sentinel.
-printf 'codex' > "/tmp/zh-host-$$"
+printf '%s' '{"host":"codex","surface":"cli"}' > "/tmp/zh-host-$$"
 bash "$@"
 WRAPPER_EOF
 chmod +x "$WRAPPER_D"
@@ -325,20 +307,57 @@ chmod +x "$WRAPPER_D"
       -u PI_TOKEN \
       -u CODEX_API_KEY \
       -u CODEX_EXEC \
-      -u CURSOR_API_KEY \
+      -u CURSOR_API_KEY -u CLAUDE_PLUGIN_ROOT -u CODEX_THREAD_ID \
     Z_HARNESS_BASE_DIR="$BASE_D" \
     bash "$WRAPPER_D" "$LOG_EVENT" "$RUN_D" "t004_event_d2" '{}' 2>/dev/null
 )
 
-# The second event should carry host=codex (from the pre-seeded sentinel).
+# The second event should carry the complete pair from the pre-seeded sentinel.
 EVENTS_D="$(cat "$BASE_D/archive/$RUN_D/events.jsonl" 2>/dev/null || echo "")"
 SECOND_EVENT_D="$(printf '%s' "$EVENTS_D" | tail -1)"
-assert_contains "T004-D: cached sentinel value used (host=codex from pre-seeded sentinel)" \
+assert_contains "T002-D: cached sentinel host used" \
   '"host":"codex"' "$SECOND_EVENT_D"
+assert_contains "T002-D: cached sentinel surface used" \
+  '"surface":"cli"' "$SECOND_EVENT_D"
 
 # Clean up sentinels.
 find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -exec rm -f {} + 2>/dev/null || true
 rm -rf "$REPO_D" "$BASE_D"
+
+# ---------------------------------------------------------------------------
+# T002-E: explicit attribution is cached through the normal sentinel path
+#
+# Invariant: explicit pairs use the same $PPID sentinel as inferred evidence.
+# Failure class: explicit attribution bypasses the cache and resolves on every
+# event, increasing work on the logging path.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "T002-E: explicit attribution is cached"
+
+REPO_E="$(_tmpdir)"
+BASE_E="$(_tmpdir)"
+git -C "$REPO_E" init -q
+git -C "$REPO_E" config user.email "test@test.local"
+git -C "$REPO_E" config user.name "Test"
+
+find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -exec rm -f {} + 2>/dev/null || true
+(
+  cd "$REPO_E"
+  Z_HARNESS_BASE_DIR="$BASE_E" Z_HARNESS_HOST="codex" Z_HARNESS_SURFACE="cli" \
+    bash "$LOG_EVENT" "t002-e-run" "t002_event_e" '{}' 2>/dev/null
+)
+
+SENTINEL_E="$(find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -print -quit 2>/dev/null)"
+SENTINEL_CONTENT_E=""
+if [[ -n "$SENTINEL_E" && -s "$SENTINEL_E" ]]; then
+  SENTINEL_CONTENT_E="$(cat "$SENTINEL_E")"
+fi
+assert_eq 'T002-E: explicit pair is stored in sentinel' \
+  '{"host":"codex","surface":"cli"}' "$SENTINEL_CONTENT_E"
+
+find "$TMP_REAL" -maxdepth 1 -name 'zh-host-*' -exec rm -f {} + 2>/dev/null || true
+rm -rf "$REPO_E" "$BASE_E"
 
 # ---------------------------------------------------------------------------
 # Summary

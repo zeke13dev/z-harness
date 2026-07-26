@@ -1,0 +1,258 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://z-harness.dev/schemas/orchestration-benchmark.schema.json",
+  "title": "z-harness paired orchestration benchmark manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "protocol_id", "postures", "logical_graph",
+    "terminal_schedule", "counterbalancing", "cache_control", "rules",
+    "hard_ceilings", "native_usage_rules", "trials"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "protocol_id": {"$ref": "#/definitions/id"},
+    "postures": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claude", "codex"],
+      "properties": {
+        "claude": {"$ref": "#/definitions/posture"},
+        "codex": {"$ref": "#/definitions/posture"}
+      }
+    },
+    "logical_graph": {
+      "type": "object", "additionalProperties": false,
+      "required": ["graph_id", "logical_node_ids", "edges"],
+      "properties": {
+        "graph_id": {"$ref": "#/definitions/id"},
+        "logical_node_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/definitions/id"}
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": {"$ref": "#/definitions/id"},
+              "to": {"$ref": "#/definitions/id"}
+            }
+          }
+        }
+      }
+    },
+    "terminal_schedule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schedule_id", "terminal_node_ids"],
+      "properties": {
+        "schedule_id": {"$ref": "#/definitions/id"},
+        "terminal_node_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/definitions/id"}
+        }
+      }
+    },
+    "counterbalancing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["method", "pair_orders"],
+      "properties": {
+        "method": {"const": "alternating_ab_ba"},
+        "pair_orders": {
+          "type": "array", "minItems": 5,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["pair_id", "order"],
+            "properties": {
+              "pair_id": {"$ref": "#/definitions/id"},
+              "order": {"enum": ["claude_first", "codex_first"]}
+            }
+          }
+        }
+      }
+    },
+    "cache_control": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "preparation_id"],
+      "properties": {
+        "state": {"enum": ["cold", "warm_controlled"]},
+        "preparation_id": {"$ref": "#/definitions/id"}
+      }
+    },
+    "rules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["inclusion", "failed_trial", "weighting", "confidence"],
+      "properties": {
+        "inclusion": {"const": "completed_pairs_only"},
+        "failed_trial": {"const": "exclude_pair_and_fail_evidence_gate"},
+        "weighting": {"const": "pooled_logical_nodes"},
+        "confidence": {"const": "paired_normal_95"}
+      }
+    },
+    "hard_ceilings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["supervisor_turns", "root_input_tokens", "native_total_tokens"],
+      "properties": {
+        "supervisor_turns": {"type": "integer", "minimum": 1},
+        "root_input_tokens": {"type": "integer", "minimum": 1},
+        "native_total_tokens": {"type": "integer", "minimum": 1}
+      }
+    },
+    "native_usage_rules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["required_completeness", "maximum_unknown_segments", "allowed_quality_flags", "quota_interpretation"],
+      "properties": {
+        "required_completeness": {"const": "complete"},
+        "maximum_unknown_segments": {"const": 0},
+        "allowed_quality_flags": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/definitions/id"}
+        },
+        "quota_interpretation": {"const": "observation_only_no_billing_formula"}
+      }
+    },
+    "trials": {
+      "type": "array", "minItems": 5,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/definitions/completed_pair"},
+          {"$ref": "#/definitions/failed_pair"}
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"},
+    "posture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["host", "surface", "runtime_version", "build_fingerprint", "command", "posture", "equivalence_key"],
+      "properties": {
+        "host": {"enum": ["claude", "codex"]},
+        "surface": {"$ref": "#/definitions/id"},
+        "runtime_version": {"$ref": "#/definitions/id"},
+        "build_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"},
+        "command": {"$ref": "#/definitions/id"},
+        "posture": {"$ref": "#/definitions/id"},
+        "equivalence_key": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"}
+      }
+    },
+    "baseline_provenance": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "evidence_id", "capture_fingerprint"],
+          "properties": {
+            "kind": {"const": "safe_capture"},
+            "evidence_id": {"$ref": "#/definitions/id"},
+            "capture_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "evidence_id", "enforcer_id"],
+          "properties": {
+            "kind": {"const": "externally_hard_capped"},
+            "evidence_id": {"$ref": "#/definitions/id"},
+            "enforcer_id": {"$ref": "#/definitions/id"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "evidence_id", "capture_fingerprint"],
+          "properties": {
+            "kind": {"const": "terminal_verified_capture"},
+            "evidence_id": {"$ref": "#/definitions/id"},
+            "capture_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"}
+          }
+        }
+      ]
+    },
+    "quota_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["availability", "source", "unit", "value"],
+      "properties": {
+        "availability": {"enum": ["observed", "unavailable"]},
+        "source": {"$ref": "#/definitions/id"},
+        "unit": {"enum": ["percent_remaining", "tokens_remaining", "messages_remaining", "unknown"]},
+        "value": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "native_usage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["known_subtotal", "unknown_segment_count", "unknown_reasons", "completeness", "quality_flags", "quota_observation"],
+      "properties": {
+        "known_subtotal": {"type": "integer", "minimum": 0},
+        "unknown_segment_count": {"type": "integer", "minimum": 0},
+        "unknown_reasons": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "completeness": {"enum": ["complete", "partial", "unknown"]},
+        "quality_flags": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "quota_observation": {"$ref": "#/definitions/quota_observation"}
+      }
+    },
+    "ceiling_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observed", "enforced", "enforcer_id"],
+      "properties": {
+        "observed": {"type": "integer", "minimum": 0},
+        "enforced": {"type": "boolean"},
+        "enforcer_id": {"$ref": "#/definitions/id"}
+      }
+    },
+    "arm": {
+      "type": "object", "additionalProperties": false,
+      "required": ["posture_key", "logical_dispatch_ids", "logical_completions_verified", "metrics", "native_usage", "ceiling_observations"],
+      "properties": {
+        "posture_key": {"enum": ["claude", "codex"]},
+        "logical_dispatch_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/id"}},
+        "logical_completions_verified": {"type": "boolean"},
+        "metrics": {
+          "type": "object", "additionalProperties": false,
+          "required": ["supervisor_turns", "root_input_tokens", "logical_nodes"],
+          "properties": {
+            "supervisor_turns": {"type": "integer", "minimum": 0},
+            "root_input_tokens": {"type": "integer", "minimum": 0},
+            "logical_nodes": {"type": "integer", "minimum": 1}
+          }
+        },
+        "native_usage": {"$ref": "#/definitions/native_usage"},
+        "ceiling_observations": {
+          "type": "object", "additionalProperties": false,
+          "required": ["supervisor_turns", "root_input_tokens", "native_total_tokens"],
+          "properties": {
+            "supervisor_turns": {"$ref": "#/definitions/ceiling_observation"},
+            "root_input_tokens": {"$ref": "#/definitions/ceiling_observation"},
+            "native_total_tokens": {"$ref": "#/definitions/ceiling_observation"}
+          }
+        }
+      }
+    },
+    "completed_pair": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "status", "order", "graph_id", "schedule_id", "cache_state", "baseline_provenance", "claude", "codex"],
+      "properties": {
+        "pair_id": {"$ref": "#/definitions/id"},
+        "status": {"const": "complete"},
+        "order": {"enum": ["claude_first", "codex_first"]},
+        "graph_id": {"$ref": "#/definitions/id"},
+        "schedule_id": {"$ref": "#/definitions/id"},
+        "cache_state": {"enum": ["cold", "warm_controlled"]},
+        "baseline_provenance": {"$ref": "#/definitions/baseline_provenance"},
+        "claude": {"$ref": "#/definitions/arm"},
+        "codex": {"$ref": "#/definitions/arm"}
+      }
+    },
+    "failed_pair": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "status", "order", "graph_id", "schedule_id", "cache_state", "failure_code"],
+      "properties": {
+        "pair_id": {"$ref": "#/definitions/id"},
+        "status": {"const": "failed"},
+        "order": {"enum": ["claude_first", "codex_first"]},
+        "graph_id": {"$ref": "#/definitions/id"},
+        "schedule_id": {"$ref": "#/definitions/id"},
+        "cache_state": {"enum": ["cold", "warm_controlled"]},
+        "failure_code": {"enum": ["host_failure", "ceiling_rejection", "incomplete_evidence", "operator_abort"]}
+      }
+    }
+  }
+}

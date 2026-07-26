@@ -1,9 +1,17 @@
 {
-  "version": "1",
-  "generated_at": "2026-07-21",
-  "z_harness_version": "07ebcff",
   "concepts": [
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "agents",
+        "hermes-orchestration"
+      ],
+      "depends_on": [
+        "scripts",
+        "plan-layout-migration"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "active-plan-registry",
       "source_files": [
         "scripts/active-plan-registry.py",
@@ -15,20 +23,25 @@
         "docs/human/active-plan-registry.md",
         "docs/handoff-parallel-session-safety.md"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "plan-layout-migration"
-      ],
-      "consumed_by": [
-        "commands",
-        "agents",
-        "hermes-orchestration"
-      ],
       "summary": "Lockless per-run JSON registry (under the external artifact base) that lets concurrent z-harness sessions discover each other's plans, seed likely file scope via a Haiku scope-extractor, and advisorily coordinate via a per-file claim/release/wait-for lease mechanism; overlap is always advisory except one strict-mode hard gate."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-plan",
+        "z-execute",
+        "z-amend",
+        "z-review-all",
+        "z-audit-plan"
+      ],
+      "depends_on": [
+        "config",
+        "agents",
+        "scripts",
+        "session-handoff",
+        "invariants"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "adaptive-intent",
       "source_files": [
         "scripts/intent-schema.py",
@@ -43,25 +56,22 @@
         "agents/reviewer.md",
         "docs/human/adaptive-intent.md"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "config",
-        "agents",
-        "scripts",
-        "session-handoff",
-        "invariants"
-      ],
-      "consumed_by": [
-        "z-plan",
-        "z-execute",
-        "z-amend",
-        "z-review-all",
-        "z-audit-plan"
-      ],
       "summary": "Default /z-plan intent-compiler and adaptive INTENT execution model: /z-plan compiles conversation into INTENT.md plus an initial append-only known-work graph (work-graph.json), and /z-execute freezes INTENT then schedules over that graph via task-tree-generator (now a known-work graph expander) with LEDGER checkpoints and durable-DAG-settle-point acceptance evaluation."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "active-plan-registry",
+        "axioms",
+        "session-handoff"
+      ],
+      "depends_on": [
+        "scripts",
+        "lookup-contract",
+        "adaptive-intent"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "agents",
       "source_file": [
         "agents/auditor.md",
@@ -94,20 +104,6 @@
         "agents/spec-precheck.md",
         "agents/tier1-doc-updater.md"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "lookup-contract",
-        "adaptive-intent"
-      ],
-      "consumed_by": [
-        "commands",
-        "active-plan-registry",
-        "axioms",
-        "session-handoff"
-      ],
-      "summary": "Specialized subagent prompt files under agents/: each is spawned fresh per invocation, executes an isolated worker role (implementation, review, planning-route advice, doc sync, mechanical remote/bisect/lookup work, cross-LLM consult), and returns a parseable contract that the surrounding /z-* commands parse and act on.",
       "source_files": [
         "agents/auditor.md",
         "agents/axiom-extractor.md",
@@ -138,27 +134,40 @@
         "agents/self-reviewer.md",
         "agents/spec-precheck.md",
         "agents/tier1-doc-updater.md"
-      ]
+      ],
+      "summary": "Specialized subagent prompt files under agents/: each is spawned fresh per invocation, executes an isolated worker role (implementation, review, planning-route advice, doc sync, mechanical remote/bisect/lookup work, cross-LLM consult), and returns a parseable contract that the surrounding /z-* commands parse and act on."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-audit-plan",
+        "z-review-all"
+      ],
+      "depends_on": [
+        "config"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "amendment-brief",
       "source_files": [
         "scripts/amendment-brief.py",
         "scripts/amend-gate-decision.py",
         "docs/human/amendment-brief.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "high",
-      "depends_on": [
-        "config"
-      ],
-      "consumed_by": [
-        "z-audit-plan",
-        "z-review-all"
-      ],
       "summary": "Shared amendment-continuation helpers: amend-gate-decision maps workflow.audit_to_amend resolver envelopes to auto_split/force_ask/halt for z-audit-plan Phase 5, and amendment-brief renders spec_gap corrections plus premise_failure concerns for z-audit-plan and z-review-all; /z-amend no longer has a --skip-user-gate flag \u2014 its Phase 4 gate auto-proceeds whenever Phase 3 finds an empty Touched-but-completed tasks list."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-attend",
+        "z-overnight"
+      ],
+      "depends_on": [
+        "config",
+        "session-handoff",
+        "commands",
+        "scripts"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "attend",
       "source_files": [
         "skills/z-attend/SKILL.md",
@@ -169,21 +178,21 @@
         "scripts/write-handoff.sh",
         "docs/schemas/handoff.schema.json"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "config",
-        "session-handoff",
-        "commands",
-        "scripts"
-      ],
-      "consumed_by": [
-        "z-attend",
-        "z-overnight"
-      ],
       "summary": "Attended middle-gear chain runner: auto-answers mechanical gates, surfaces decision/risk/shortcut/archiving gates inline, and yields with protocol-1.1 handoff predicates at plan and implement-all boundaries."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "config",
+        "commands",
+        "agents"
+      ],
+      "depends_on": [
+        "config",
+        "scripts",
+        "agents"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "axioms",
       "source_file": [
         "scripts/axiom-store.py",
@@ -201,19 +210,6 @@
         "scripts/config.py",
         "scripts/setup.py"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "config",
-        "scripts",
-        "agents"
-      ],
-      "consumed_by": [
-        "config",
-        "commands",
-        "agents"
-      ],
-      "summary": "Advisory behavioral-rule layer mined from interaction history, stored two-layer (global+project), compiled into KERNEL.md; store/resolver/kernel machinery is fully live, but all five /z-axiom-* commands are currently broken self-referential stubs.",
       "source_files": [
         "scripts/axiom-store.py",
         "scripts/axiom-extract.py",
@@ -229,9 +225,22 @@
         "docs/schemas/axiom.schema.json",
         "scripts/config.py",
         "scripts/setup.py"
-      ]
+      ],
+      "summary": "Advisory behavioral-rule layer mined from interaction history, stored two-layer (global+project), compiled into KERNEL.md; store/resolver/kernel machinery is fully live, but all five /z-axiom-* commands are currently broken self-referential stubs."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "launch-command",
+        "export-command",
+        "doctor-command",
+        "setup-command"
+      ],
+      "depends_on": [
+        "multi-ide-exports",
+        "release-surface"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "capabilities-matrix",
       "source_file": [
         "z_harness_cli/adapters/claude.py",
@@ -249,19 +258,6 @@
         "z_harness_cli/adapters/omp.py",
         ".omp/config.yml"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "multi-ide-exports",
-        "release-surface"
-      ],
-      "consumed_by": [
-        "launch-command",
-        "export-command",
-        "doctor-command",
-        "setup-command"
-      ],
-      "summary": "Per-host adapter/export/command-tier capability matrix (claude/omp/antigravity/cursor/codex adapters + windsurf/kiro/cline/copilot/pi export-only hosts), gated for OMP and Codex by dedicated parity gates that read T008/Codex parity test evidence at call time.",
       "source_files": [
         "z_harness_cli/adapters/claude.py",
         "z_harness_cli/adapters/antigravity.py",
@@ -283,9 +279,25 @@
         "runtime/drivers/copilot/export.py",
         ".omp/config.yml",
         "runtime/release_surface.py"
-      ]
+      ],
+      "summary": "Per-host adapter/export/command-tier capability matrix (claude/omp/antigravity/cursor/codex adapters + windsurf/kiro/cline/copilot/pi export-only hosts), gated for OMP and Codex by dedicated parity gates that read T008/Codex parity test evidence at call time."
     },
     {
+      "confidence": "medium",
+      "consumed_by": [],
+      "depends_on": [
+        "agents",
+        "scripts",
+        "config",
+        "followup-sink",
+        "active-plan-registry",
+        "axioms",
+        "amendment-brief",
+        "attend",
+        "handoff-protocol",
+        "hermes-orchestration"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "commands",
       "source_file": [
         "skills/z-amend/SKILL.md",
@@ -327,22 +339,6 @@
         "skills/z-handoff/SKILL.md",
         "skills/z-doc-rationale/SKILL.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "medium",
-      "depends_on": [
-        "agents",
-        "scripts",
-        "config",
-        "followup-sink",
-        "active-plan-registry",
-        "axioms",
-        "amendment-brief",
-        "attend",
-        "handoff-protocol",
-        "hermes-orchestration"
-      ],
-      "consumed_by": [],
-      "summary": "Slash-command contract catalogue covering explicit routing, z-plan's single-gate prose plan-brief + known-work DAG (work-graph.json), z-execute's INTENT-mode acceptance-evaluator/divergence-halt scheduler and native model routing, z-brainstorm/z-sharpen pre-planning, and docs maintenance through doc-updater rather than ad hoc index edits.",
       "source_files": [
         "skills/z-amend/SKILL.md",
         "skills/z-attend/SKILL.md",
@@ -392,9 +388,19 @@
         "skills/z-suggest-memory/SKILL.md",
         "skills/z-test/SKILL.md",
         "skills/z-update/SKILL.md"
-      ]
+      ],
+      "summary": "Slash-command contract catalogue covering explicit routing, z-plan's single-gate prose plan-brief + known-work DAG (work-graph.json), z-execute's INTENT-mode acceptance-evaluator/divergence-halt scheduler and native model routing, z-brainstorm/z-sharpen pre-planning, and docs maintenance through doc-updater rather than ad hoc index edits."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "cost-estimation"
+      ],
+      "depends_on": [
+        "scripts"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "config",
       "source_file": [
         "scripts/config.py",
@@ -404,19 +410,19 @@
         "runtime/dispatch/dispatcher.py",
         "scripts/detect-host.sh"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "scripts"
-      ],
-      "consumed_by": [
-        "commands",
-        "cost-estimation"
-      ],
-      "summary": "Unified config concept covering Loader API and Workflow Resolver, including workflow.pre_run_cost_gate as the single disposition authority for profiled hard gates such as /z-plan and cost.token_budget for Z_HARNESS_NO_ASK=halt budget decisions. Also covers the host-aware four-tier model_classes/model_routing system (T001-T004): host-keyed (model, effort) per class resolved via runtime/dispatch/dispatcher.py against scripts/detect-host.sh's claude|omp host family split.",
-      "source_files": []
+      "source_files": [],
+      "summary": "Unified config concept covering Loader API and Workflow Resolver, including workflow.pre_run_cost_gate as the single disposition authority for profiled hard gates such as /z-plan and cost.token_budget for Z_HARNESS_NO_ASK=halt budget decisions. Also covers the host-aware four-tier model_classes/model_routing system (T001-T004): host-keyed (model, effort) per class resolved via runtime/dispatch/dispatcher.py against scripts/detect-host.sh's claude|omp host family split."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "subagent-telemetry"
+      ],
+      "depends_on": [
+        "scripts",
+        "config"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "cost-estimation",
       "source_files": [
         "scripts/estimate-tokens.py",
@@ -432,34 +438,36 @@
         "skills/z-debug/SKILL.md",
         "skills/z-plan/SKILL.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "config"
-      ],
-      "consumed_by": [
-        "subagent-telemetry"
-      ],
       "summary": "LLM-free pre-run token-cost estimator + gate helper + subagent cost model gating seven expensive z-harness skills via one profile file and one cost_gate_decision event."
     },
     {
-      "slug": "external-lookup-agent",
-      "source_files": [
-        "agents/external-lookup.md"
-      ],
-      "last_updated": "2026-06-24",
       "confidence": "high",
+      "consumed_by": [
+        "multi-ide-exports"
+      ],
       "depends_on": [
         "agents",
         "lookup-contract"
       ],
-      "consumed_by": [
-        "multi-ide-exports"
+      "last_updated": "2026-06-24",
+      "slug": "external-lookup-agent",
+      "source_files": [
+        "agents/external-lookup.md"
       ],
       "summary": "Read-only Haiku lookup worker that fetches external docs/APIs and returns bounded STATUS-headed syntheses."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "agents"
+      ],
+      "depends_on": [
+        "scripts",
+        "config",
+        "commands"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "followup-sink",
       "source_file": [
         "scripts/sink-add.sh",
@@ -492,18 +500,6 @@
         "docs/schemas/followup-entry.schema.json",
         "docs/schemas/audit-evidence.schema.json"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "config",
-        "commands"
-      ],
-      "consumed_by": [
-        "commands",
-        "agents"
-      ],
-      "summary": "Durable follow-up registry draining out-of-scope discoveries into a priority-ordered lifecycle-tracked work queue. Three sinks (project, global, Notion mirror); conservative open->running->verify->done state machine; three completion paths (human-confirmed, audit-confirmed, auto-closed-low-risk). Shared module followup_common.py centralizes the two-tier lock model (per-entry + global cross-tool flock with .hb.lock-serialized holder JSON), batched config reads, and backgrounded Notion push. Event-sourced index.jsonl with incremental checkpoint rebuild (T010), compaction to index.archive.jsonl, corruption detection/repair, and materialized notion_sync_pending state.",
       "source_files": [
         "scripts/sink-add.sh",
         "scripts/sink-claim.sh",
@@ -534,22 +530,22 @@
         "skills/z-followup-next/SKILL.md",
         "docs/schemas/followup-entry.schema.json",
         "docs/schemas/audit-evidence.schema.json"
-      ]
+      ],
+      "summary": "Durable follow-up registry draining out-of-scope discoveries into a priority-ordered lifecycle-tracked work queue. Three sinks (project, global, Notion mirror); conservative open->running->verify->done state machine; three completion paths (human-confirmed, audit-confirmed, auto-closed-low-risk). Shared module followup_common.py centralizes the two-tier lock model (per-entry + global cross-tool flock with .hb.lock-serialized holder JSON), batched config reads, and backgrounded Notion push. Event-sourced index.jsonl with incremental checkpoint rebuild (T010), compaction to index.archive.jsonl, corruption detection/repair, and materialized notion_sync_pending state."
     },
     {
-      "slug": "handoff-protocol",
-      "last_updated": "2026-07-09",
       "confidence": "high",
-      "depends_on": [
-        "commands",
-        "scripts"
-      ],
       "consumed_by": [
         "attend",
         "session-handoff",
         "hermes-orchestration"
       ],
-      "summary": "Machine-readable session-continuity contract (handoff.json, JSON Schema draft 2020-12) letting any z-harness agent (pi, Claude Code, Codex CLI) hand off to a fresh session: protocol 1.0 (7 fields) or 1.1 (adds attend_resume predicate for /z-attend yields). Producer-side is skills/z-handoff/SKILL.md (interactive) and scripts/write-handoff.sh (automated, wraps write-clear-checkpoint.sh); consumers are Hermes, /z-attend, and session-orchestration watchers.",
+      "depends_on": [
+        "commands",
+        "scripts"
+      ],
+      "last_updated": "2026-07-09",
+      "slug": "handoff-protocol",
       "source_file": [
         "docs/human/handoff-v1.md",
         "docs/schemas/handoff.schema.json",
@@ -561,9 +557,23 @@
         "docs/schemas/handoff.schema.json",
         "skills/z-handoff/SKILL.md",
         "scripts/write-handoff.sh"
-      ]
+      ],
+      "summary": "Machine-readable session-continuity contract (handoff.json, JSON Schema draft 2020-12) letting any z-harness agent (pi, Claude Code, Codex CLI) hand off to a fresh session: protocol 1.0 (7 fields) or 1.1 (adds attend_resume predicate for /z-attend yields). Producer-side is skills/z-handoff/SKILL.md (interactive) and scripts/write-handoff.sh (automated, wraps write-clear-checkpoint.sh); consumers are Hermes, /z-attend, and session-orchestration watchers."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-plan",
+        "z-execute",
+        "z-plan-split"
+      ],
+      "depends_on": [
+        "active-plan-registry",
+        "plan-claim",
+        "config",
+        "scripts"
+      ],
+      "last_updated": "2026-07-21",
       "slug": "hermes-orchestration",
       "source_files": [
         "scripts/hermes-execute.py",
@@ -576,38 +586,37 @@
         "scripts/hermes/session.py",
         "docs/human/hermes-integration-v1.md"
       ],
-      "last_updated": "2026-07-21",
-      "confidence": "high",
-      "depends_on": [
-        "active-plan-registry",
-        "plan-claim",
-        "config",
-        "scripts"
-      ],
-      "consumed_by": [
-        "z-plan",
-        "z-execute",
-        "z-plan-split"
-      ],
       "summary": "Dormant-by-default Hermes parallel execution layer: generates workstream DAGs, runs conflict-safe workstreams in isolated git worktrees, serializes merges, and can schedule conflict-free plans under sorted plan-claim locks when workflow.hermes_enabled is explicitly true."
     },
     {
-      "slug": "ideator-clusterer",
-      "source_files": [
-        "agents/ideator-clusterer.md"
-      ],
-      "last_updated": "2026-06-24",
       "confidence": "high",
+      "consumed_by": [
+        "z-brainstorm"
+      ],
       "depends_on": [
         "agents",
         "z-brainstorm"
       ],
-      "consumed_by": [
-        "z-brainstorm"
+      "last_updated": "2026-06-24",
+      "slug": "ideator-clusterer",
+      "source_files": [
+        "agents/ideator-clusterer.md"
       ],
       "summary": "Read-only Haiku agent that clusters wide-mode ideator framings by core approach axis and reports effective diversity without selecting a winner."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-execute",
+        "z-review-all",
+        "z-audit-plan"
+      ],
+      "depends_on": [
+        "agents",
+        "config",
+        "subagent-telemetry"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "impl-pre-review",
       "source_files": [
         "skills/z-execute/SKILL.md",
@@ -615,93 +624,99 @@
         "agents/pre-reviewer.md",
         "agents/complexity-classifier.md"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "agents",
-        "config",
-        "subagent-telemetry"
-      ],
-      "consumed_by": [
-        "z-execute",
-        "z-review-all",
-        "z-audit-plan"
-      ],
       "summary": "Opt-in Flash/Haiku pre-review layer: per-task /z-execute gate-down via runtime.impl_pre_review (skips codex on eligible low-tier CLEAN verdicts) plus the shared pre-reviewer/complexity-classifier subagents; both gate-down and the sibling runtime.pre_review context-prep cycles (z-review-all, z-audit-plan) default off and fail safe toward full reviewer coverage."
     },
     {
-      "slug": "intent-schema",
-      "source_files": [
-        "scripts/intent-schema.py",
-        "scripts/session-helpers.sh"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "adaptive-intent"
-      ],
       "consumed_by": [
         "commands",
         "agents",
         "session-handoff",
         "adaptive-intent"
       ],
+      "depends_on": [
+        "scripts",
+        "adaptive-intent"
+      ],
+      "last_updated": "2026-07-09",
+      "slug": "intent-schema",
+      "source_files": [
+        "scripts/intent-schema.py",
+        "scripts/session-helpers.sh"
+      ],
       "summary": "Schema validator/mutator for INTENT.md and LEDGER.md (INTENT-mode planning contract + BFS realization trail), plus TASKS.md/SESSION.md query helpers used by /z-execute and the context curator."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-test",
+        "z-execute",
+        "z-review-all",
+        "adaptive-intent"
+      ],
+      "depends_on": [
+        "z-test",
+        "z-execute",
+        "z-review-all",
+        "adaptive-intent"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "invariants",
       "source_files": [
         "docs/INVARIANTS.json"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "summary": "Canonical optional registry of stable repo-specific behavioral invariants (docs/INVARIANTS.json) consumed by /z-test, /z-execute, /z-review-all, and adaptive INTENT.",
-      "depends_on": [
-        "z-test",
-        "z-execute",
-        "z-review-all",
-        "adaptive-intent"
-      ],
-      "consumed_by": [
-        "z-test",
-        "z-execute",
-        "z-review-all",
-        "adaptive-intent"
-      ]
+      "summary": "Canonical optional registry of stable repo-specific behavioral invariants (docs/INVARIANTS.json) consumed by /z-test, /z-execute, /z-review-all, and adaptive INTENT."
     },
     {
-      "slug": "lock-signal-safety",
-      "source_files": [
-        "scripts/sink-lock.sh"
-      ],
-      "last_updated": "2026-07-11",
       "confidence": "high",
-      "depends_on": [],
       "consumed_by": [
         "followup-sink",
         "plan-claim"
       ],
+      "depends_on": [],
+      "last_updated": "2026-07-11",
+      "slug": "lock-signal-safety",
+      "source_files": [
+        "scripts/sink-lock.sh"
+      ],
       "summary": "Signal-safety discipline for lock critical sections (no flock inside signal handlers; block/defer signals across critical sections). Memory layer entry from sink-lock.sh self-deadlock incident."
     },
     {
-      "slug": "lookup-contract",
-      "source_files": [
-        "agents/external-lookup.md"
-      ],
-      "last_updated": "2026-06-24",
       "confidence": "high",
-      "depends_on": [
-        "agents"
-      ],
       "consumed_by": [
         "agents",
         "external-lookup-agent"
       ],
+      "depends_on": [
+        "agents"
+      ],
+      "last_updated": "2026-06-24",
+      "slug": "lookup-contract",
+      "source_files": [
+        "agents/external-lookup.md"
+      ],
       "summary": "Canonical STATUS-headed Markdown contract used by external-lookup results, including provenance, budget, freshness, and refusal semantics."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z_harness_cli.commands.export"
+      ],
+      "depends_on": [
+        "commands",
+        "agents",
+        "central-config",
+        "runtime-drivers",
+        "scripts",
+        "capabilities-matrix"
+      ],
+      "last_updated": "2026-07-06",
       "slug": "multi-ide-exports",
+      "source_file": [
+        "runtime/drivers/omp/export.py",
+        "z_harness_cli/adapters/omp.py",
+        ".omp/config.yml"
+      ],
       "source_files": [
         "runtime/drivers/_export_utils.py",
         "runtime/drivers/cursor/export.py",
@@ -717,27 +732,20 @@
         "z_harness_cli/adapters/omp.py",
         ".omp/config.yml"
       ],
-      "last_updated": "2026-07-06",
-      "confidence": "high",
-      "depends_on": [
-        "commands",
-        "agents",
-        "central-config",
-        "runtime-drivers",
-        "scripts",
-        "capabilities-matrix"
-      ],
-      "consumed_by": [
-        "z_harness_cli.commands.export"
-      ],
-      "summary": "Target-specific export pipeline. OMP export is native for its explicit .omp/z-harness package layout. Codex export fidelity is partial: it emits native skills, custom-agent TOML under .codex/agents/, .codex-plugin/plugin.json, AGENTS.md fallback/reference, mcp_config.json, runtime scripts, and persona prompts via the adapter persona loop, while Codex adapter/runtime command orchestration remains degraded for ordinary commands and blocked for native multi-agent command families unless Codex parity evidence, runtime primitive evidence, and a CodexDriver native hook exist.",
-      "source_file": [
-        "runtime/drivers/omp/export.py",
-        "z_harness_cli/adapters/omp.py",
-        ".omp/config.yml"
-      ]
+      "summary": "Target-specific export pipeline. OMP export is native for its explicit .omp/z-harness package layout. Codex export fidelity is partial: it emits native skills, custom-agent TOML under .codex/agents/, .codex-plugin/plugin.json, AGENTS.md fallback/reference, mcp_config.json, runtime scripts, and persona prompts via the adapter persona loop, while Codex adapter/runtime command orchestration remains degraded for ordinary commands and blocked for native multi-agent command families unless Codex parity evidence, runtime primitive evidence, and a CodexDriver native hook exist."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands"
+      ],
+      "depends_on": [
+        "commands",
+        "scripts",
+        "config",
+        "attend"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "overnight-run",
       "source_files": [
         "skills/z-overnight/SKILL.md",
@@ -748,20 +756,19 @@
         "docs/human/overnight-run.md",
         "scripts/bench-autonomy-check.sh"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "commands",
-        "scripts",
-        "config",
-        "attend"
-      ],
-      "consumed_by": [
-        "commands"
-      ],
       "summary": "/z-overnight runs a linear chain of z-harness sub-commands unattended, converting instrumented AskUserQuestion callsites to halt events under Z_HARNESS_NO_ASK=halt, writing MORNING_REPORT.md and push-notifying at every terminal transition."
     },
     {
+      "confidence": "medium",
+      "consumed_by": [],
+      "depends_on": [
+        "multi-ide-exports",
+        "agents",
+        "commands",
+        "export-utils",
+        "capabilities-matrix"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "pi-export",
       "source_files": [
         "runtime/drivers/pi/__init__.py",
@@ -776,19 +783,21 @@
         "scripts/lint-frontmatter.sh",
         "Makefile"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "medium",
-      "depends_on": [
-        "multi-ide-exports",
-        "agents",
-        "commands",
-        "export-utils",
-        "capabilities-matrix"
-      ],
-      "consumed_by": [],
       "summary": "pi (pi.dev) is an export-only compatibility target: runtime/drivers/pi/export.py renders z-harness agents/skills as pi agent/prompt files, copies vendored pi-only assets and deterministic /z-resume runtime scripts, and applies four layers of YAML frontmatter defense; no adapter/HostDriver exists, unlike OMP's native T009 support."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "hermes-orchestration",
+        "z-reconcile"
+      ],
+      "depends_on": [
+        "scripts",
+        "active-plan-registry",
+        "config",
+        "lock-signal-safety"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "plan-claim",
       "source_file": [
         "scripts/plan-claim.sh",
@@ -798,19 +807,6 @@
         "skills/z-audit-plan/SKILL.md",
         "docs/human/plan-claim.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "active-plan-registry",
-        "config",
-        "lock-signal-safety"
-      ],
-      "consumed_by": [
-        "hermes-orchestration",
-        "z-reconcile"
-      ],
-      "summary": "Slug-level hard flock claim lock (plan-claim.sh over sink-lock.sh) preventing two Claude sessions from double-working the same /z-plan or /z-audit-plan slug; orthogonal to the advisory active-plan-registry. As of skill-overhaul-phase1, /z-plan delegates acquisition to scripts/z-preflight.sh (which resolves stale-takeover silently) while /z-audit-plan still calls plan-claim.sh directly with the original interactive default-abort stale-takeover gate.",
       "source_files": [
         "scripts/plan-claim.sh",
         "scripts/sink-lock.sh",
@@ -818,23 +814,11 @@
         "skills/z-plan/SKILL.md",
         "skills/z-audit-plan/SKILL.md",
         "docs/human/plan-claim.md"
-      ]
+      ],
+      "summary": "Slug-level hard flock claim lock (plan-claim.sh over sink-lock.sh) preventing two Claude sessions from double-working the same /z-plan or /z-audit-plan slug; orthogonal to the advisory active-plan-registry. As of skill-overhaul-phase1, /z-plan delegates acquisition to scripts/z-preflight.sh (which resolves stale-takeover silently) while /z-audit-plan still calls plan-claim.sh directly with the original interactive default-abort stale-takeover gate."
     },
     {
-      "slug": "plan-layout-migration",
-      "source_files": [
-        "scripts/plan-path.sh",
-        "scripts/migrate-plan-layout.sh",
-        "scripts/log-event.sh",
-        "docs/human/PLAN-LAYOUT.md"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "commands",
-        "hermes-orchestration"
-      ],
       "consumed_by": [
         "commands",
         "active-plan-registry",
@@ -842,9 +826,36 @@
         "followup-sink",
         "hermes-orchestration"
       ],
+      "depends_on": [
+        "scripts",
+        "commands",
+        "hermes-orchestration"
+      ],
+      "last_updated": "2026-07-09",
+      "slug": "plan-layout-migration",
+      "source_files": [
+        "scripts/plan-path.sh",
+        "scripts/migrate-plan-layout.sh",
+        "scripts/log-event.sh",
+        "docs/human/PLAN-LAYOUT.md"
+      ],
       "summary": "External artifact-base resolution (5-tier fallback + anchor split-brain guard) for all z-harness plan/telemetry paths, plus the safe copy-verify-rm migrator from legacy in-repo layouts."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "agents",
+        "commands",
+        "personas-and-roles",
+        "reviewer-capture"
+      ],
+      "depends_on": [
+        "scripts",
+        "config",
+        "runtime",
+        "capabilities-matrix"
+      ],
+      "last_updated": "2026-07-21",
       "slug": "providers-registry",
       "source_files": [
         "scripts/resolve-provider.py",
@@ -857,62 +868,35 @@
         ".z-harness/providers.json",
         "scripts/omp-consult.sh"
       ],
-      "last_updated": "2026-07-21",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "config",
-        "runtime",
-        "capabilities-matrix"
-      ],
-      "consumed_by": [
-        "agents",
-        "commands",
-        "personas-and-roles",
-        "reviewer-capture"
-      ],
       "summary": "Provider CLI resolution and role binding. OMP provider entries are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract. Current repository defaults are consultant_primary=omp-antigravity-pro (google-antigravity/gemini-3.1-pro), consultant_secondary=omp-openai-sol (openai-codex/gpt-5.6-sol), and reviewer=omp-openai-terra (openai-codex/gpt-5.6-terra). google-antigravity and openai-codex auth are required; Cursor is optional and not role-bound. Compatibility history: Cursor entries and omp-codex/codex-cli role bindings are retained only for manual use or as retired history, not current defaults."
     },
     {
-      "slug": "review-agent",
-      "source_file": [
-        "agents/review-agent.md",
-        "scripts/run-memory-review.sh"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
+      "consumed_by": [
+        "z-execute",
+        "z-review-all",
+        "z-debug"
+      ],
       "depends_on": [
         "z-suggest-memory",
         "z-stats",
         "axioms",
         "config"
       ],
-      "consumed_by": [
-        "z-execute",
-        "z-review-all",
-        "z-debug"
+      "last_updated": "2026-07-09",
+      "slug": "review-agent",
+      "source_file": [
+        "agents/review-agent.md",
+        "scripts/run-memory-review.sh"
       ],
-      "summary": "Haiku subagent (agents/review-agent.md) + scripts/run-memory-review.sh helper that proposes 0-3 memory candidates after /z-execute, /z-review-all, or /z-debug; the post-agent review loop and write-through behavior differ by parent_command (z-execute has no interactive accept loop; z-review-all and z-debug do).",
       "source_files": [
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
-      ]
+      ],
+      "summary": "Haiku subagent (agents/review-agent.md) + scripts/run-memory-review.sh helper that proposes 0-3 memory candidates after /z-execute, /z-review-all, or /z-debug; the post-agent review loop and write-through behavior differ by parent_command (z-execute has no interactive accept loop; z-review-all and z-debug do)."
     },
     {
-      "slug": "reviewer-capture",
-      "source_files": [
-        "agents/reviewer.md",
-        "agents/consultant-primary.md",
-        "agents/consultant-secondary.md"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
-      "depends_on": [
-        "providers-registry",
-        "subagent-telemetry",
-        "followup-sink",
-        "liveness"
-      ],
       "consumed_by": [
         "z-execute",
         "z-review-all",
@@ -934,9 +918,31 @@
         "z-audit-plan-style",
         "subagent-telemetry"
       ],
+      "depends_on": [
+        "providers-registry",
+        "subagent-telemetry",
+        "followup-sink",
+        "liveness"
+      ],
+      "last_updated": "2026-07-09",
+      "slug": "reviewer-capture",
+      "source_files": [
+        "agents/reviewer.md",
+        "agents/consultant-primary.md",
+        "agents/consultant-secondary.md"
+      ],
       "summary": "Shared Codex final-message capture pattern (-o outfile probe/fallback) plus review/consult telemetry and contracts shared by agents/reviewer.md, agents/consultant-primary.md, and agents/consultant-secondary.md."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands"
+      ],
+      "depends_on": [
+        "scripts",
+        "commands"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "run-brief",
       "source_file": [
         "docs/llm/run-brief-contract.json",
@@ -950,16 +956,6 @@
         "commands/_fragments/run-brief-halt-finalize-implement-next.md",
         "skills/z-plan/SKILL.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "commands"
-      ],
-      "consumed_by": [
-        "commands"
-      ],
-      "summary": "Unified Run Brief receipt (archive/$RUN/run-brief.json) emitted at finalize by 9 registry commands (including /z-amend; /z-do removed); render-run-brief.py renders chat/push text from it; init/finalize now partially routed through z-preflight.sh/z-teardown.sh lifecycle wrappers.",
       "source_files": [
         "docs/llm/run-brief-contract.json",
         "docs/llm/run-brief-registry.json",
@@ -974,9 +970,23 @@
         "scripts/z-preflight.sh",
         "scripts/z-teardown.sh",
         "skills/z-plan/SKILL.md"
-      ]
+      ],
+      "summary": "Unified Run Brief receipt (archive/$RUN/run-brief.json) emitted at finalize by 9 registry commands (including /z-amend; /z-do removed); render-run-brief.py renders chat/push text from it; init/finalize now partially routed through z-preflight.sh/z-teardown.sh lifecycle wrappers."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "review-agent",
+        "remote-runner",
+        "config",
+        "overnight-run",
+        "active-plan-registry",
+        "axioms",
+        "hermes-orchestration"
+      ],
+      "depends_on": [],
+      "last_updated": "2026-07-09",
       "slug": "scripts",
       "source_file": [
         "scripts/block-dangerous-git.sh",
@@ -994,20 +1004,6 @@
         "scripts/test_log_phase.sh",
         "scripts/active-plan-registry.py"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [],
-      "consumed_by": [
-        "commands",
-        "review-agent",
-        "remote-runner",
-        "config",
-        "overnight-run",
-        "active-plan-registry",
-        "axioms",
-        "hermes-orchestration"
-      ],
-      "summary": "Operational utility scripts: structured telemetry (log-event.sh/log-phase.sh), layered TOML config + model routing (config.py/config.sh), the lockless active-plan registry with F1-F5 cross-session lease/wait/claim primitives (active-plan-registry.py), the git-safety PreToolUse hook (block-dangerous-git.sh), memory/dismissal maintenance scripts, and remote sandbox sync.",
       "source_files": [
         "scripts/block-dangerous-git.sh",
         "scripts/test_block_dangerous_git.sh",
@@ -1023,18 +1019,16 @@
         "scripts/test_config.py",
         "scripts/test_log_phase.sh",
         "scripts/active-plan-registry.py"
-      ]
+      ],
+      "summary": "Operational utility scripts: structured telemetry (log-event.sh/log-phase.sh), layered TOML config + model routing (config.py/config.sh), the lockless active-plan registry with F1-F5 cross-session lease/wait/claim primitives (active-plan-registry.py), the git-safety PreToolUse hook (block-dangerous-git.sh), memory/dismissal maintenance scripts, and remote sandbox sync."
     },
     {
-      "slug": "session-handoff",
-      "source_file": [
-        "scripts/session-helpers.sh",
-        "agents/context-curator.md",
-        "skills/z-execute/SKILL.md",
-        "scripts/write-handoff.sh"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "attend",
+        "adaptive-intent"
+      ],
       "depends_on": [
         "commands",
         "scripts",
@@ -1042,39 +1036,53 @@
         "intent-schema",
         "handoff-protocol"
       ],
-      "consumed_by": [
-        "commands",
-        "attend",
-        "adaptive-intent"
+      "last_updated": "2026-07-09",
+      "slug": "session-handoff",
+      "source_file": [
+        "scripts/session-helpers.sh",
+        "agents/context-curator.md",
+        "skills/z-execute/SKILL.md",
+        "scripts/write-handoff.sh"
       ],
-      "summary": "Durable SESSION.md context handoff for /z-execute: notable-only breadcrumbs (E2) feed a Haiku context-curator (E3) that folds them into a bounded SESSION.md at clear checkpoints, which E1 re-inlines on resume via a shared done_ids_hash; write-handoff.sh (now fronted by the cross-command write-clear-checkpoint.sh) emits the machine-readable handoff.json continuation token.",
       "source_files": [
         "scripts/session-helpers.sh",
         "agents/context-curator.md",
         "skills/z-execute/SKILL.md",
         "scripts/write-handoff.sh"
-      ]
+      ],
+      "summary": "Durable SESSION.md context handoff for /z-execute: notable-only breadcrumbs (E2) feed a Haiku context-curator (E3) that folds them into a bounded SESSION.md at clear checkpoints, which E1 re-inlines on resume via a shared done_ids_hash; write-handoff.sh (now fronted by the cross-command write-clear-checkpoint.sh) emits the machine-readable handoff.json continuation token."
     },
     {
-      "slug": "setup",
-      "last_updated": "2026-07-09",
-      "source_files": [
-        "scripts/setup.py",
-        "scripts/setup.sh",
-        "skills/z-setup/SKILL.md",
-        "docs/human/SETUP.md"
-      ],
+      "confidence": "medium",
+      "consumed_by": [],
       "depends_on": [
         "config",
         "providers-registry",
         "axioms",
         "docs"
       ],
-      "consumed_by": [],
-      "confidence": "medium",
+      "last_updated": "2026-07-09",
+      "slug": "setup",
+      "source_files": [
+        "scripts/setup.py",
+        "scripts/setup.sh",
+        "skills/z-setup/SKILL.md",
+        "docs/human/SETUP.md"
+      ],
       "summary": "z-harness configuration cockpit: public z-harness setup CLI (harness detection via release_surface + posture apply) plus the in-harness /z-setup skill/scripts/setup.py (inspect, wizard, apply, explain, status) which is the sole writer of config.py-managed state."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "agents",
+        "reviewer-capture",
+        "impl-pre-review"
+      ],
+      "depends_on": [
+        "scripts",
+        "cost-estimation"
+      ],
+      "last_updated": "2026-07-11",
       "slug": "subagent-telemetry",
       "source_files": [
         "scripts/detect-host.sh",
@@ -1084,59 +1092,58 @@
         "scripts/test_subagent_logging.sh",
         "skills/z-stats/SKILL.md"
       ],
-      "last_updated": "2026-07-11",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "cost-estimation"
-      ],
-      "consumed_by": [
-        "agents",
-        "reviewer-capture",
-        "impl-pre-review"
-      ],
       "summary": "Non-blocking per-subagent-dispatch cost telemetry: host detection, host-stamped event logging, and the retrospective subagent-costs read-side pricer for /z-stats Phase 6."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "z-execute",
+        "tier2-doc-rationale"
+      ],
+      "depends_on": [
+        "doc-updater",
+        "doc-fetcher",
+        "docs-index"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "tier1-doc-updater",
       "source_files": [
         "agents/tier1-doc-updater.md",
         "scripts/reconcile-tier1-staged.py",
         "scripts/add-doc-markers.py"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "summary": "Mechanical docs sync agent dispatched once at /z-execute run-end over the combined task-diff set; stages AUTO-section and LLM machine-field updates per concept for reconcile-tier1-staged.py to merge.",
-      "depends_on": [
-        "doc-updater",
-        "doc-fetcher",
-        "docs-index"
-      ],
-      "consumed_by": [
-        "z-execute",
-        "tier2-doc-rationale"
-      ]
+      "summary": "Mechanical docs sync agent dispatched once at /z-execute run-end over the combined task-diff set; stages AUTO-section and LLM machine-field updates per concept for reconcile-tier1-staged.py to merge."
     },
     {
-      "slug": "tier2-doc-rationale",
-      "source_files": [
-        "skills/z-doc-rationale/SKILL.md",
-        "scripts/append-tier2-context.py"
-      ],
-      "last_updated": "2026-06-24",
       "confidence": "high",
-      "summary": "Narrative documentation command and accumulator for finalized tier2-context.json, generating ADRs, rationale, migration guides, and concept doc cross-links.",
+      "consumed_by": [
+        "commands",
+        "concept-docs"
+      ],
       "depends_on": [
         "tier1-doc-updater",
         "z-review-all",
         "doc-updater"
       ],
-      "consumed_by": [
-        "commands",
-        "concept-docs"
-      ]
+      "last_updated": "2026-06-24",
+      "slug": "tier2-doc-rationale",
+      "source_files": [
+        "skills/z-doc-rationale/SKILL.md",
+        "scripts/append-tier2-context.py"
+      ],
+      "summary": "Narrative documentation command and accumulator for finalized tier2-context.json, generating ADRs, rationale, migration guides, and concept doc cross-links."
     },
     {
+      "confidence": "medium",
+      "consumed_by": [
+        "reviewer-capture",
+        "agents"
+      ],
+      "depends_on": [
+        "config",
+        "active-plan-registry"
+      ],
+      "last_updated": "2026-07-21",
       "slug": "watchdog",
       "source_files": [
         "scripts/supervised-run.sh",
@@ -1153,44 +1160,31 @@
         "skills/z-execute/SKILL.md",
         "skills/z-overnight/SKILL.md"
       ],
-      "last_updated": "2026-07-21",
-      "confidence": "medium",
-      "depends_on": [
-        "config",
-        "active-plan-registry"
-      ],
-      "consumed_by": [
-        "reviewer-capture",
-        "agents"
-      ],
       "summary": "Two-layer liveness protection: supervised-run.sh enforces hard process-group deadlines for killable subprocesses (confirmed active in production telemetry); schedule-hang-check.sh/hang-check.sh schedule a metrics-derived one-shot stall detector for native-agent stalls that has never been observed to fire outside tests."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "operators"
+      ],
+      "depends_on": [
+        "scripts",
+        "z-reconcile"
+      ],
+      "last_updated": "2026-07-10",
       "slug": "worktree-hygiene",
       "source_files": [
         "scripts/worktree-cleanup.sh",
         "Makefile",
         "docs/human/worktree-hygiene.md"
       ],
-      "last_updated": "2026-07-10",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "z-reconcile"
-      ],
-      "consumed_by": [
-        "operators"
-      ],
       "summary": "Read-only cadence entrypoint (make worktree-sweep / worktree-sweep-apply) plus runbook for keeping git worktrees from accumulating; classification and removal live in scripts/worktree-cleanup.sh."
     },
     {
-      "slug": "z-audit-plan",
-      "source_files": [
-        "skills/z-audit-plan/SKILL.md",
-        "docs/human/z-audit-plan.md"
-      ],
-      "last_updated": "2026-07-11",
       "confidence": "high",
+      "consumed_by": [
+        "commands"
+      ],
       "depends_on": [
         "amendment-brief",
         "config",
@@ -1198,19 +1192,20 @@
         "active-plan-registry",
         "impl-pre-review"
       ],
-      "consumed_by": [
-        "commands"
+      "last_updated": "2026-07-11",
+      "slug": "z-audit-plan",
+      "source_files": [
+        "skills/z-audit-plan/SKILL.md",
+        "docs/human/z-audit-plan.md"
       ],
       "summary": "Read-only, claim-first, contract-level pre-implementation plan audit: low-risk plans skip via a fast-path; otherwise reality-check + design audit + optional pre-review + adversarial cross-LLM review feed a Class-tagged (spec_gap|premise_failure) PLAN_AUDIT_REPORT.md, then Phase 5 auto-amends spec_gap findings via /z-amend and surfaces premise_failure concerns as a prose brief, with a Phase 9 preference-elevation proposal."
     },
     {
-      "slug": "z-brainstorm",
-      "source_files": [
-        "skills/z-brainstorm/SKILL.md",
-        "agents/ideator-clusterer.md"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
+      "consumed_by": [
+        "z-plan",
+        "z-research"
+      ],
       "depends_on": [
         "artifact-scout",
         "doc-fetcher",
@@ -1220,19 +1215,19 @@
         "run-brief",
         "active-plan-registry"
       ],
-      "consumed_by": [
-        "z-plan",
-        "z-research"
+      "last_updated": "2026-07-09",
+      "slug": "z-brainstorm",
+      "source_files": [
+        "skills/z-brainstorm/SKILL.md",
+        "agents/ideator-clusterer.md"
       ],
       "summary": "Cheap opt-in pre-planning ideation: Phase 0 reuses the shared z-sharpen component when GRILL.md is absent, then parses ideator count, probes scope, dispatches ideators, writes BRAINSTORM.md, and waits for user discussion/lock-in without auto-dispatching /z-plan."
     },
     {
-      "slug": "z-fix",
-      "source_file": [
-        "skills/z-fix/SKILL.md"
-      ],
-      "last_updated": "2026-07-11",
       "confidence": "high",
+      "consumed_by": [
+        "commands"
+      ],
       "depends_on": [
         "agents",
         "scripts",
@@ -1240,35 +1235,51 @@
         "config",
         "run-brief"
       ],
-      "consumed_by": [
-        "commands"
+      "last_updated": "2026-07-11",
+      "slug": "z-fix",
+      "source_file": [
+        "skills/z-fix/SKILL.md"
       ],
-      "summary": "Fast lightweight bug-fix command for known-diagnosis cases: delegated z-preflight.sh/z-teardown.sh lifecycle ceremony, bundled two-LLM light-fix consult, inline implementation, mandatory Codex review, single FIX.md artifact, ~15 min target.",
       "source_files": [
         "skills/z-fix/SKILL.md"
-      ]
+      ],
+      "summary": "Fast lightweight bug-fix command for known-diagnosis cases: delegated z-preflight.sh/z-teardown.sh lifecycle ceremony, bundled two-LLM light-fix consult, inline implementation, mandatory Codex review, single FIX.md artifact, ~15 min target."
     },
     {
-      "slug": "z-reconcile",
-      "source_files": [
-        "skills/z-reconcile/SKILL.md",
-        "scripts/reconcile.py",
-        "scripts/plan-claim.sh"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
+      "consumed_by": [
+        "operators"
+      ],
       "depends_on": [
         "active-plan-registry",
         "plan-claim",
         "followup-sink",
         "scripts"
       ],
-      "consumed_by": [
-        "operators"
+      "last_updated": "2026-07-09",
+      "slug": "z-reconcile",
+      "source_files": [
+        "skills/z-reconcile/SKILL.md",
+        "scripts/reconcile.py",
+        "scripts/plan-claim.sh"
       ],
       "summary": "Read-mostly workspace consistency audit joining worktrees, plan artifacts, active-plan registry records, claim locks, uncommitted work, and follow-up opportunities; cleanup is opt-in per flag with per-item confirmation."
     },
     {
+      "confidence": "high",
+      "consumed_by": [
+        "commands",
+        "z-report"
+      ],
+      "depends_on": [
+        "commands",
+        "active-plan-registry",
+        "session-handoff",
+        "handoff-protocol",
+        "run-brief",
+        "followup-sink"
+      ],
+      "last_updated": "2026-07-09",
       "slug": "z-resume",
       "source_files": [
         "skills/z-resume/SKILL.md",
@@ -1280,64 +1291,58 @@
         "skills/z-explain/SKILL.md",
         "skills/z-learn/SKILL.md"
       ],
-      "last_updated": "2026-07-09",
-      "confidence": "high",
-      "depends_on": [
-        "commands",
-        "active-plan-registry",
-        "session-handoff",
-        "handoff-protocol",
-        "run-brief",
-        "followup-sink"
-      ],
-      "consumed_by": [
-        "commands",
-        "z-report"
-      ],
       "summary": "Read-only work-thread recovery for fuzzy or exact prior-work targets. /z-resume selects a bounded plan/run/worktree/branch/artifact/repo target, reports evidence-backed state and ambiguity, recommends safe continuations without executing them, and delegates --report to /z-report only after selection."
     },
     {
-      "slug": "z-review-all",
-      "source_files": [
-        "skills/z-review-all/SKILL.md",
-        "docs/human/z-review-all.md"
-      ],
-      "last_updated": "2026-07-11",
       "confidence": "high",
+      "consumed_by": [
+        "commands"
+      ],
       "depends_on": [
         "amendment-brief",
         "active-plan-registry",
         "tier2-doc-rationale",
         "review-agent"
       ],
-      "consumed_by": [
-        "commands"
+      "last_updated": "2026-07-11",
+      "slug": "z-review-all",
+      "source_files": [
+        "skills/z-review-all/SKILL.md",
+        "docs/human/z-review-all.md"
       ],
       "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals via inline /z-amend invocation, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review."
     },
     {
-      "slug": "z-sharpen",
-      "source_file": [
-        "skills/z-sharpen/SKILL.md"
-      ],
-      "last_updated": "2026-07-09",
       "confidence": "high",
-      "depends_on": [
-        "commands",
-        "scripts",
-        "z-brainstorm"
-      ],
       "consumed_by": [
         "agents/planning-router",
         "skills/z-plan",
         "skills/z-brainstorm"
       ],
-      "summary": "Reusable bounded idea-sharpening component plus /z-sharpen wrapper. The component assesses clarity and alternatives, returns proceed/sharpen_more/route_to_brainstorm plus GRILL.md content when ready; the wrapper owns slug, collision, telemetry, final write, and advisory handoff. /z-plan now invokes the component as a mandatory pre-Premise-check step (0-sharpen).",
+      "depends_on": [
+        "commands",
+        "scripts",
+        "z-brainstorm"
+      ],
+      "last_updated": "2026-07-09",
+      "slug": "z-sharpen",
+      "source_file": [
+        "skills/z-sharpen/SKILL.md"
+      ],
       "source_files": [
         "skills/z-sharpen/SKILL.md"
-      ]
+      ],
+      "summary": "Reusable bounded idea-sharpening component plus /z-sharpen wrapper. The component assesses clarity and alternatives, returns proceed/sharpen_more/route_to_brainstorm plus GRILL.md content when ready; the wrapper owns slug, collision, telemetry, final write, and advisory handoff. /z-plan now invokes the component as a mandatory pre-Premise-check step (0-sharpen)."
     },
     {
+      "confidence": "high",
+      "consumed_by": [],
+      "depends_on": [
+        "scripts",
+        "install",
+        "release-packaging"
+      ],
+      "last_updated": "2026-07-21",
       "slug": "z-update",
       "source_files": [
         "install.sh",
@@ -1348,15 +1353,10 @@
         "z_harness_cli/commands/update.py",
         "z_harness_cli/release.py"
       ],
-      "last_updated": "2026-07-21",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "install",
-        "release-packaging"
-      ],
-      "consumed_by": [],
       "summary": "Explicit candidate-alignment workflow that inventories CLI/Claude/Codex and transactionally updates packaged, uv-tool, or source components with durable recovery."
     }
-  ]
+  ],
+  "generated_at": "2026-07-21",
+  "version": "1",
+  "z_harness_version": "07ebcff"
 }

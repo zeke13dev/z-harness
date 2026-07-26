@@ -39,7 +39,7 @@ SCRIPT = str(_REPO_ROOT / "scripts" / "config.py")
 # adapter names ∪ export-only driver names
 _VALID_HOSTS = {
     "claude", "antigravity", "cursor", "codex", "omp",  # adapter names
-    "pi", "windsurf", "cline", "kiro", "copilot",       # export-only driver names
+    "pi", "sterling", "windsurf", "cline", "kiro", "copilot", # export-only driver names
     "agy",                                               # alias for antigravity
 }
 

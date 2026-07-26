@@ -1,0 +1,699 @@
+{
+  "cache_control": {
+    "preparation_id": "fresh-process-no-session-v1",
+    "state": "cold"
+  },
+  "counterbalancing": {
+    "method": "alternating_ab_ba",
+    "pair_orders": [
+      {
+        "order": "claude_first",
+        "pair_id": "pair-1"
+      },
+      {
+        "order": "codex_first",
+        "pair_id": "pair-2"
+      },
+      {
+        "order": "claude_first",
+        "pair_id": "pair-3"
+      },
+      {
+        "order": "codex_first",
+        "pair_id": "pair-4"
+      },
+      {
+        "order": "claude_first",
+        "pair_id": "pair-5"
+      }
+    ]
+  },
+  "hard_ceilings": {
+    "native_total_tokens": 450000,
+    "root_input_tokens": 360000,
+    "supervisor_turns": 9
+  },
+  "logical_graph": {
+    "edges": [
+      {
+        "from": "scope",
+        "to": "premise"
+      },
+      {
+        "from": "premise",
+        "to": "invariants"
+      },
+      {
+        "from": "invariants",
+        "to": "implementation"
+      },
+      {
+        "from": "implementation",
+        "to": "tests"
+      },
+      {
+        "from": "tests",
+        "to": "telemetry"
+      },
+      {
+        "from": "telemetry",
+        "to": "security"
+      },
+      {
+        "from": "security",
+        "to": "review"
+      },
+      {
+        "from": "review",
+        "to": "settlement"
+      }
+    ],
+    "graph_id": "nine-node-read-only-v1",
+    "logical_node_ids": [
+      "scope",
+      "premise",
+      "invariants",
+      "implementation",
+      "tests",
+      "telemetry",
+      "security",
+      "review",
+      "settlement"
+    ]
+  },
+  "native_usage_rules": {
+    "allowed_quality_flags": [],
+    "maximum_unknown_segments": 0,
+    "quota_interpretation": "observation_only_no_billing_formula",
+    "required_completeness": "complete"
+  },
+  "postures": {
+    "claude": {
+      "build_fingerprint": "5840c777fd47115e9ca276e165563c6e121e7c7e2b4d86598e0025f8cc37de56",
+      "command": "nine-node-read-only",
+      "equivalence_key": "639cda763fe79360705605078e3f42bc6646531103f2f3530e0c15e63e440512",
+      "host": "claude",
+      "posture": "external_terminal_verified",
+      "runtime_version": "2.1.217",
+      "surface": "claude_cli"
+    },
+    "codex": {
+      "build_fingerprint": "d3be844c45c4fd89392536e56e1010963f94785592596b50cd0c45bb8a341406",
+      "command": "nine-node-read-only",
+      "equivalence_key": "639cda763fe79360705605078e3f42bc6646531103f2f3530e0c15e63e440512",
+      "host": "codex",
+      "posture": "native_terminal_verified",
+      "runtime_version": "0.142.5",
+      "surface": "codex_cli"
+    }
+  },
+  "protocol_id": "paired-orchestration-v1",
+  "rules": {
+    "confidence": "paired_normal_95",
+    "failed_trial": "exclude_pair_and_fail_evidence_gate",
+    "inclusion": "completed_pairs_only",
+    "weighting": "pooled_logical_nodes"
+  },
+  "schema_version": 1,
+  "terminal_schedule": {
+    "schedule_id": "serial-terminal-v1",
+    "terminal_node_ids": [
+      "scope",
+      "premise",
+      "invariants",
+      "implementation",
+      "tests",
+      "telemetry",
+      "security",
+      "review",
+      "settlement"
+    ]
+  },
+  "trials": [
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-1",
+        "kind": "terminal_verified_capture"
+      },
+      "cache_state": "cold",
+      "claude": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46278
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46212
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 9
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 46212,
+          "supervisor_turns": 9
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "claude"
+      },
+      "codex": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 13756
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 13704
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 1
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 13704,
+          "supervisor_turns": 1
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 13756,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "codex"
+      },
+      "graph_id": "nine-node-read-only-v1",
+      "order": "claude_first",
+      "pair_id": "pair-1",
+      "schedule_id": "serial-terminal-v1",
+      "status": "complete"
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-2",
+        "kind": "terminal_verified_capture"
+      },
+      "cache_state": "cold",
+      "claude": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46278
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46212
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 9
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 46212,
+          "supervisor_turns": 9
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "claude"
+      },
+      "codex": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 13756
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 13704
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 1
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 13704,
+          "supervisor_turns": 1
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 13756,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "codex"
+      },
+      "graph_id": "nine-node-read-only-v1",
+      "order": "codex_first",
+      "pair_id": "pair-2",
+      "schedule_id": "serial-terminal-v1",
+      "status": "complete"
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-3",
+        "kind": "terminal_verified_capture"
+      },
+      "cache_state": "cold",
+      "claude": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46278
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46212
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 9
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 46212,
+          "supervisor_turns": 9
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "claude"
+      },
+      "codex": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15589
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15537
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 1
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 15537,
+          "supervisor_turns": 1
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "codex"
+      },
+      "graph_id": "nine-node-read-only-v1",
+      "order": "claude_first",
+      "pair_id": "pair-3",
+      "schedule_id": "serial-terminal-v1",
+      "status": "complete"
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-4",
+        "kind": "terminal_verified_capture"
+      },
+      "cache_state": "cold",
+      "claude": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46278
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46212
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 9
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 46212,
+          "supervisor_turns": 9
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "claude"
+      },
+      "codex": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15589
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15537
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 1
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 15537,
+          "supervisor_turns": 1
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "codex"
+      },
+      "graph_id": "nine-node-read-only-v1",
+      "order": "codex_first",
+      "pair_id": "pair-4",
+      "schedule_id": "serial-terminal-v1",
+      "status": "complete"
+    },
+    {
+      "baseline_provenance": {
+        "capture_fingerprint": "87fee2204f284bbf2d75188b753d659e9340835c8efa659672f4b88871db1ffe",
+        "evidence_id": "t014-pair-5",
+        "kind": "terminal_verified_capture"
+      },
+      "cache_state": "cold",
+      "claude": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46278
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 46212
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 9
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 46212,
+          "supervisor_turns": 9
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 46278,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "claude"
+      },
+      "codex": {
+        "ceiling_observations": {
+          "native_total_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15589
+          },
+          "root_input_tokens": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 15537
+          },
+          "supervisor_turns": {
+            "enforced": false,
+            "enforcer_id": "host_process_group_terminal_verified_v2",
+            "observed": 1
+          }
+        },
+        "logical_completions_verified": false,
+        "logical_dispatch_ids": [
+          "scope",
+          "premise",
+          "invariants",
+          "implementation",
+          "tests",
+          "telemetry",
+          "security",
+          "review",
+          "settlement"
+        ],
+        "metrics": {
+          "logical_nodes": 9,
+          "root_input_tokens": 15537,
+          "supervisor_turns": 1
+        },
+        "native_usage": {
+          "completeness": "complete",
+          "known_subtotal": 15589,
+          "quality_flags": [],
+          "quota_observation": {
+            "availability": "unavailable",
+            "source": "native_cli_json",
+            "unit": "unknown",
+            "value": null
+          },
+          "unknown_reasons": [],
+          "unknown_segment_count": 0
+        },
+        "posture_key": "codex"
+      },
+      "graph_id": "nine-node-read-only-v1",
+      "order": "claude_first",
+      "pair_id": "pair-5",
+      "schedule_id": "serial-terminal-v1",
+      "status": "complete"
+    }
+  ]
+}

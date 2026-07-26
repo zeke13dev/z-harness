@@ -38,6 +38,10 @@ class InstallShIntegrityTest(unittest.TestCase):
             (payload / rel).mkdir(parents=True, exist_ok=True)
         (payload / "VERSION").write_text(version + "\n", encoding="utf-8")
         (payload / "runtime" / "marker.txt").write_text("new install\n", encoding="utf-8")
+        for skill_name in ("z-explain", "z-execute"):
+            skill = payload / "skills" / skill_name / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text(f"name: {skill_name}\n", encoding="utf-8")
         generator = payload / "scripts" / "generate-exports.py"
         generator.write_text(
             generator_body
@@ -182,6 +186,10 @@ class InstallShIntegrityTest(unittest.TestCase):
                         self.fail(f"installer timed out under {shell}:\n{trace[-8000:]}")
 
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    if target in {"codex", "all"}:
+                        installed = home / "plugins" / "z-harness" / "skills"
+                        self.assertTrue((installed / "z-explain" / "SKILL.md").is_file())
+                        self.assertFalse((installed / "z-execute" / "SKILL.md").exists())
                     lifecycle = home / ".local" / "state" / "z-harness" / "lifecycle"
                     self.assertFalse((lifecycle / "current").exists())
                     self.assertFalse((lifecycle / "lock").exists())
@@ -617,6 +625,8 @@ class InstallShIntegrityTest(unittest.TestCase):
                 (installed / "runtime" / "marker.txt").read_text(encoding="utf-8"),
                 "new install\n",
             )
+            self.assertTrue((installed / "skills" / "z-explain" / "SKILL.md").is_file())
+            self.assertFalse((installed / "skills" / "z-execute" / "SKILL.md").exists())
             self.assertIn(
                 "plugin add z-harness@personal",
                 codex_log.read_text(encoding="utf-8"),
