@@ -18,7 +18,7 @@ from typing import Any
 from runtime.drivers._export_utils import ExportResult, _parse_frontmatter, enumerate_sources
 
 _PACKAGE_DIR = ".sterling/z-harness"
-_WORKFLOW_SKILLS = ("z-plan-split", "z-execute", "z-manager-execute")
+_WORKFLOW_SKILLS = ("z-plan", "z-plan-split", "z-execute", "z-manager-execute")
 _PORTABLE_SCRIPT = re.compile(
     r"(?<![/A-Za-z0-9_])scripts/([A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*)"
 )

@@ -20,6 +20,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     plan_split = (package / "workflows" / "z-plan-split.md").read_text(
         encoding="utf-8"
     )
+    plan = (package / "workflows" / "z-plan.md").read_text(encoding="utf-8")
     execute = (package / "workflows" / "z-execute.md").read_text(encoding="utf-8")
     manager_execute = (package / "workflows" / "z-manager-execute.md").read_text(
         encoding="utf-8"
@@ -41,6 +42,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     }
     assert manifest["workflows"]["z-plan-split"]["dispatch"] == "dynamic"
     assert manifest["workflows"]["z-manager-execute"]["source_sha256"]
+    assert manifest["workflows"]["z-plan"]["dispatch"] == "dynamic"
     assert "workstreams.json" in manifest["workflows"]["z-execute"][
         "dependency_artifacts"
     ]
@@ -66,7 +68,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     assert "provider" not in reviewer["route"]
     assert "runtime" not in reviewer
 
-    for projection in (plan_split, execute, manager_execute):
+    for projection in (plan, plan_split, execute, manager_execute):
         assert "sterling_worker.v1" in projection
         assert "`<worker_id>:<logical-id>:<callsite-ordinal>`" in projection
         assert "complete source prompt without paraphrase" in projection
