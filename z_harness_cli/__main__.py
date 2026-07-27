@@ -167,6 +167,11 @@ def export_cmd(
         "--surface",
         help="Export surface: auto (prod for installed releases, dev in source checkouts), dev, or prod.",
     ),
+    sterling_bridge_extension: Optional[str] = typer.Option(
+        None,
+        "--sterling-bridge-extension",
+        help="Path to Sterling's sterling_worker.v1 extension; required with --host sterling.",
+    ),
 ) -> None:
     """Export z-harness commands/agents/skills to first-class or explicit advanced hosts."""
     try:
@@ -183,6 +188,7 @@ def export_cmd(
         out=out,
         force=force,
         surface=surface,
+        sterling_bridge_extension=sterling_bridge_extension,
     )
 
 

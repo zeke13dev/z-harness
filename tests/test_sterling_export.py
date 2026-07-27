@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+
+import pytest
 
 from runtime.drivers.sterling.export import export
 
 
 def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_path: Path) -> None:
     repo_root = Path(__file__).parent.parent
-    result = export(repo_root, tmp_path)
+    bridge = tmp_path / "sterling_worker.ts"
+    bridge.write_text("export const bridge = 'v1';\n", encoding="utf-8")
+    result = export(repo_root, tmp_path, options={"bridge_extension": bridge})
     package = tmp_path / ".sterling" / "z-harness"
     manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
     implementer = json.loads(
@@ -27,9 +32,10 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     )
 
     assert result.fidelity == "portable"
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["driver"] == {
         "agent_dispatch": "sterling_worker.v1",
+        "bridge_extension_sha256": hashlib.sha256(bridge.read_bytes()).hexdigest(),
         "model_owner": "sterling",
         "required_routes": [
             "mainline",
@@ -43,6 +49,10 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     assert manifest["workflows"]["z-plan-split"]["dispatch"] == "dynamic"
     assert manifest["workflows"]["z-manager-execute"]["source_sha256"]
     assert manifest["workflows"]["z-plan"]["dispatch"] == "dynamic"
+    assert manifest["workflows"]["z-plan"]["projection_sha256"]
+    assert manifest["workflows"]["z-plan-split"]["projection_sha256"]
+    assert manifest["workflows"]["z-execute"]["dependency_sha256"]
+    assert manifest["workflows"]["z-manager-execute"]["projection_sha256"]
     assert "workstreams.json" in manifest["workflows"]["z-execute"][
         "dependency_artifacts"
     ]
@@ -86,3 +96,9 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     assert "more than 12 nodes" in manager_execute
     assert "one bounded final repair" in manager_execute
     assert "Never promote it automatically" in manager_execute
+
+
+def test_sterling_export_requires_exact_bridge_extension(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parent.parent
+    with pytest.raises(RuntimeError, match="bridge_extension"):
+        export(repo_root, tmp_path)

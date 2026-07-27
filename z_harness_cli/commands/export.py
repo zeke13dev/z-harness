@@ -188,7 +188,13 @@ def _export_for_host(
 
 
 
-def _export_runtime_driver(host_name: str, repo_root: Path, dest: Path) -> None:
+def _export_runtime_driver(
+    host_name: str,
+    repo_root: Path,
+    dest: Path,
+    *,
+    sterling_bridge_extension: Optional[str] = None,
+) -> None:
     """Export a runtime driver target that has no interactive host adapter."""
     if host_name == "antigravity":
         module_name = "runtime.drivers.antigravity.export"
@@ -202,7 +208,16 @@ def _export_runtime_driver(host_name: str, repo_root: Path, dest: Path) -> None:
         raise typer.Exit(code=1)
 
     _cleanup_prod_surface(dest)
-    result = mod.export(repo_root, dest)
+    options: dict[str, Any] = {}
+    if host_name == "sterling":
+        if not sterling_bridge_extension:
+            typer.echo(
+                "Error: --sterling-bridge-extension is required for a Sterling export.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        options["bridge_extension"] = sterling_bridge_extension
+    result = mod.export(repo_root, dest, options=options)
     typer.echo(
         f"[{host_name}] fidelity={result.fidelity}  "
         f"files={len(result.files)}  dest={dest}"
@@ -228,6 +243,7 @@ def run(
     out: Optional[str],
     force: bool,
     surface: Optional[str] = None,
+    sterling_bridge_extension: Optional[str] = None,
 ) -> None:
     """Entry point called from __main__.export_cmd."""
     from z_harness_cli.adapters.registry import (
@@ -345,7 +361,12 @@ def run(
         for host_name in runtime_hosts:
             host_dest = dest / host_name if namespace_by_host else dest
             host_dest.mkdir(parents=True, exist_ok=True)
-            _export_runtime_driver(host_name, repo_root, host_dest)
+            _export_runtime_driver(
+                host_name,
+                repo_root,
+                host_dest,
+                sterling_bridge_extension=sterling_bridge_extension,
+            )
     finally:
         if previous_surface is None:
             os.environ.pop("Z_HARNESS_RELEASE_SURFACE", None)
