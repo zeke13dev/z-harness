@@ -21,6 +21,9 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
         encoding="utf-8"
     )
     execute = (package / "workflows" / "z-execute.md").read_text(encoding="utf-8")
+    manager_execute = (package / "workflows" / "z-manager-execute.md").read_text(
+        encoding="utf-8"
+    )
 
     assert result.fidelity == "portable"
     assert manifest["schema_version"] == 2
@@ -37,6 +40,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
         "required_workers": ["implementer", "reviewer"],
     }
     assert manifest["workflows"]["z-plan-split"]["dispatch"] == "dynamic"
+    assert manifest["workflows"]["z-manager-execute"]["source_sha256"]
     assert "workstreams.json" in manifest["workflows"]["z-execute"][
         "dependency_artifacts"
     ]
@@ -62,7 +66,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
     assert "provider" not in reviewer["route"]
     assert "runtime" not in reviewer
 
-    for projection in (plan_split, execute):
+    for projection in (plan_split, execute, manager_execute):
         assert "sterling_worker.v1" in projection
         assert "`<worker_id>:<logical-id>:<callsite-ordinal>`" in projection
         assert "complete source prompt without paraphrase" in projection
@@ -76,3 +80,7 @@ def test_sterling_export_is_portable_and_projects_orchestrated_workflows(tmp_pat
         assert "canonical correctness gate always dispatches worker ID" in projection
         assert "Provider, model, and thinking" in projection
         assert "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/" in projection
+
+    assert "more than 12 nodes" in manager_execute
+    assert "one bounded final repair" in manager_execute
+    assert "Never promote it automatically" in manager_execute
