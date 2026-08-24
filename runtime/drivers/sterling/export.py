@@ -18,7 +18,7 @@ from typing import Any
 from runtime.drivers._export_utils import ExportResult, _parse_frontmatter, enumerate_sources
 
 _PACKAGE_DIR = ".sterling/z-harness"
-_WORKFLOW_SKILLS = ("z-plan-split", "z-execute", "z-manager-execute")
+_WORKFLOW_SKILLS = ("z-plan", "z-plan-split", "z-execute", "z-manager-execute")
 _PORTABLE_SCRIPT = re.compile(
     r"(?<![/A-Za-z0-9_])scripts/([A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*)"
 )
@@ -146,8 +146,20 @@ def export(
     options: dict[str, Any] | None = None,
 ) -> ExportResult:
     """Write the portable Sterling package under ``.sterling/z-harness``."""
-    del options
+    options = options or {}
     repo_root = Path(repo_root).resolve()
+    bridge_extension = options.get("bridge_extension")
+    if not bridge_extension:
+        raise RuntimeError(
+            "Sterling export requires options['bridge_extension'] so the portable "
+            "manifest can bind the exact sterling_worker.v1 implementation"
+        )
+    bridge_extension = Path(str(bridge_extension)).expanduser().resolve()
+    if not bridge_extension.is_file():
+        raise RuntimeError(
+            f"Sterling bridge extension is not a regular file: {bridge_extension}"
+        )
+    bridge_extension_sha256 = hashlib.sha256(bridge_extension.read_bytes()).hexdigest()
     package_root = Path(export_root).resolve() / _PACKAGE_DIR
     sources = enumerate_sources(repo_root)
     agents = {entry["id"]: entry for entry in sources["agents"]}
@@ -179,20 +191,26 @@ def export(
         projection = _workflow_projection(entry)
         relative = f"workflows/{skill_id}.md"
         emitted.append(_write_text(package_root / relative, projection))
+        dependencies = ["workstreams.json", "work-graph.json"]
         workflow_manifest[skill_id] = {
             "projection": relative,
+            "projection_sha256": _digest(projection),
             "source": entry["source_path"].relative_to(repo_root).as_posix(),
             "source_sha256": _digest(entry["source_path"].read_text(encoding="utf-8")),
             "dispatch": "dynamic",
-            "dependency_artifacts": ["workstreams.json", "work-graph.json"],
+            "dependency_artifacts": dependencies,
+            "dependency_sha256": hashlib.sha256(
+                json.dumps(dependencies, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
         }
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "name": "z-harness",
         "source_commit": _source_commit(repo_root),
         "driver": {
             "agent_dispatch": "sterling_worker.v1",
+            "bridge_extension_sha256": bridge_extension_sha256,
             "model_owner": "sterling",
             "required_routes": [
                 "mainline",
